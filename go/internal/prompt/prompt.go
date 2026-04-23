@@ -14,9 +14,9 @@ const (
 	BackendBD TaskBackend = "bd"
 
 	// TaskManagerBootstrapPrompt is the initial user message sent to the
-	// task manager Claude session so it executes the startup sequence
-	// (bd prime, bd list, status summary) without waiting for user input.
-	TaskManagerBootstrapPrompt = "Run your startup sequence."
+	// task manager Claude session so it presents the startup summary
+	// from the pre-loaded context without waiting for user input.
+	TaskManagerBootstrapPrompt = "Present the startup summary."
 
 	// ReviewBootstrapPrompt is the initial user message sent to the review
 	// session so it begins analysis immediately.
@@ -111,7 +111,9 @@ func executionInstructions(v Vars) (string, error) {
 
 // BuildTaskManagerPrompt assembles the system prompt for the interactive
 // task manager pane, substituting project and ralph directory paths.
-func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir string) (string, error) {
+// startupContext is the pre-loaded output of bd prime/list/ready — injected
+// so the task manager can present the summary without making tool calls.
+func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupContext string) (string, error) {
 	tmpl, err := readTemplate(promptsDir, "task-manager.md")
 	if err != nil {
 		return "", err
@@ -123,6 +125,7 @@ func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir string) (string, er
 	r := strings.NewReplacer(
 		"{{PROJECT_DIR}}", projectDir,
 		"{{RALPH_DIR}}", ralphDir,
+		"{{STARTUP_CONTEXT}}", startupContext,
 	)
 	return r.Replace(tmpl + "\n" + beadCreation), nil
 }

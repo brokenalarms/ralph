@@ -406,7 +406,7 @@ func TestBuildPrompt_MissingTemplateErrors(t *testing.T) {
 // pane gets project-specific instructions.
 func TestBuildTaskManagerPrompt(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/home/user/proj", "/home/user/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/home/user/proj", "/home/user/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -422,11 +422,31 @@ func TestBuildTaskManagerPrompt(t *testing.T) {
 	if strings.Contains(result, "{{RALPH_DIR}}") {
 		t.Error("result should not contain raw {{RALPH_DIR}} placeholder")
 	}
+	if strings.Contains(result, "{{STARTUP_CONTEXT}}") {
+		t.Error("result should not contain raw {{STARTUP_CONTEXT}} placeholder")
+	}
+}
+
+// Proves: BuildTaskManagerPrompt injects pre-loaded startup context into the
+// prompt so the task manager can present the summary without running commands.
+func TestBuildTaskManagerPrompt_InjectsStartupContext(t *testing.T) {
+	dir := promptsDir(t)
+	ctx := "$ bd list\nralph-abc  P1 bug  open  fix the widget"
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", ctx)
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+	if !strings.Contains(result, "fix the widget") {
+		t.Error("result should contain injected startup context")
+	}
+	if strings.Contains(result, "{{STARTUP_CONTEXT}}") {
+		t.Error("result should not contain raw {{STARTUP_CONTEXT}} placeholder")
+	}
 }
 
 // Proves: TaskManagerBootstrapPrompt is non-empty, so the task manager
-// Claude session receives an initial user message that triggers the startup
-// sequence (bd prime, bd list, status summary) without waiting for user input.
+// Claude session receives an initial user message that presents the startup
+// summary without waiting for user input.
 func TestTaskManagerBootstrapPrompt_NonEmpty(t *testing.T) {
 	if TaskManagerBootstrapPrompt == "" {
 		t.Fatal("TaskManagerBootstrapPrompt must be non-empty to trigger startup")
@@ -435,7 +455,7 @@ func TestTaskManagerBootstrapPrompt_NonEmpty(t *testing.T) {
 
 // Proves: BuildTaskManagerPrompt returns an error when the template is missing.
 func TestBuildTaskManagerPrompt_MissingTemplate(t *testing.T) {
-	_, err := BuildTaskManagerPrompt("/nonexistent/path", "/proj", "/proj/.ralph")
+	_, err := BuildTaskManagerPrompt("/nonexistent/path", "/proj", "/proj/.ralph", "")
 	if err == nil {
 		t.Fatal("expected error for missing task-manager.md template")
 	}
@@ -445,7 +465,7 @@ func TestBuildTaskManagerPrompt_MissingTemplate(t *testing.T) {
 // manager pane has complete instructions for bead CRUD, triage, and constraints.
 func TestBuildTaskManagerPrompt_RequiredSections(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -478,7 +498,7 @@ func TestBuildTaskManagerPrompt_RequiredSections(t *testing.T) {
 // so the user can review and amend before moving on.
 func TestBuildTaskManagerPrompt_EchoBackIncludesDescription(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -503,7 +523,7 @@ func TestBuildTaskManagerPrompt_EchoBackIncludesDescription(t *testing.T) {
 // to confirm or amend — so they don't have to run bd show separately.
 func TestBuildTaskManagerPrompt_ConfirmAfterCreate(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -530,7 +550,7 @@ func TestBuildTaskManagerPrompt_ConfirmAfterCreate(t *testing.T) {
 // things were seen.
 func TestBuildTaskManagerPrompt_LoopLogContext(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -545,7 +565,7 @@ func TestBuildTaskManagerPrompt_LoopLogContext(t *testing.T) {
 // them into focused subtasks with acceptance criteria and dependencies.
 func TestBuildTaskManagerPrompt_UnwieldyBeadDetection(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -572,7 +592,7 @@ func TestBuildTaskManagerPrompt_UnwieldyBeadDetection(t *testing.T) {
 // phase=unverified when reopening falsely-closed tasks.
 func TestBuildTaskManagerPrompt_PhaseLifecycleTracking(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -598,7 +618,7 @@ func TestBuildTaskManagerPrompt_PhaseLifecycleTracking(t *testing.T) {
 // describe the visual issue, save with naming convention, and reference in bead.
 func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -625,7 +645,7 @@ func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {
 // bead has specific, testable acceptance criteria the verifier can check.
 func TestTaskManagerPrompt_RequiresAcceptanceCriteria(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -639,7 +659,7 @@ func TestTaskManagerPrompt_RequiresAcceptanceCriteria(t *testing.T) {
 // or updating, and never modifying closed beads.
 func TestTaskManagerPrompt_CheckStatusBeforeUpdate(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -718,7 +738,7 @@ func TestBeadCreation_DistinguishesPhaseFromStatus(t *testing.T) {
 // beads instead of reopening closed ones when follow-on work is needed.
 func TestBuildTaskManagerPrompt_NeverReferenceClosedBeadsAsFutureFixes(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -747,7 +767,7 @@ func TestBuildTaskManagerPrompt_NeverReferenceClosedBeadsAsFutureFixes(t *testin
 // and ready (unblocked) beads.
 func TestTaskManagerPrompt_StartupIncludesBdReady(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -827,7 +847,7 @@ func TestExecutionBD_NoDuplicateUpdateGuidance(t *testing.T) {
 // ordering so bugs are worked before tasks at the same priority level.
 func TestTaskManagerPrompt_RequiresTypeOnCreate(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -862,7 +882,7 @@ func TestTaskManagerPrompt_RequiresTypeOnCreate(t *testing.T) {
 // descriptions instead of line numbers, which go stale between creation and execution.
 func TestTaskManagerPrompt_ReferenceBehaviorsNotLines(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -978,7 +998,7 @@ func TestBuildReviewPrompt_IncludesBeadCreationGuidance(t *testing.T) {
 // downstream PRs from being auto-closed (the tabi 2026-04-16 cascade).
 func TestTaskManagerPrompt_StackMergeSection(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}
@@ -1036,7 +1056,7 @@ func TestBuildReviewPrompt_IncludesQualityGuidelines(t *testing.T) {
 // with detail sufficient for loop agents to execute mechanically.
 func TestBuildTaskManagerPrompt_IncludesQualityGuidelines(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
 		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
 	}

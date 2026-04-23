@@ -342,7 +342,9 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		promptsDir = tmpDir
 	}
 
-	systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir)
+	startupCtx := preloadTaskContext(projectDir, log)
+
+	systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupCtx)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to build task manager prompt: %v", err)
 		return 1
@@ -451,6 +453,36 @@ func readTaskIDFromState(statePath string) string {
 		return ""
 	}
 	return id
+}
+
+// preloadTaskContext runs bd prime, bd list, and bd ready before launching
+// Claude so the task manager can present the startup summary without making
+// tool calls — preventing the response from disrupting user typing.
+func preloadTaskContext(projectDir string, log *logging.Logger) string {
+	bdBin, err := findBD()
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "bd not found, skipping startup preload")
+		return ""
+	}
+
+	var parts []string
+	for _, subcmd := range []string{"prime", "list", "ready"} {
+		cmd := exec.Command(bdBin, subcmd)
+		cmd.Dir = projectDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			continue
+		}
+		text := strings.TrimSpace(string(out))
+		if text != "" {
+			parts = append(parts, fmt.Sprintf("$ bd %s\n%s", subcmd, text))
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func findBD() (string, error) {
