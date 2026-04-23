@@ -164,16 +164,15 @@ func TestExecutionBD_ReinforcesBoyScoutRule(t *testing.T) {
 	}
 }
 
-// Proves: execution-bd.md prohibits the agent from running any bd commands —
-// the orchestrator owns all bead operations.
-func TestExecutionBD_ProhibitsBdCommands(t *testing.T) {
+// Proves: execution-bd.md does not expose PROJECT_DIR to the agent — the agent
+// should only know about WORK_DIR to prevent file leaks into the main checkout.
+func TestExecutionBD_NoProjectDir(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
 	if err != nil {
 		t.Fatalf("reading execution-bd.md: %v", err)
 	}
-	s := string(content)
-	if !strings.Contains(s, "NEVER run any `bd` commands") {
-		t.Error("execution-bd.md must prohibit all bd commands — orchestrator owns bead lifecycle")
+	if strings.Contains(string(content), "{{PROJECT_DIR}}") {
+		t.Error("execution-bd.md must not reference {{PROJECT_DIR}} — agent works only in WORK_DIR")
 	}
 }
 
