@@ -161,6 +161,7 @@ type Config struct {
 	ModelCap              string // maximum model tier for all LLM calls; empty means no cap
 	Version               string
 	VerifyDir             string // project root where tests are run; empty disables verification
+	Verify                string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
 	FixModel              string // model for fix agents on attempt 1; defaults to sonnet
@@ -504,7 +505,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.VerifyDir, l.cfg.Dirs.ProjectDir) == nil {
+	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.Verify, l.cfg.VerifyDir, l.cfg.Dirs.ProjectDir) == nil {
 		return fmt.Errorf("no ralph:verify script found in %s — add a \"ralph:verify\" script to package.json (or a make ralph-verify target) so the loop can verify task completion", l.cfg.Dirs.ProjectDir)
 	}
 

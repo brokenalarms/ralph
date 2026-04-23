@@ -25,7 +25,7 @@ func TestDetectTestCommand_MakeVerify(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tgo test ./...\n"), 0o644)
 
-	tc := DetectTestCommand(dir)
+	tc := DetectTestCommand("", dir)
 	if tc == nil {
 		t.Fatal("expected test command, got nil")
 	}
@@ -39,7 +39,7 @@ func TestDetectTestCommand_NPM(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:verify":"jest && playwright test"}}`), 0o644)
 
-	tc := DetectTestCommand(dir)
+	tc := DetectTestCommand("", dir)
 	if tc == nil {
 		t.Fatal("expected test command, got nil")
 	}
@@ -53,7 +53,7 @@ func TestDetectTestCommand_NPMTestIgnored(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"test":"jest"}}`), 0o644)
 
-	tc := DetectTestCommand(dir)
+	tc := DetectTestCommand("", dir)
 	if tc != nil {
 		t.Errorf("expected nil when only npm test exists (no ralph:verify), got %s %v", tc.Cmd, tc.Args)
 	}
@@ -64,7 +64,7 @@ func TestDetectTestCommand_GoModIgnored(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0o644)
 
-	tc := DetectTestCommand(dir)
+	tc := DetectTestCommand("", dir)
 	if tc != nil {
 		t.Errorf("expected nil when only go.mod exists (no ralph:verify), got %s %v", tc.Cmd, tc.Args)
 	}
@@ -74,9 +74,65 @@ func TestDetectTestCommand_GoModIgnored(t *testing.T) {
 func TestDetectTestCommand_None(t *testing.T) {
 	dir := t.TempDir()
 
-	tc := DetectTestCommand(dir)
+	tc := DetectTestCommand("", dir)
 	if tc != nil {
 		t.Errorf("expected nil for empty dir, got %s %v", tc.Cmd, tc.Args)
+	}
+}
+
+// DetectTestCommand with a configVerify override returns a TestCommand for the
+// override command without requiring a ralph:verify script — enabling greenfield
+// projects to pass the startup gate before any build system is in place.
+func TestDetectTestCommand_ConfigVerifyOverride(t *testing.T) {
+	dir := t.TempDir() // no ralph:verify script
+
+	tc := DetectTestCommand("npm test", dir)
+	if tc == nil {
+		t.Fatal("expected non-nil TestCommand when configVerify is set")
+	}
+	if tc.Cmd != "npm" {
+		t.Errorf("expected Cmd=npm, got %q", tc.Cmd)
+	}
+	if len(tc.Args) != 1 || tc.Args[0] != "test" {
+		t.Errorf("expected Args=[test], got %v", tc.Args)
+	}
+	if tc.Dir != dir {
+		t.Errorf("expected Dir=%q, got %q", dir, tc.Dir)
+	}
+}
+
+// DetectTestCommand with configVerify="true" returns a no-op TestCommand that
+// always exits 0 — the canonical way to skip verification in greenfield projects.
+func TestDetectTestCommand_ConfigVerifyTrue(t *testing.T) {
+	dir := t.TempDir() // no ralph:verify script
+
+	tc := DetectTestCommand("true", dir)
+	if tc == nil {
+		t.Fatal("expected non-nil TestCommand when configVerify='true'")
+	}
+	if tc.Cmd != "true" {
+		t.Errorf("expected Cmd=true, got %q", tc.Cmd)
+	}
+	if len(tc.Args) != 0 {
+		t.Errorf("expected no args, got %v", tc.Args)
+	}
+}
+
+// DetectTestCommand prefers a detected ralph:verify script over configVerify —
+// config is a fallback only, not an override.
+func TestDetectTestCommand_ScriptWinsOverConfig(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tgo test ./...\n"), 0o644)
+
+	tc := DetectTestCommand("true", dir)
+	if tc == nil {
+		t.Fatal("expected test command, got nil")
+	}
+	if tc.Cmd != "make" {
+		t.Errorf("expected make (script detection wins), got %q — configVerify must not override a detected script", tc.Cmd)
+	}
+	if len(tc.Args) != 1 || tc.Args[0] != "ralph-verify" {
+		t.Errorf("expected args=[ralph-verify], got %v", tc.Args)
 	}
 }
 
@@ -85,9 +141,26 @@ func TestDetectTestCommand_MakefileTestTargetIgnored(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tgo test ./...\n"), 0o644)
 
-	tc := DetectTestCommand(dir)
+	tc := DetectTestCommand("", dir)
 	if tc != nil {
 		t.Errorf("expected nil when Makefile has test but not ralph-verify, got %s %v", tc.Cmd, tc.Args)
+	}
+}
+
+// RunTests with a configVerify override uses the override command instead of
+// detecting ralph:verify — proving the config override flows through to execution.
+func TestRunTests_ConfigVerifyOverride(t *testing.T) {
+	dir := t.TempDir() // no ralph:verify script
+
+	result := RunTests(context.Background(), 5*time.Minute, "true", dir)
+	if !result.Passed {
+		t.Errorf("expected pass with configVerify=true, got: %s", result.Reason)
+	}
+	if result.ScriptMissing {
+		t.Error("expected ScriptMissing=false when configVerify is set")
+	}
+	if result.Command != "true" {
+		t.Errorf("expected Command=true, got %q", result.Command)
 	}
 }
 
@@ -97,7 +170,7 @@ func TestRunTests_PassingTests(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 
-	result := RunTests(context.Background(), 5*time.Minute, dir)
+	result := RunTests(context.Background(), 5*time.Minute, "", dir)
 	if !result.Passed {
 		t.Errorf("expected tests to pass, got: %s", result.Reason)
 	}
@@ -122,7 +195,7 @@ func TestRunTests_Timeout(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tsleep 1\n"), 0o644)
 
-	result := RunTests(context.Background(), 50*time.Millisecond, dir)
+	result := RunTests(context.Background(), 50*time.Millisecond, "", dir)
 	if result.Passed {
 		t.Error("expected tests to fail when timeout expires")
 	}
@@ -147,7 +220,7 @@ func TestRunTests_TimeoutKillsGrandchildren(t *testing.T) {
 	), 0o644)
 
 	start := time.Now()
-	result := RunTests(context.Background(), 200*time.Millisecond, dir)
+	result := RunTests(context.Background(), 200*time.Millisecond, "", dir)
 	elapsed := time.Since(start)
 
 	if result.Passed {
@@ -167,7 +240,7 @@ func TestRunTests_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	result := RunTests(ctx, 5*time.Minute, dir)
+	result := RunTests(ctx, 5*time.Minute, "", dir)
 	if result.Passed {
 		t.Error("expected tests to fail with cancelled context")
 	}
@@ -179,7 +252,7 @@ func TestRunTests_FailingTests(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tfalse\n"), 0o644)
 
-	result := RunTests(context.Background(), 5*time.Minute, dir)
+	result := RunTests(context.Background(), 5*time.Minute, "", dir)
 	if result.Passed {
 		t.Error("expected tests to fail")
 	}
@@ -195,7 +268,7 @@ func TestRunTests_NoTestRunner(t *testing.T) {
 	// so callers can distinguish configuration errors from test failures.
 	dir := t.TempDir()
 
-	result := RunTests(context.Background(), 5*time.Minute, dir)
+	result := RunTests(context.Background(), 5*time.Minute, "", dir)
 	if result.Passed {
 		t.Error("expected failure when no ralph:verify script found")
 	}
@@ -266,7 +339,7 @@ func TestDetectTestCommand_FallbackDir(t *testing.T) {
 	fallback := t.TempDir()  // simulates project root — has ralph:verify
 	os.WriteFile(filepath.Join(fallback, "Makefile"), []byte("ralph-verify:\n\tgo test ./...\n"), 0o644)
 
-	tc := DetectTestCommand(primary, fallback)
+	tc := DetectTestCommand("", primary, fallback)
 	if tc == nil {
 		t.Fatal("expected test command via fallback dir, got nil")
 	}
@@ -731,7 +804,7 @@ func TestRunTests_GrandchildKilledOnTimeout(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tsleep 999 &\n"), 0o644)
 
 	start := time.Now()
-	result := RunTests(context.Background(), 200*time.Millisecond, dir)
+	result := RunTests(context.Background(), 200*time.Millisecond, "", dir)
 	elapsed := time.Since(start)
 
 	if elapsed > 3*time.Second {
@@ -750,7 +823,7 @@ func TestRunTests_PopulatesCommandAndDir(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 
-	result := RunTests(context.Background(), 5*time.Minute, dir)
+	result := RunTests(context.Background(), 5*time.Minute, "", dir)
 	if result.Command != "make ralph-verify" {
 		t.Errorf("expected Command='make ralph-verify', got %q", result.Command)
 	}
@@ -765,7 +838,7 @@ func TestRunTests_PopulatesCommandOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tfalse\n"), 0o644)
 
-	result := RunTests(context.Background(), 5*time.Minute, dir)
+	result := RunTests(context.Background(), 5*time.Minute, "", dir)
 	if result.Passed {
 		t.Fatal("expected failure")
 	}

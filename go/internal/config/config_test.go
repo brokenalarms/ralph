@@ -704,6 +704,27 @@ func TestInitConfigGeneratesFile(t *testing.T) {
 	}
 }
 
+// Verifies that InitConfig includes the verify key as a commented-out entry,
+// so greenfield projects can see the option and uncomment it to skip script detection.
+func TestInitConfigIncludesVerifyComment(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+
+	if err := InitConfig(tomlPath); err != nil {
+		t.Fatalf("InitConfig failed: %v", err)
+	}
+
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		t.Fatalf("failed to read generated config: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "# verify = ") {
+		t.Errorf("generated config should contain commented verify key, got:\n%s", content)
+	}
+}
+
 // Verifies that InitConfig omits keys with empty defaults (post_task, verify_build)
 // so the generated file doesn't contain confusing "post_task = " lines.
 func TestInitConfigOmitsEmptyDefaults(t *testing.T) {
@@ -743,6 +764,9 @@ func TestInitConfigKeysAreAlphabetical(t *testing.T) {
 
 	var keys []string
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
 		if eqIdx := strings.Index(line, " = "); eqIdx >= 0 {
 			keys = append(keys, line[:eqIdx])
 		}

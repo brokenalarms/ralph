@@ -191,6 +191,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	vrf := verifier.New(verifier.Config{
 		VerifyDir:             dirs.WorkDir,
 		ProjectDir:            dirs.ProjectDir,
+		ConfigVerify:          cfg.Verify,
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
 		FixModel:              cfg.FixModel,
@@ -220,6 +221,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		PostSignalTimeout:        cfg.PostSignalTimeout,
 		PostTask:                 cfg.PostTask,
 		VerifyBuild:              cfg.VerifyBuild,
+		Verify:                   cfg.Verify,
 		Notify:                   cfg.Notify,
 		Wait:                     cfg.Wait,
 		Model:                    cfg.Model,

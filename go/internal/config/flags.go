@@ -17,16 +17,17 @@ const (
 )
 
 type FlagDef struct {
-	Short     string
-	Long      string
-	MetaVar   string
-	Help      string
-	Default   string
-	EnvVar    string
-	ConfigKey string
-	Kind      FlagKind
-	Apply     func(cfg *Config, val string) error
-	Read      func(cfg *Config) string // returns current value; "" means default/unset for bools
+	Short         string
+	Long          string
+	MetaVar       string
+	Help          string
+	Default       string
+	EnvVar        string
+	ConfigKey     string
+	Kind          FlagKind
+	CommentInInit bool // include as a commented-out line in generated config.toml even with no default
+	Apply         func(cfg *Config, val string) error
+	Read          func(cfg *Config) string // returns current value; "" means default/unset for bools
 }
 
 func boolStr(b bool) string {
@@ -325,6 +326,16 @@ var Flags = []FlagDef{
 			return nil
 		},
 		Read: func(cfg *Config) string { return cfg.VerifyBuild },
+	},
+	{
+		ConfigKey:     "verify",
+		Kind:          KindString,
+		CommentInInit: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.Verify = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.Verify },
 	},
 	{
 		Long:      "--notify",

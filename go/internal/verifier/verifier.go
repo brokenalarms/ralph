@@ -54,6 +54,7 @@ type Runner interface {
 type Config struct {
 	VerifyDir             string
 	ProjectDir            string // project root used as fallback when ralph:verify is absent from VerifyDir
+	ConfigVerify          string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string
 	VerifyEscalationModel string
 	FixModel              string // model for fix agents on attempt 1; defaults to ModelSonnet
@@ -145,7 +146,7 @@ func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, tim
 		}
 	}()
 
-	result := verify.RunTests(ctx, v.cfg.TestTimeout, dir, v.cfg.ProjectDir)
+	result := verify.RunTests(ctx, v.cfg.TestTimeout, v.cfg.ConfigVerify, dir, v.cfg.ProjectDir)
 	elapsed := time.Since(start).Truncate(time.Millisecond)
 
 	switch {
@@ -456,11 +457,15 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 
 	out := PreIterationResult{}
 
-	tc := verify.DetectTestCommand(v.cfg.VerifyDir, v.cfg.ProjectDir)
+	tc := verify.DetectTestCommand(v.cfg.ConfigVerify, v.cfg.VerifyDir, v.cfg.ProjectDir)
 	if tc != nil {
-		source := "package.json"
-		if tc.Cmd == "make" {
-			source = "Makefile"
+		source := "config.toml"
+		if v.cfg.ConfigVerify == "" {
+			if tc.Cmd == "make" {
+				source = "Makefile"
+			} else {
+				source = "package.json"
+			}
 		}
 		command := tc.Cmd + " " + strings.Join(tc.Args, " ")
 		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running test suite: %s (from %s in %s)", command, source, tc.Dir)
@@ -468,7 +473,7 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
 	}
 	testStart := time.Now()
-	result := verify.RunTests(in.Ctx, v.cfg.TestTimeout, v.cfg.VerifyDir, v.cfg.ProjectDir)
+	result := verify.RunTests(in.Ctx, v.cfg.TestTimeout, v.cfg.ConfigVerify, v.cfg.VerifyDir, v.cfg.ProjectDir)
 	out.TestResult = result
 	out.TestElapsed = time.Since(testStart).Truncate(10 * time.Millisecond)
 
