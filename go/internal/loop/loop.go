@@ -506,7 +506,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
 	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.Verify, l.cfg.VerifyDir, l.cfg.Dirs.ProjectDir) == nil {
-		return fmt.Errorf("no ralph:verify script found in %s — add a \"ralph:verify\" script to package.json (or a make ralph-verify target) so the loop can verify task completion", l.cfg.Dirs.ProjectDir)
+		l.logger.Emit(logging.Opts{Level: logging.Warn}, "No ralph:verify script found in %s — add a \"ralph:verify\" script to package.json (or a make ralph-verify target) for test-based verification. Continuing with LLM verification only.", l.cfg.Dirs.ProjectDir)
 	}
 
 	if err := l.connectivity.CheckGitHub(ctx); err != nil {

@@ -78,9 +78,8 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	// ── Test fix loop ──
 	testResult, _ := l.verifier.RunTests(p.ctx, l.cfg.VerifyDir)
 	if testResult.ScriptMissing {
-		return false, ""
-	}
-	if !testResult.Passed {
+		l.logger.Emit(logging.Opts{Level: logging.Warn}, "No ralph:verify script — skipping test verification. Add a verify script for stronger guarantees.")
+	} else if !testResult.Passed {
 		if !l.runTestFixLoop(spawn, taskAccept, testResult.Details, maxTestFix) {
 			return false, ""
 		}
