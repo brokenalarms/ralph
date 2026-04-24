@@ -548,6 +548,45 @@ func TestMergeStack_RetargetsNextPRBaseBeforeMerge(t *testing.T) {
 	}
 }
 
+// When runMergeStack retargets the next PR's base to main before merging the parent
+// and the parent merge then fails, the next PR's base must be rolled back to the
+// parent's head branch — otherwise the next PR's diff silently includes parent changes.
+func TestMergeStack_RollsBackRetargetOnMergeFailure(t *testing.T) {
+	// 2-PR stack: PR#1 (base=main, blocked) → PR#2 (base=pr1)
+	// PR#2 is retargeted to main before PR#1 merge is attempted.
+	// PR#1 merge fails (branch protection). PR#2 must be rolled back to "pr1".
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen, Blocked: true},
+			{Number: 2, Branch: "pr2", Base: "pr1", State: PRStateOpen},
+		},
+		Checks: map[int][]CICheckResult{
+			1: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		},
+	})
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+	)
+
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "2"})
+	if err == nil {
+		t.Fatal("expected error when PR#1 merge is blocked")
+	}
+
+	// PR#2 base must be restored to "pr1" (PR#1's head branch, which still exists
+	// since the merge failed), not left pointing to main.
+	pr2, _ := gh.GetPR("owner/repo", 2)
+	got := "<nil>"
+	if pr2 != nil {
+		got = pr2.BaseRef
+	}
+	if got != "pr1" {
+		t.Errorf("expected PR#2 base rolled back to 'pr1', got %q", got)
+	}
+}
+
 // initBareRepoIn initializes a git repo with one commit in the given directory.
 func initBareRepoIn(t *testing.T, dir string) {
 	t.Helper()
