@@ -2,48 +2,57 @@ package notify
 
 import (
 	"fmt"
-	"io"
-	"os"
+	"log"
+	"os/exec"
+	"runtime"
 )
 
-// writer is the output target for notifications. Defaults to os.Stdout.
-// Tests override this to capture output without writing to the terminal.
-var writer io.Writer = os.Stdout
+// commandRunner executes an OS command. Tests replace this to capture calls without running them.
+var commandRunner = func(name string, args ...string) error {
+	return exec.Command(name, args...).Run()
+}
 
-// SetWriter overrides the notification output target. Returns the previous
-// writer so callers can restore it.
-func SetWriter(w io.Writer) io.Writer {
-	prev := writer
-	writer = w
+// SetCommandRunner overrides the notification command executor. Returns previous runner for cleanup.
+func SetCommandRunner(r func(string, ...string) error) func(string, ...string) error {
+	prev := commandRunner
+	commandRunner = r
 	return prev
 }
 
-// TaskMerged sends an iTerm2 OSC 9 terminal notification for a merged task.
-// The notification appears as a macOS notification when the terminal is not
-// focused, letting the user monitor progress passively.
-// TaskCompleted sends an iTerm2 OSC 9 terminal notification for a completed
-// task iteration. Includes bead ID, title, and the agent's completion summary.
+func sendNotification(title, body string) {
+	switch runtime.GOOS {
+	case "darwin":
+		script := fmt.Sprintf(`display notification %q with title %q`, body, title)
+		if err := commandRunner("osascript", "-e", script); err != nil {
+			log.Printf("notify: osascript failed: %v", err)
+		}
+	case "linux":
+		if err := commandRunner("notify-send", title, body); err != nil {
+			log.Printf("notify: notify-send failed: %v", err)
+		}
+	default:
+		log.Printf("notify: no notification backend available for %s", runtime.GOOS)
+	}
+}
+
 func TaskCompleted(taskID, title, summary string) {
-	msg := "Task done"
+	notifTitle := "Task done"
 	if taskID != "" {
-		msg += ": [" + taskID + "]"
+		notifTitle += ": [" + taskID + "]"
 	}
 	if title != "" {
-		msg += " " + title
+		notifTitle += " " + title
 	}
-	if summary != "" {
-		msg += " — " + summary
-	}
-	fmt.Fprintf(writer, "\033]9;%s\007", msg)
+	sendNotification(notifTitle, summary)
 }
 
 func TaskMerged(taskID, title string) {
-	msg := "Task merged"
+	notifTitle := "Task merged"
 	if taskID != "" {
-		msg += ": [" + taskID + "]"
+		notifTitle += ": [" + taskID + "]"
 	}
 	if title != "" {
-		msg += " " + title
+		notifTitle += " " + title
 	}
-	fmt.Fprintf(writer, "\033]9;%s\007", msg)
+	sendNotification(notifTitle, "")
 }

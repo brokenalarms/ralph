@@ -637,8 +637,14 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
-	prev := notify.SetWriter(&buf)
-	t.Cleanup(func() { notify.SetWriter(prev) })
+	prev := notify.SetCommandRunner(func(_ string, args ...string) error {
+		for _, a := range args {
+			buf.WriteString(a)
+			buf.WriteByte(' ')
+		}
+		return nil
+	})
+	t.Cleanup(func() { notify.SetCommandRunner(prev) })
 
 	l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
@@ -697,8 +703,14 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
-	prev := notify.SetWriter(&buf)
-	t.Cleanup(func() { notify.SetWriter(prev) })
+	prev := notify.SetCommandRunner(func(_ string, args ...string) error {
+		for _, a := range args {
+			buf.WriteString(a)
+			buf.WriteByte(' ')
+		}
+		return nil
+	})
+	t.Cleanup(func() { notify.SetCommandRunner(prev) })
 
 	l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
@@ -754,8 +766,14 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
-	prev := notify.SetWriter(&buf)
-	t.Cleanup(func() { notify.SetWriter(prev) })
+	prev := notify.SetCommandRunner(func(_ string, args ...string) error {
+		for _, a := range args {
+			buf.WriteString(a)
+			buf.WriteByte(' ')
+		}
+		return nil
+	})
+	t.Cleanup(func() { notify.SetCommandRunner(prev) })
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true, Summary: "Updated README"},
