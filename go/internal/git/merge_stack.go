@@ -77,7 +77,7 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 
 	merged := 0
 	repoURL := r.RemoteURL()
-	for _, pr := range prs {
+	for i, pr := range prs {
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%d (%d/%d)", pr.number, merged+1, len(prs))
 
 		var pushedAt time.Time
@@ -114,6 +114,18 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 				}
 			} else {
 				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Success}, "CI passed for PR #%d", pr.number)
+			}
+		}
+
+		// Retarget the next PR's base to defaultBranch before merging the current
+		// one. When the current PR merges and its head branch is deleted, the next
+		// PR already points to main — GitHub won't auto-close it on repos where
+		// delete_branch_on_merge=false.
+		if i < len(prs)-1 {
+			nextPR := prs[i+1]
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Retargeting PR #%d base to %s...", nextPR.number, defaultBranch)
+			if err := r.github.EditPRBase(nextPR.number, repoURL, defaultBranch); err != nil {
+				return merged, fmt.Errorf("failed to retarget PR #%d base to %s: %w", nextPR.number, defaultBranch, err)
 			}
 		}
 

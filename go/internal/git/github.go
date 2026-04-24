@@ -138,6 +138,8 @@ type gitHub interface {
 	MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResult
 	ListChecks(prNumber int, repoURL string) ([]CICheckResult, error)
 	EditPR(prNumber int, repoURL, title, body string) error
+	// EditPRBase retargets a PR to the given base branch via PATCH /repos/{nwo}/pulls/{number}.
+	EditPRBase(prNumber int, repoURL, base string) error
 	GetRunLog(prNumber int, workDir string) string
 	FindPR(branch, repoURL string) (number int, title, url string, err error)
 	SearchPR(workDir, query string) (prNumber int, err error)
@@ -244,6 +246,19 @@ func (g *ghCLI) EditPR(prNumber int, repoURL, title, body string) error {
 	cmd := exec.Command("gh", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("PR edit failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (g *ghCLI) EditPRBase(prNumber int, repoURL, base string) error {
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return fmt.Errorf("cannot determine owner/repo from %q", repoURL)
+	}
+	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
+	cmd := exec.Command("gh", "api", "-X", "PATCH", endpoint, "-f", "base="+base)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("PR base retarget failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
