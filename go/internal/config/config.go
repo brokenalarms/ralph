@@ -52,6 +52,7 @@ type Config struct {
 	Verify                  string
 	Notify                  bool
 	CIPollTimeout           time.Duration
+	NoCIGracePeriod         time.Duration
 
 	// Review timeouts — how long to wait for automated code reviewers.
 	// Field names are neutral: the config package doesn't know about

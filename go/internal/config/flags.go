@@ -306,6 +306,18 @@ var Flags = []FlagDef{
 		},
 	},
 	{
+		ConfigKey: "no_ci_grace_period", Default: "30s",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.NoCIGracePeriod = d
+			return nil
+		},
+	},
+	{
 		Long: "--post-task", MetaVar: "<script>",
 		Help:      "Run external script after each task completes",
 		ConfigKey: "post_task",

@@ -474,6 +474,7 @@ func NewForTest(cfg Config, ghCfg StubGitHubConfig) Ops {
 		logger:                      cfg.Logger,
 		compileCheckTimeout:         cfg.CompileCheckTimeout,
 		ciPollTimeout:               cfg.CIPollTimeout,
+		noCIGracePeriod:             cfg.NoCIGracePeriod,
 		copilotGatedTimeout:         cfg.CopilotGatedTimeout,
 		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
 		codeRabbitTimeout:           cfg.CodeRabbitTimeout,

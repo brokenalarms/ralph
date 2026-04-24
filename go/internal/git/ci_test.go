@@ -218,7 +218,7 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	checks, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	checks, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 0, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 		}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 0, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestWaitForCI_TimesOut(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Millisecond, 0, discardLog{})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -285,7 +285,7 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, 0, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, log)
+	_, _, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 0, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestWaitForCI_NoLogLineWhenResolvedImmediately(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, status, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, log)
+	_, status, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 0, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, status, err := waitForCI(ctx, fetch, 1, "", "", 1*time.Second, 10*time.Second, discardLog{})
+	_, status, err := waitForCI(ctx, fetch, 1, "", "", 1*time.Second, 10*time.Second, 0, discardLog{})
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
@@ -379,6 +379,75 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 }
 
 
+
+// waitForCI returns CIPassed after the no-CI grace period when all fetches
+// return zero checks — repos with no CI configured should not block auto-merge.
+func TestWaitForCI_ZeroChecksAfterGracePeriodReturnsCIPassed(t *testing.T) {
+	stubCISleep(t)
+
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		return nil, nil
+	}
+
+	checks, status, err := waitForCI(
+		context.Background(), fetch, 1, "", "",
+		1*time.Millisecond, 5*time.Second, 5*time.Millisecond,
+		discardLog{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed after grace period with no CI checks, got %v", status)
+	}
+	if len(checks) != 0 {
+		t.Errorf("expected empty checks for no-CI repo, got %v", checks)
+	}
+}
+
+// waitForCI continues polling when zero-check grace period is 0 (disabled),
+// proving the grace period opt-in does not change existing behavior.
+func TestWaitForCI_ZeroGracePeriodTimesOutNormally(t *testing.T) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		return nil, nil
+	}
+
+	_, status, err := waitForCI(
+		context.Background(), fetch, 1, "", "",
+		1*time.Millisecond, 5*time.Millisecond, 0,
+		discardLog{},
+	)
+	if err == nil {
+		t.Fatal("expected timeout error when grace period is 0 and no checks ever appear")
+	}
+	if status != CIPending {
+		t.Errorf("expected CIPending on timeout (no grace period), got %v", status)
+	}
+}
+
+// AwaitCI returns CIPassed after the no-CI grace period for repos with no CI,
+// proving greenfield projects do not block auto-merge indefinitely.
+func TestAwaitCI_NoCIChecksReturnsPassedAfterGracePeriod(t *testing.T) {
+	stubCISleep(t)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		Checks:    nil,
+	})
+	repo := newRepoForTest(Config{
+		Logger:          &testLog{},
+		CIPollTimeout:   5 * time.Second,
+		NoCIGracePeriod: 5 * time.Millisecond,
+	}, gh)
+
+	_, status, err := repo.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed for no-CI repo after grace period, got %v", status)
+	}
+}
 
 // AwaitCI returns CIPassed immediately when checks already pass,
 // without entering the polling loop.
@@ -523,7 +592,7 @@ func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, 77, "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, log)
+	_, _, err := waitForCI(context.Background(), fetch, 77, "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, 0, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
