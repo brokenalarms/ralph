@@ -160,8 +160,7 @@ var IterationDisallowedTools = []string{
 
 	// claude-mem MCP tools — inherited from the host session but the agent
 	// wastes iterations on memory retrieval loops instead of writing code.
-	// Wildcard blocks all current and future claude-mem tools.
-	"mcp__plugin_claude-mem*",
+	"mcp__plugin_claude-mem_mcp-search__*",
 }
 
 // CmdFactory builds the exec.Cmd that Run() will start. Receives the
