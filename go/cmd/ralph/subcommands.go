@@ -351,7 +351,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	}
 
 	r := newInteractiveAgent(log, taskModel)
-	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.TaskManagerBootstrapPrompt)
+	exitCode, err := r.Interactive(projectDir, systemPrompt)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Task manager failed: %v", err)
 		return 1

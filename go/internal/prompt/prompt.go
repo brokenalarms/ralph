@@ -13,11 +13,6 @@ type TaskBackend string
 const (
 	BackendBD TaskBackend = "bd"
 
-	// TaskManagerBootstrapPrompt is the initial user message sent to the
-	// task manager Claude session so it presents the startup summary
-	// from the pre-loaded context without waiting for user input.
-	TaskManagerBootstrapPrompt = "Present the startup summary."
-
 	// ReviewBootstrapPrompt is the initial user message sent to the review
 	// session so it begins analysis immediately.
 	ReviewBootstrapPrompt = "Begin your review. Read AGENTS.md/CLAUDE.md first, then work through each responsibility."

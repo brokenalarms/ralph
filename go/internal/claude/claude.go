@@ -160,19 +160,8 @@ var IterationDisallowedTools = []string{
 
 	// claude-mem MCP tools — inherited from the host session but the agent
 	// wastes iterations on memory retrieval loops instead of writing code.
-	"mcp__plugin_claude-mem_mcp-search____IMPORTANT",
-	"mcp__plugin_claude-mem_mcp-search__build_corpus",
-	"mcp__plugin_claude-mem_mcp-search__get_observations",
-	"mcp__plugin_claude-mem_mcp-search__list_corpora",
-	"mcp__plugin_claude-mem_mcp-search__prime_corpus",
-	"mcp__plugin_claude-mem_mcp-search__query_corpus",
-	"mcp__plugin_claude-mem_mcp-search__rebuild_corpus",
-	"mcp__plugin_claude-mem_mcp-search__reprime_corpus",
-	"mcp__plugin_claude-mem_mcp-search__search",
-	"mcp__plugin_claude-mem_mcp-search__smart_outline",
-	"mcp__plugin_claude-mem_mcp-search__smart_search",
-	"mcp__plugin_claude-mem_mcp-search__smart_unfold",
-	"mcp__plugin_claude-mem_mcp-search__timeline",
+	// Wildcard blocks all current and future claude-mem tools.
+	"mcp__plugin_claude-mem*",
 }
 
 // CmdFactory builds the exec.Cmd that Run() will start. Receives the

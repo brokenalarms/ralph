@@ -443,12 +443,16 @@ func TestBuildTaskManagerPrompt_InjectsStartupContext(t *testing.T) {
 	}
 }
 
-// Proves: TaskManagerBootstrapPrompt is non-empty, so the task manager
-// Claude session receives an initial user message that presents the startup
-// summary without waiting for user input.
-func TestTaskManagerBootstrapPrompt_NonEmpty(t *testing.T) {
-	if TaskManagerBootstrapPrompt == "" {
-		t.Fatal("TaskManagerBootstrapPrompt must be non-empty to trigger startup")
+// Proves: the task manager system prompt instructs Claude to present the
+// startup summary as its first response — no injected user message needed.
+func TestTaskManagerPrompt_ContainsAutoStartup(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "first response") {
+		t.Fatal("task manager prompt must instruct Claude to auto-present startup summary")
 	}
 }
 
