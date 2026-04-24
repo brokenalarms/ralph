@@ -40,6 +40,7 @@ type Config struct {
 	Logger                      Log
 	CompileCheckTimeout         time.Duration
 	CIPollTimeout               time.Duration
+	NoCIGracePeriod             time.Duration
 	CopilotGatedTimeout         time.Duration
 	CopilotOpportunisticTimeout time.Duration
 	CodeRabbitTimeout           time.Duration
@@ -71,6 +72,7 @@ type repo struct {
 	logger                      Log
 	compileCheckTimeout         time.Duration
 	ciPollTimeout               time.Duration
+	noCIGracePeriod             time.Duration
 	copilotGatedTimeout         time.Duration
 	copilotOpportunisticTimeout time.Duration
 	codeRabbitTimeout           time.Duration
@@ -94,6 +96,7 @@ func New(cfg Config) Ops {
 		logger:                      cfg.Logger,
 		compileCheckTimeout:         cfg.CompileCheckTimeout,
 		ciPollTimeout:               cfg.CIPollTimeout,
+		noCIGracePeriod:             cfg.NoCIGracePeriod,
 		copilotGatedTimeout:         cfg.CopilotGatedTimeout,
 		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
 		codeRabbitTimeout:           cfg.CodeRabbitTimeout,

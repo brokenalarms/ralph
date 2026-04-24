@@ -66,6 +66,11 @@ const MaxCIPollInterval = 5 * time.Second
 // Matches the ci_poll_timeout config-file default.
 const DefaultCIPollTimeout = 5 * time.Minute
 
+// DefaultNoCIGracePeriod is how long waitForCI waits for any checks to appear
+// before concluding no CI is configured. Repos with CI register checks within
+// seconds; only repos with no CI configured consistently return zero checks.
+const DefaultNoCIGracePeriod = 30 * time.Second
+
 // ciSleep is the function used to create timer channels in waitForCI.
 // Tests override this to avoid real sleeps.
 var ciSleep = func(d time.Duration) <-chan time.Time {
@@ -252,16 +257,21 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 		timeout = DefaultCIPollTimeout
 	}
 
+	gracePeriod := r.noCIGracePeriod
+	if gracePeriod == 0 {
+		gracePeriod = DefaultNoCIGracePeriod
+	}
+
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
-		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, r.logger)
+		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, gracePeriod, r.logger)
 	}
 	status := evaluateChecks(checks)
 	if status != CIPending {
 		return checks, status, nil
 	}
-	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, r.logger)
+	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, gracePeriod, r.logger)
 }
 
 // waitForCI polls PR checks until they complete or timeout is reached.
@@ -269,7 +279,10 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 // MaxCIPollInterval. Emits a single in-place log line that grows as polls
 // accumulate (e.g. "CI polled 1s..2s..4s"), finalizing it to the log file
 // on completion. Emits nothing when CI resolves on the first fetch.
-func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
+//
+// gracePeriod controls how long to wait with zero checks before treating the
+// repo as having no CI configured and returning CIPassed. Pass 0 to disable.
+func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, timeout, gracePeriod time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 
@@ -280,6 +293,7 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 
 	currentInterval := interval
 	var polled bool
+	var zeroChecksSince time.Time
 
 	emitPoll := func(duration string) {
 		if !polled {
@@ -312,6 +326,18 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 			}
 			currentInterval = nextBackoff(currentInterval)
 			continue
+		}
+
+		if len(checks) == 0 && gracePeriod > 0 {
+			if zeroChecksSince.IsZero() {
+				zeroChecksSince = time.Now()
+			} else if time.Since(zeroChecksSince) >= gracePeriod {
+				finalize()
+				log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "No CI checks found after %v — no CI configured", gracePeriod)
+				return nil, CIPassed, nil
+			}
+		} else if len(checks) > 0 {
+			zeroChecksSince = time.Time{}
 		}
 
 		status := evaluateChecks(checks)
