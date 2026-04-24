@@ -65,6 +65,7 @@ type StubGitHubConfig struct {
 	CreatePRErr           error
 	CreatePRViaAPIErr     error
 	EditPRErr             error
+	EditPRBaseErr         error
 	ReopenPRErr           error
 	ListChecksErr         error
 	FindOpenPRErr         error
@@ -199,6 +200,16 @@ func (s *stubGitHub) EditPR(prNumber int, _, title, _ string) error {
 	}
 	if pr, ok := s.prs[prNumber]; ok {
 		pr.Title = title
+	}
+	return nil
+}
+
+func (s *stubGitHub) EditPRBase(prNumber int, _, base string) error {
+	if s.cfg.EditPRBaseErr != nil {
+		return s.cfg.EditPRBaseErr
+	}
+	if pr, ok := s.prs[prNumber]; ok {
+		pr.Base = base
 	}
 	return nil
 }

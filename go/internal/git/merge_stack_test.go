@@ -494,6 +494,60 @@ func TestMergeStack_AdminFlagNoEffectOnRealFailure(t *testing.T) {
 	}
 }
 
+// MergeStack retargets each intermediate PR's base to the default branch before
+// merging the parent. This prevents GitHub from auto-closing dependent PRs when
+// delete_branch_on_merge=false — by the time the parent branch is deleted, the
+// dependent PR already points to main.
+func TestMergeStack_RetargetsNextPRBaseBeforeMerge(t *testing.T) {
+	// 3-PR stack: PR#1 (base=main) → PR#2 (base=pr1) → PR#3 (base=pr2)
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen},
+			{Number: 2, Branch: "pr2", Base: "pr1", State: PRStateOpen},
+			{Number: 3, Branch: "pr3", Base: "pr2", State: PRStateOpen},
+		},
+		Checks: map[int][]CICheckResult{
+			1: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+			2: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+			3: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		},
+	})
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "3"})
+	if err != nil {
+		t.Fatalf("expected successful stack merge, got: %v", err)
+	}
+	if result.MergedCount != 3 {
+		t.Errorf("expected 3 merged, got %d", result.MergedCount)
+	}
+
+	// After merge, PR#2 and PR#3 must have been retargeted to main before their
+	// parent was merged — observable by checking the base in the stub's world.
+	pr2, _ := gh.GetPR("owner/repo", 2)
+	if pr2 == nil || pr2.BaseRef != "main" {
+		t.Errorf("expected PR#2 base to be 'main' (retargeted before PR#1 merged), got %q", func() string {
+			if pr2 == nil {
+				return "<nil>"
+			}
+			return pr2.BaseRef
+		}())
+	}
+	pr3, _ := gh.GetPR("owner/repo", 3)
+	if pr3 == nil || pr3.BaseRef != "main" {
+		t.Errorf("expected PR#3 base to be 'main' (retargeted before PR#2 merged), got %q", func() string {
+			if pr3 == nil {
+				return "<nil>"
+			}
+			return pr3.BaseRef
+		}())
+	}
+}
+
 // initBareRepoIn initializes a git repo with one commit in the given directory.
 func initBareRepoIn(t *testing.T, dir string) {
 	t.Helper()
