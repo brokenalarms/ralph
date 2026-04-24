@@ -832,8 +832,14 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
-	prev := notify.SetWriter(&buf)
-	t.Cleanup(func() { notify.SetWriter(prev) })
+	prev := notify.SetCommandRunner(func(_ string, args ...string) error {
+		for _, a := range args {
+			buf.WriteString(a)
+			buf.WriteByte(' ')
+		}
+		return nil
+	})
+	t.Cleanup(func() { notify.SetCommandRunner(prev) })
 
 	l.onResumeDone(context.Background(), "ralph-rm1", "Fix login", git.ResumeTaskResult{
 		Handled:       true,
@@ -891,8 +897,14 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
-	prev := notify.SetWriter(&buf)
-	t.Cleanup(func() { notify.SetWriter(prev) })
+	prev := notify.SetCommandRunner(func(_ string, args ...string) error {
+		for _, a := range args {
+			buf.WriteString(a)
+			buf.WriteByte(' ')
+		}
+		return nil
+	})
+	t.Cleanup(func() { notify.SetCommandRunner(prev) })
 
 	l.onResumeDone(context.Background(), "ralph-ro1", "Add cache", git.ResumeTaskResult{
 		Handled:  true,
@@ -949,8 +961,14 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
-	prev := notify.SetWriter(&buf)
-	t.Cleanup(func() { notify.SetWriter(prev) })
+	prev := notify.SetCommandRunner(func(_ string, args ...string) error {
+		for _, a := range args {
+			buf.WriteString(a)
+			buf.WriteByte(' ')
+		}
+		return nil
+	})
+	t.Cleanup(func() { notify.SetCommandRunner(prev) })
 
 	l.onResumeDone(context.Background(), "ralph-rd1", "Fix logout", git.ResumeTaskResult{
 		Handled:       true,
