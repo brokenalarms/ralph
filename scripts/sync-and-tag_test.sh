@@ -149,6 +149,31 @@ test_no_double_bump_on_second_run() {
   [ "$v1" = "$v2" ]    || fail "double bump: second run must not bump again ($v1 → $v2)"
 }
 
+# Test: RALPH_PROJECT_DIR overrides git rev-parse root — script operates on
+# the specified directory, not the directory inferred from the script location.
+# This is the regression guard for running sync-and-tag.sh as a post-task script
+# from a worktree where git rev-parse would return the worktree path.
+test_ralph_project_dir_override() {
+  local tmp
+  tmp=$(setup_repo)
+  trap "rm -rf '$tmp'" RETURN
+
+  # Create a scripts dir with no git repo above it — simulates a worktree
+  # where dirname "$0"/.. is not a git root.
+  mkdir -p "$tmp/worktree/scripts"
+  cp "$SCRIPT_DIR/sync-and-tag.sh" "$tmp/worktree/scripts/"
+
+  # Without RALPH_PROJECT_DIR, the script should fail (no git repo at worktree location).
+  rc=0
+  bash "$tmp/worktree/scripts/sync-and-tag.sh" > /dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "project_dir override: expected failure without RALPH_PROJECT_DIR at non-git location"
+
+  # With RALPH_PROJECT_DIR pointing to the real repo, the script should succeed.
+  rc=0
+  output=$(RALPH_PROJECT_DIR="$tmp/repo" bash "$tmp/worktree/scripts/sync-and-tag.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "project_dir override: failed with RALPH_PROJECT_DIR set ($rc): $output"
+}
+
 # Test: pre-push hook does not amend HEAD
 test_prepush_hook_no_amend() {
   # The pre-push hook must not amend HEAD; version bumping moved to sync-and-tag.sh
@@ -163,6 +188,7 @@ test_build_skipped_on_sync_failure
 test_version_bumped_on_push
 test_no_double_bump_on_second_run
 test_prepush_hook_no_amend
+test_ralph_project_dir_override
 
 if ((failures > 0)); then
   echo "$failures test(s) failed"

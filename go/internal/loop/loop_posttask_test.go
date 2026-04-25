@@ -796,6 +796,36 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	}
 }
 
+// runPostTask passes RALPH_PROJECT_DIR set to projectDir so project-level
+// scripts like sync-and-build.sh can operate on the main checkout instead
+// of the worktree branch.
+func TestRunPostTask_PassesProjectDir(t *testing.T) {
+	worktree := t.TempDir()
+	project := t.TempDir()
+
+	envFile := filepath.Join(worktree, "env.txt")
+	scriptPath := filepath.Join(worktree, "post-task.sh")
+	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"$RALPH_PROJECT_DIR\" > %s\n", envFile)), 0o755)
+
+	runPostTask(context.Background(), runPostTaskParams{
+		postTask:    scriptPath,
+		worktreeDir: worktree,
+		projectDir:  project,
+		logger:      logging.New(nil),
+	}, "ralph-test", 0, false)
+
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("post-task script did not run: %v", err)
+	}
+	got := strings.TrimSpace(string(data))
+	wantResolved, _ := filepath.EvalSymlinks(project)
+	gotResolved, _ := filepath.EvalSymlinks(got)
+	if gotResolved != wantResolved {
+		t.Errorf("RALPH_PROJECT_DIR=%q, want %q", got, project)
+	}
+}
+
 // runPostTask runs the script from worktreeDir, not projectDir, so
 // post-task scripts cannot dirty the main checkout.
 func TestRunPostTask_RunsInWorktreeDir(t *testing.T) {

@@ -4,7 +4,7 @@
 # Tagging happens in CI from package.json.
 set -euo pipefail
 
-root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
+root="${RALPH_PROJECT_DIR:-$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)}"
 package_json="$root/package.json"
 
 echo "[sync] Pulling latest..."

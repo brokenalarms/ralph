@@ -219,6 +219,7 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 		"RALPH_TASK_ID="+taskID,
 		"RALPH_PR_NUMBER="+prStr,
 		"RALPH_MERGED="+fmt.Sprintf("%t", merged),
+		"RALPH_PROJECT_DIR="+p.projectDir,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

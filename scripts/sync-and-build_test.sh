@@ -99,9 +99,35 @@ test_success_builds() {
   echo "$output" | grep -q "BUILD_RAN"       || fail "success: post-merge hook didn't trigger build"
 }
 
+# Test: RALPH_PROJECT_DIR overrides git rev-parse root — sync-and-build.sh
+# operates on the specified directory when invoked from a worktree context.
+test_ralph_project_dir_override() {
+  local tmp
+  tmp=$(setup_repo)
+  trap "rm -rf '$tmp'" RETURN
+
+  mkdir -p "$tmp/worktree/scripts"
+  cp "$SCRIPT_DIR/sync-and-build.sh" "$tmp/worktree/scripts/"
+  cp "$SCRIPT_DIR/sync-and-tag.sh" "$tmp/worktree/scripts/"
+  cat > "$tmp/worktree/scripts/build-go.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "BUILD_RAN"
+STUB
+  chmod +x "$tmp/worktree/scripts/build-go.sh"
+
+  rc=0
+  bash "$tmp/worktree/scripts/sync-and-build.sh" > /dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "project_dir override: expected failure without RALPH_PROJECT_DIR at non-git location"
+
+  rc=0
+  output=$(RALPH_PROJECT_DIR="$tmp/repo" bash "$tmp/worktree/scripts/sync-and-build.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "project_dir override: failed with RALPH_PROJECT_DIR set ($rc): $output"
+}
+
 test_push_failure
 test_pull_failure
 test_success_builds
+test_ralph_project_dir_override
 
 if ((failures > 0)); then
   echo "$failures test(s) failed"
