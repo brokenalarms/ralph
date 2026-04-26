@@ -186,10 +186,14 @@ func TestBuildReviewPrompt_CreatesBeadsForActions(t *testing.T) {
 	}
 }
 
-// Proves: ReviewBootstrapPrompt is non-empty so the review session auto-starts
-// its analysis without waiting for user input.
-func TestReviewBootstrapPrompt_NonEmpty(t *testing.T) {
-	if ReviewBootstrapPrompt == "" {
-		t.Fatal("ReviewBootstrapPrompt must be non-empty to trigger startup")
+// Proves: the review system prompt contains auto-start instructions so
+// the session begins immediately without a bootstrap user message.
+func TestReviewPrompt_ContainsAutoStart(t *testing.T) {
+	p, err := BuildReviewPrompt(promptsDir(t), "/tmp/project", "/tmp/project/.ralph", "some reflections")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p, "first response MUST begin immediately") {
+		t.Fatal("review system prompt must instruct auto-start without user input")
 	}
 }

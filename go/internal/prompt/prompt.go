@@ -13,9 +13,6 @@ type TaskBackend string
 const (
 	BackendBD TaskBackend = "bd"
 
-	// ReviewBootstrapPrompt is the initial user message sent to the review
-	// session so it begins analysis immediately.
-	ReviewBootstrapPrompt = "Begin your review. Read AGENTS.md/CLAUDE.md first, then work through each responsibility."
 )
 
 // Vars holds all substitution values for prompt template assembly.
@@ -156,10 +153,11 @@ func reviewInstructions(projectDir, ralphDir, style, reflections string) string 
 
 You are running an interactive post-mortem review session.
 
-START by presenting your reflection analysis (Responsibility 1). Show the
-user what the agents learned before anything else — this is the primary
-value of the review session. Then proceed to the other responsibilities
-as the user directs.
+Your first response MUST begin immediately — do not wait for user input.
+Read AGENTS.md/CLAUDE.md first for project context, then present your
+reflection analysis (Responsibility 1). Show the user what the agents
+learned before anything else — this is the primary value of the review
+session. Then proceed to the other responsibilities as the user directs.
 
 ### Context
 - Project: %s

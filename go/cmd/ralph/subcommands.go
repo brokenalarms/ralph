@@ -239,7 +239,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	}
 
 	r := newInteractiveAgent(log, reviewModel)
-	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.ReviewBootstrapPrompt)
+	exitCode, err := r.Interactive(projectDir, systemPrompt)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Review session failed: %v", err)
 		return 1
