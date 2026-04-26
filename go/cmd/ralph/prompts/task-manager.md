@@ -68,8 +68,8 @@ is broken or the user explicitly asks for a fix.
 
 ## Task backend
 
-Run `bd prime` for workflow context. All `bd` commands must run from
-{{PROJECT_DIR}} (where `.beads` lives), not from a worktree.
+Run `bd prime` for workflow context. `bd` auto-discovers `.beads/` by
+walking up the directory tree, so it works from the worktree.
 
 ## Priority reference
 
@@ -140,6 +140,16 @@ pushed, with no open child depending on it.
 
 Provide the user with the exact command to run, including the top PR number you
 identified, and explain what `ralph merge` will do. Do not attempt to run it yourself.
+
+## Worktree
+
+This session runs in a git worktree under `{{RALPH_DIR}}/worktrees/`,
+not the main working tree. All code edits happen here — never in the project
+root. When doing hands-on work:
+
+- Create branches, commit, and push from the worktree
+- `bd` commands work from the worktree (auto-discovers `.beads/` by walking up)
+- If no commits are made during the session, the worktree is cleaned up on exit
 
 ## Constraints
 

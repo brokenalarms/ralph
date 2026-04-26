@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -342,6 +343,23 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		promptsDir = tmpDir
 	}
 
+	gm := git.New(git.Config{
+		ProjectDir: projectDir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		Logger:     log,
+	})
+	ctx := context.Background()
+	if err := gm.Init(ctx); err != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Worktree setup failed, falling back to project dir: %v", err)
+	}
+	workDir := gm.GetWorkDir()
+	defer func() {
+		if workDir != projectDir && gm.LogOneline("origin/main", "HEAD") == "" {
+			gm.RemoveWorktree()
+		}
+	}()
+
 	startupCtx := preloadTaskContext(projectDir, log)
 
 	systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupCtx)
@@ -351,7 +369,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	}
 
 	r := newInteractiveAgent(log, taskModel)
-	exitCode, err := r.Interactive(projectDir, systemPrompt)
+	exitCode, err := r.Interactive(workDir, systemPrompt)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Task manager failed: %v", err)
 		return 1
