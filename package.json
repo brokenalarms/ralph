@@ -1,6 +1,6 @@
 {
   "name": "ralph",
-  "version": "0.1.599",
+  "version": "0.1.600",
   "description": "Autonomous Claude Code task iteration loop with HTTP control plane",
   "main": "server.js",
   "bin": {
