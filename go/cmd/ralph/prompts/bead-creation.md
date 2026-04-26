@@ -256,6 +256,13 @@ Anti-patterns:
 
 ### Acceptance criteria as regression guards
 
+- AC must mirror exactly what the user requested — nothing more. If the ask
+  is "disable setMark on the settings page", the AC is "setMark is not
+  triggerable on the settings page" — full stop. Never add "while we're at
+  it" items, related improvements, or scope the user didn't ask for. The
+  agent will faithfully execute expanded AC, the verifier will confirm it,
+  and the user will get changes they never requested. Scope expansion
+  belongs in a separate bead.
 - Write criteria that test specific behavior, not structure ("tests pass and no
   duplicate tmux sessions created" not "code is cleaner")
 - Include negative criteria where regressions are likely ("existing behavior X

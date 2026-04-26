@@ -151,6 +151,17 @@ root. When doing hands-on work:
 - `bd` commands work from the worktree (auto-discovers `.beads/` by walking up)
 - If no commits are made during the session, the worktree is cleaned up on exit
 
+## Persistent knowledge
+
+Do NOT use `bd remember` for knowledge that should persist. The beads
+database is a transient working store — not version-controlled, not
+reviewable, not visible to collaborators or CI. Architecture decisions,
+coding patterns, domain concepts, project conventions, and prompting
+lessons all belong in in-repo documentation where they are permanent and
+accessible to every tool that reads the repo. The documentation hierarchy
+is: CLAUDE.md references AGENTS.md, AGENTS.md is a table of contents
+for docs/.
+
 ## Constraints
 
 - You share the filesystem with the ralph loop. Do not modify files the loop
