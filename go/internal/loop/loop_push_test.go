@@ -2,7 +2,10 @@ package loop
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
@@ -181,6 +184,82 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 0 {
 		t.Errorf("bead must not be closed without signal, got %v", backend.ClosedIDs)
+	}
+}
+
+// Verifies that when Ship returns a push-failed error, completeTask skips the
+// bead with reason "push_failed:<branch>" and does NOT close it — the agent's
+// work exists in the local worktree and must not be silently discarded.
+func TestLoop_Ship_PushFailed_SkipsTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:  "some task",
+				NextID:    "ralph-5g57t",
+			},
+		},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		ShipErr:    fmt.Errorf("push failed: %w", errors.New("exit status 128")),
+	})
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     false,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+
+	l.runner = &stubRunner{
+		onRun:  func() { gm.CommitAll("simulated agent commit") },
+		result: claude.Result{SignalDetected: true, OnSignalUsed: true},
+	}
+
+	_ = l.Run(context.Background())
+
+	backend.SkipMu.Lock()
+	skippedIDs := backend.SkippedIDs
+	skipReasons := backend.SkipReasons
+	backend.SkipMu.Unlock()
+
+	if len(skippedIDs) != 1 || skippedIDs[0] != "ralph-5g57t" {
+		t.Errorf("expected task ralph-5g57t to be skipped, got %v", skippedIDs)
+	}
+	if len(skipReasons) == 0 || !strings.HasPrefix(skipReasons[0], "push_failed:") {
+		t.Errorf("expected skip reason with push_failed: prefix, got %v", skipReasons)
+	}
+
+	backend.CloseMu.Lock()
+	closedIDs := backend.ClosedIDs
+	backend.CloseMu.Unlock()
+
+	if len(closedIDs) != 0 {
+		t.Errorf("bead must NOT be closed on push failure, got %v", closedIDs)
 	}
 }
 
