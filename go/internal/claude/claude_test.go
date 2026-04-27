@@ -1326,10 +1326,10 @@ func TestIsContentActivity_ThinkingBlockStartIsTrue(t *testing.T) {
 	}
 }
 
-// Verifies that content_block_start for a tool_use block resets the idle watchdog.
-func TestIsContentActivity_ToolUseBlockStartIsTrue(t *testing.T) {
-	if !isContentActivity(`{"type":"content_block_start","content_block":{"type":"tool_use"}}`) {
-		t.Error("content_block_start for tool_use should be content activity")
+// tool_use is infrastructure (signal writes, file reads) — not thinking work.
+func TestIsContentActivity_ToolUseBlockStartIsFalse(t *testing.T) {
+	if isContentActivity(`{"type":"content_block_start","content_block":{"type":"tool_use"}}`) {
+		t.Error("content_block_start for tool_use should NOT be content activity")
 	}
 }
 

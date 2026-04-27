@@ -404,7 +404,7 @@ func isContentActivity(line string) bool {
 			return false
 		}
 		t := ev.ContentBlock.Type
-		return t == "text" || t == "thinking" || t == "tool_use"
+		return t == "text" || t == "thinking"
 	case "message_start":
 		return ev.Message != nil && ev.Message.Role == "assistant"
 	case "message_delta":
