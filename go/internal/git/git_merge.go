@@ -986,7 +986,14 @@ func (r *repo) ResolveConflict(ctx context.Context) error {
 		if errors.As(err, &localConflict) {
 			return &UnresolvedConflictError{}
 		}
-		return fmt.Errorf("conflict resolution rebase failed: %w", err)
+		// A transient transport failure during conflict resolution is not itself
+		// a conflict — continue with stale refs so the caller can decide.
+		var transportErr *TransportError
+		if errors.As(err, &transportErr) {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Conflict resolution fetch failed (transient) — continuing with stale base: %v", err)
+		} else {
+			return fmt.Errorf("conflict resolution rebase failed: %w", err)
+		}
 	}
 
 	// Check if the rebase actually resolved the divergence. If origin/base

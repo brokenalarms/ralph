@@ -2,8 +2,10 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -411,10 +413,16 @@ func (r *repo) EnsureUpToDate(ctx context.Context) error {
 					return ctx.Err()
 				}
 				r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to fetch origin/%s: %v", baseBranch, err2)
+				if isFetchTransportErr(err2) {
+					return &TransportError{Op: "fetch", Err: err2}
+				}
 				return nil
 			}
 		} else {
 			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to fetch origin/%s: %v", baseBranch, err)
+			if isFetchTransportErr(err) {
+				return &TransportError{Op: "fetch", Err: err}
+			}
 			return nil
 		}
 	}
@@ -698,6 +706,15 @@ func (r *repo) PrepareForNextTask(nextTaskID, baseRef string) {
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Preserving local branch %s — unmerged commits ahead of %s", oldBranch, r.detectDefaultBranch())
 		}
 	}
+}
+
+// isFetchTransportErr returns true when err is a transient remote-transport
+// failure from a git fetch — indicated by exit status 128, which git uses for
+// network errors, auth failures, and unreachable remotes. Local errors (bad
+// ref, wrong branch name) use other exit codes.
+func isFetchTransportErr(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 128
 }
 
 // SquashToOneCommit squashes all commits since baseSHA into a single commit

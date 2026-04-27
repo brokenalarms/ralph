@@ -81,9 +81,15 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 		// branch state is intact, the agent or the next task boundary will
 		// handle divergence. Warn and continue rather than stranding the loop.
 		var localConflict *git.LocalRebaseConflictError
-		if errors.As(err, &localConflict) {
+		var transportErr *git.TransportError
+		switch {
+		case errors.As(err, &localConflict):
 			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v — continuing with stale base", localConflict)
-		} else {
+		case errors.As(err, &transportErr):
+			// A transient transport failure at startup is recoverable: the worktree
+			// is still intact, and BranchForTask will retry the fetch per-task.
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Startup sync fetch failed (transient) — continuing: %v", err)
+		default:
 			l.state.Write("status", "error")
 			return fmt.Errorf("initial rebase failed: %w", err)
 		}

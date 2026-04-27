@@ -193,7 +193,20 @@ func (e *LocalRebaseConflictError) Error() string {
 	return fmt.Sprintf("local commits on %s could not be rebased onto origin/%s — divergent changes", e.Branch, e.Base)
 }
 
+// TransportError wraps a git remote-transport failure (e.g. fetch returning
+// exit status 128 because the network is temporarily down or auth failed).
+// The loop treats this as recoverable: it skips the current task and continues
+// to the next iteration rather than exiting with status=error.
+type TransportError struct {
+	Op  string // git operation that failed, e.g. "fetch"
+	Err error
+}
 
+func (e *TransportError) Error() string {
+	return fmt.Sprintf("transient transport error during git %s: %v", e.Op, e.Err)
+}
+
+func (e *TransportError) Unwrap() error { return e.Err }
 
 // CIFetchFunc is the signature for fetching PR check status.
 type CIFetchFunc func(prNumber int, repoURL string) ([]CICheckResult, error)
