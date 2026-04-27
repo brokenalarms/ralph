@@ -418,14 +418,14 @@ func printTaskUsage() {
 	fmt.Printf("%sralph task%s - Interactive task triage and spec session\n\n", logging.Bold, logging.Reset)
 	fmt.Printf("%sUSAGE:%s\n  ralph task [--model <model>]\n\n", logging.Bold, logging.Reset)
 	fmt.Printf("Launches an interactive Claude session for creating tasks, writing specs,\nand managing the project backlog.\n\n")
-	fmt.Printf("%sOPTIONS:%s\n  --model <model>    Model ceiling for the session (e.g. claude-sonnet-4-6, claude-haiku-4-5-20251001)\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sOPTIONS:%s\n  --model <model>    Model ceiling for the session — alias (opus, sonnet, haiku) for latest, or pinned ID (e.g. claude-sonnet-4-6)\n", logging.Bold, logging.Reset)
 }
 
 func printReviewUsage() {
 	fmt.Printf("%sralph review%s - Post-mortem review\n\n", logging.Bold, logging.Reset)
 	fmt.Printf("%sUSAGE:%s\n  ralph review [directory] [--model <model>]\n\n", logging.Bold, logging.Reset)
 	fmt.Printf("Launches an interactive Claude session for reviewing reflections, auditing\ntests, and identifying refactoring opportunities.\n\n")
-	fmt.Printf("%sOPTIONS:%s\n  --model <model>    Model ceiling for the session (e.g. claude-sonnet-4-6, claude-haiku-4-5-20251001)\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sOPTIONS:%s\n  --model <model>    Model ceiling for the session — alias (opus, sonnet, haiku) for latest, or pinned ID (e.g. claude-sonnet-4-6)\n", logging.Bold, logging.Reset)
 }
 
 func printAttachUsage() {
