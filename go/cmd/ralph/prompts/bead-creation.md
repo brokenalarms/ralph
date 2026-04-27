@@ -218,6 +218,19 @@ Do not split automatically — always get user confirmation first.
 
 ## Task creation quality guidelines
 
+### Description trap — front-load the action
+
+Agents read the first paragraph of a description and attempt to satisfy it.
+If the first paragraph is context or rationale, the agent will skim past the
+actual instructions buried lower down. Structure every bead description as:
+
+1. **First sentence:** What to do (imperative, specific)
+2. **Second paragraph:** Where to do it (file, function, code path)
+3. **Remaining paragraphs:** Why, context, diagnostic evidence
+
+If the agent can satisfy paragraph one and stop, it will. Make paragraph one
+the complete instruction — everything below it is supporting evidence.
+
 ### Detail principle — higher reasoning instructs lower reasoning
 
 The task manager creates beads that a loop agent executes. The agent is

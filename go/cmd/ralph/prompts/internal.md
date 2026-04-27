@@ -4,6 +4,36 @@ work (using git's update-refs to keep the stack consistent). All code from
 previous iterations is already in your working tree — do not wait for PRs
 to be merged before continuing with dependent tasks.
 
+## Iteration lifecycle
+
+Follow this flow exactly. The fork at "Code needed?" determines your path.
+
+```dot
+digraph iteration {
+  rankdir=TB
+  node [shape=box]
+
+  read_agents  [label="Read AGENTS.md / CLAUDE.md"]
+  diagnose     [label="ISSUE/FIX diagnosis"]
+  code_needed  [label="Code needed?" shape=diamond]
+  investigate  [label="Investigate codebase\nto confirm already met"]
+  tdd_fail     [label="Write test (must FAIL)"]
+  implement    [label="Implement the fix"]
+  tdd_pass     [label="Run test (must PASS)"]
+  verify       [label="Run tests, read output\n(evidence, not confidence)"]
+  commit       [label="Commit changes"]
+  reflect      [label="Write reflection"]
+  signal       [label="Write SIGNAL_COMPLETE"]
+  no_code      [label="Write NO_CODE_NEEDED"]
+
+  read_agents -> diagnose -> code_needed
+  code_needed -> tdd_fail     [label="yes"]
+  code_needed -> investigate  [label="no"]
+  tdd_fail -> implement -> tdd_pass -> verify -> commit -> reflect -> signal
+  investigate -> reflect -> no_code
+}
+```
+
 ## Output style
 Be concise. State the issue, apply the fix, write tests, signal completion. Do not narrate your thought process, explain what you are about to do, or reason aloud. Every line you emit appears in the stream log — make each one count.
 
