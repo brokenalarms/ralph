@@ -6,24 +6,31 @@ to be merged before continuing with dependent tasks.
 
 ## Iteration lifecycle
 
-This is the exact sequence of your work. Follow it in order — do not skip or reorder steps.
+Follow this flow exactly. The fork at "Code needed?" determines your path.
 
 ```dot
 digraph iteration {
   rankdir=TB
   node [shape=box]
 
-  read_agents [label="Read AGENTS.md / CLAUDE.md"]
-  diagnose    [label="ISSUE/FIX diagnosis"]
-  tdd_fail    [label="Write test (must FAIL)"]
-  implement   [label="Implement the fix"]
-  tdd_pass    [label="Run test (must PASS)"]
-  verify      [label="Run tests, read output\n(evidence, not confidence)"]
-  commit      [label="Commit changes"]
-  reflect     [label="Write reflection"]
-  signal      [label="Write signal file\n(FINAL action — process killed)"]
+  read_agents  [label="Read AGENTS.md / CLAUDE.md"]
+  diagnose     [label="ISSUE/FIX diagnosis"]
+  code_needed  [label="Code needed?" shape=diamond]
+  investigate  [label="Investigate codebase\nto confirm already met"]
+  tdd_fail     [label="Write test (must FAIL)"]
+  implement    [label="Implement the fix"]
+  tdd_pass     [label="Run test (must PASS)"]
+  verify       [label="Run tests, read output\n(evidence, not confidence)"]
+  commit       [label="Commit changes"]
+  reflect      [label="Write reflection"]
+  signal       [label="Write SIGNAL_COMPLETE"]
+  no_code      [label="Write NO_CODE_NEEDED"]
 
-  read_agents -> diagnose -> tdd_fail -> implement -> tdd_pass -> verify -> commit -> reflect -> signal
+  read_agents -> diagnose -> code_needed
+  code_needed -> tdd_fail     [label="yes"]
+  code_needed -> investigate  [label="no"]
+  tdd_fail -> implement -> tdd_pass -> verify -> commit -> reflect -> signal
+  investigate -> reflect -> no_code
 }
 ```
 
