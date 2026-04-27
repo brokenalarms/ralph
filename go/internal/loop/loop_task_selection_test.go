@@ -181,12 +181,15 @@ func TestSelectNextTask_SetResumeIDOnFirstIteration(t *testing.T) {
 	}
 }
 
-// selectNextTask exits with actionDone and status all_skipped when wait=true
-// but all open tasks are in the skipped list — avoids infinite poll loop.
+// When wait=true and all open tasks are skipped, selectNextTask must NOT exit
+// immediately — it falls through to waitForTasks and polls for new work.
+// Proved by: the waitHook fires (confirming waitForTasks was entered), and
+// context cancellation from the hook causes actionDone with status "stopped",
+// not the old "all_skipped" short-circuit.
 func TestSelectNextTask_WaitMode_AllSkipped(t *testing.T) {
 	falseVal := false
 	backend := &testutil.StubBackend{
-		Remaining:          1,    // CountRemaining returns 1 (open task exists)
+		Remaining:          1,         // CountRemaining returns 1 (open task exists)
 		HasRemainingResult: &falseVal, // HasRemaining returns false (all skipped)
 		Total:              1,
 		NextID:             "",
@@ -194,19 +197,31 @@ func TestSelectNextTask_WaitMode_AllSkipped(t *testing.T) {
 	}
 	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	waitHookCalled := false
+	l.waitHook = &stubWaitHook{fn: func() {
+		waitHookCalled = true
+		cancel()
+	}}
+
+	_, action := l.selectNextTask(ctx, selectNextTaskParams{
 		runIteration:  1,
 		maxIterations: 100,
 		wait:          true,
 		completedIDs:  map[string]bool{},
 	})
 
+	if !waitHookCalled {
+		t.Error("expected waitForTasks to be entered (waitHook was not called)")
+	}
 	if action != actionDone {
-		t.Fatalf("expected actionDone when all tasks are skipped, got %v", action)
+		t.Fatalf("expected actionDone after context cancel in waitForTasks, got %v", action)
 	}
 	status, _ := l.state.Read("status")
-	if status != "all_skipped" {
-		t.Errorf("expected status all_skipped, got %q", status)
+	if status != "stopped" {
+		t.Errorf("expected status %q after context cancel, got %q", "stopped", status)
 	}
 }
 
