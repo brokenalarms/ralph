@@ -8,12 +8,13 @@ root="${RALPH_PROJECT_DIR:-$(git -C "$(dirname "$0")/.." rev-parse --show-toplev
 package_json="$root/package.json"
 
 echo "[sync] Pulling latest..."
-if ! git -C "$root" pull --rebase 2>&1; then
-  echo "[sync] Pull --rebase failed" >&2
+git -C "$root" fetch origin
+if ! git -C "$root" rebase origin/main 2>&1; then
+  echo "[sync] Rebase onto origin/main failed" >&2
   exit 1
 fi
 
-ahead=$(git -C "$root" rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+ahead=$(git -C "$root" rev-list --count origin/main..HEAD 2>/dev/null || echo "0")
 if [ "$ahead" != "0" ]; then
   current=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$package_json', 'utf8')).version)")
   IFS='.' read -r major minor patch <<< "$current"
