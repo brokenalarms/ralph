@@ -381,6 +381,60 @@ func TestNoTaskKeySkipsErrorFingerprinting(t *testing.T) {
 	}
 }
 
+// Proves: 3 consecutive test-only iterations across different task keys do NOT
+// trigger test_saturation — the counter resets between tasks via ResetForNewTask.
+func TestTestSaturationResetsAcrossTaskBoundary(t *testing.T) {
+	a := New()
+	testOnly := IterationState{
+		IterationLog: "wrote some tests\n",
+		HasDiff:      true,
+		ChangedFiles: []string{"pkg/handler_test.go"},
+	}
+
+	a.ResetForNewTask()
+	r := a.Analyze(IterationState{IterationLog: testOnly.IterationLog, HasDiff: true, ChangedFiles: testOnly.ChangedFiles, TaskKey: "task-1"})
+	if r.Action == Halt {
+		t.Fatal("task-1 iteration 1: should not halt")
+	}
+
+	a.ResetForNewTask()
+	r = a.Analyze(IterationState{IterationLog: testOnly.IterationLog, HasDiff: true, ChangedFiles: testOnly.ChangedFiles, TaskKey: "task-2"})
+	if r.Action == Halt {
+		t.Fatal("task-2 iteration 1: should not halt after reset")
+	}
+
+	a.ResetForNewTask()
+	r = a.Analyze(IterationState{IterationLog: testOnly.IterationLog, HasDiff: true, ChangedFiles: testOnly.ChangedFiles, TaskKey: "task-3"})
+	if r.Action == Halt && r.Reason == "test_saturation" {
+		t.Error("3 test-only iterations across 3 tasks must NOT trigger test_saturation after per-task reset")
+	}
+}
+
+// Proves: 3 consecutive test-only iterations within the SAME task still
+// trigger test_saturation — the counter only resets on task boundaries.
+func TestTestSaturationStillFiresWithinSameTask(t *testing.T) {
+	a := New()
+	testOnly := IterationState{
+		IterationLog: "wrote some tests\n",
+		HasDiff:      true,
+		ChangedFiles: []string{"pkg/handler_test.go"},
+		TaskKey:      "same-task",
+	}
+
+	a.ResetForNewTask()
+	for i := 0; i < 2; i++ {
+		r := a.Analyze(testOnly)
+		if r.Action == Halt {
+			t.Fatalf("iteration %d within same task: should not halt yet", i+1)
+		}
+	}
+
+	r := a.Analyze(testOnly)
+	if r.Action != Halt || r.Reason != "test_saturation" {
+		t.Errorf("3rd test-only iteration within same task: got %+v, want Halt/test_saturation", r)
+	}
+}
+
 func assistantTextMsg(text string) string {
 	return fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":%q}]}}`, text)
 }

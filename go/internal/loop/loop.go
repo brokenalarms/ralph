@@ -426,6 +426,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 		l.taskAttempts = nil
 		l.taskIdleTimeouts = 0
 		l.currentTaskID = taskKey
+		l.analyzer.ResetForNewTask()
 	}
 
 	prep, ok := l.prepareAndBuildPrompt(ctx, task.id, task.title)
