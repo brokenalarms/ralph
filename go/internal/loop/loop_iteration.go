@@ -219,7 +219,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				prState, _ := l.git.GetPRState(prNum)
 				if prState == git.PRStateOpen {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
-					_, _, merged, _, _, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+					_, _, merged, _, _, _, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 					prRef := fmt.Sprintf("PR #%d", prNum)
 					closeReason := fmt.Sprintf("Verified — %s open, merge pending", prRef)
 					if merged {
@@ -299,7 +299,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		return completeTaskOut{action: signalComplete}
 	}
 
-	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch, shipErr := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 
 	// Record every successful push in chronological order so completedBranches()
 	// can build the correct stack for the next iteration. This captures both
@@ -342,19 +342,39 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	}
 
 	if prNumber == 0 {
-		// Two distinct sub-cases are collapsed into prNumber==0:
+		// Three distinct sub-cases when no PR number is available:
 		//
-		//   (a) pushedBranch == "": nothing was pushed to the remote. The
-		//       agent signalled with no new commits and no prior-iteration
-		//       commits to ship. Closing the bead is correct — work is
-		//       verified complete.
+		//   (a) shipErr != nil && pushedBranch == "": push was attempted but
+		//       failed (e.g. exit 128, network error). The agent's commits are
+		//       in the local worktree only — origin was never reached. Skip so
+		//       the next iteration can retry; closing would silently discard
+		//       work that was never shipped.
 		//
-		//   (b) pushedBranch != "": the Phase 1 push succeeded but CreatePR
-		//       failed (rate limit, 422, network). Commits are now on the
-		//       remote branch. Closing the bead would orphan that branch —
-		//       bead tracking loses the link to the work that exists on
-		//       origin. Skip instead, encoding the branch in the skip reason
-		//       so triage can rediscover the orphaned branch.
+		//   (b) pushedBranch != "" && shipErr != nil: the Phase 1 push succeeded
+		//       but CreatePR failed (rate limit, 422, network). Commits are on the
+		//       remote branch but no PR tracks them. Skip instead of closing so
+		//       triage can rediscover the orphaned branch via the skip reason.
+		//
+		//   (c) shipErr == nil && pushedBranch == "": nothing was pushed. The
+		//       agent signalled with no new commits and no prior-iteration commits
+		//       to ship. Closing the bead is correct — work is verified complete.
+		if shipErr != nil && pushedBranch == "" {
+			branch := l.git.GetWorktreeBranch()
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+				"Push failed (%v) — skipping bead %s (work remains in local worktree)",
+				shipErr, p.taskID)
+			if p.taskID != "" {
+				if ctx.Err() != nil {
+					l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+					l.setPhaseInterrupted(p.taskID)
+					return completeTaskOut{action: signalComplete}
+				}
+				// Machine-parseable reason: "push_failed:<branch>".
+				l.skipTask(p.taskID, fmt.Sprintf("push_failed:%s", branch))
+			}
+			return completeTaskOut{action: signalSkipped}
+		}
+
 		if pushedBranch != "" {
 			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 				"No PR created but branch %s was pushed — skipping bead %s (CreatePR failed; work lives on remote)",
