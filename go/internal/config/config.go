@@ -12,10 +12,15 @@ import (
 
 var Version = "0.1.0-dev"
 
+// Model aliases passed to `claude --model`. The CLI resolves each alias to
+// the latest released model in that family, so Ralph automatically picks up
+// new model versions without code changes. Use full version strings (e.g.
+// "claude-opus-4-6") only when reproducibility against a specific release
+// is required, via --model-ceiling, fix_escalation_model, etc.
 const (
-	ModelHaiku  = "claude-haiku-4-5-20251001"
-	ModelSonnet = "claude-sonnet-4-6"
-	ModelOpus   = "claude-opus-4-6"
+	ModelHaiku  = "haiku"
+	ModelSonnet = "sonnet"
+	ModelOpus   = "opus"
 )
 
 // Config holds all CLI configuration matching ralph.sh's flag interface.
