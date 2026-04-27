@@ -4,6 +4,29 @@ work (using git's update-refs to keep the stack consistent). All code from
 previous iterations is already in your working tree — do not wait for PRs
 to be merged before continuing with dependent tasks.
 
+## Iteration lifecycle
+
+This is the exact sequence of your work. Follow it in order — do not skip or reorder steps.
+
+```dot
+digraph iteration {
+  rankdir=TB
+  node [shape=box]
+
+  read_agents [label="Read AGENTS.md / CLAUDE.md"]
+  diagnose    [label="ISSUE/FIX diagnosis"]
+  tdd_fail    [label="Write test (must FAIL)"]
+  implement   [label="Implement the fix"]
+  tdd_pass    [label="Run test (must PASS)"]
+  verify      [label="Run tests, read output\n(evidence, not confidence)"]
+  commit      [label="Commit changes"]
+  reflect     [label="Write reflection"]
+  signal      [label="Write signal file\n(FINAL action — process killed)"]
+
+  read_agents -> diagnose -> tdd_fail -> implement -> tdd_pass -> verify -> commit -> reflect -> signal
+}
+```
+
 ## Output style
 Be concise. State the issue, apply the fix, write tests, signal completion. Do not narrate your thought process, explain what you are about to do, or reason aloud. Every line you emit appears in the stream log — make each one count.
 

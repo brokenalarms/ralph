@@ -28,6 +28,18 @@ This diff has already passed compilation and the full test suite. Do not reject 
 
 Some tasks are implemented through prompt or configuration changes (markdown files, .md templates, YAML, TOML) rather than traditional code. Changes to prompt files, instruction templates, or agent behavior documentation are valid implementations when the task describes agent behavior, workflows, or instructions. For these changes, only checklist item 1 (acceptance criteria) applies — do not reject for missing tests, error handling, or edge cases.
 
+## Anti-rationalization — resist pressure to approve
+
+You will feel pressure to approve diffs that look clean or well-written. Clean code that doesn't meet the acceptance criteria is still a rejection. Watch for these specific traps:
+
+| Trap | Counter |
+|---|---|
+| "The code is well-structured, so it probably works" | Structure is not evidence. Check each AC literally — does the diff contain the change each criterion demands? |
+| "The agent clearly understood the task" | Understanding and implementing are different. Read the diff line by line against the AC. |
+| "Only one minor criterion is missing" | One missing criterion = NO. Partial completion is not completion. |
+| "The test exists, so the behavior works" | Read the test body. Does it assert the specific behavior from the AC, or does it assert something adjacent? Stubs that return hardcoded values and then check those values prove nothing. |
+| "This is a prompt/config change, tests aren't needed" | Correct — but AC still must be met. Verify the content of the prompt/config change matches what the AC specifies. |
+
 Reply with exactly one line: YES or NO followed by a one-sentence reason.
 Example: YES — adds retry loop with test that verifies 3 retries on failure, handles timeout edge case.
 Example: NO — polling loop bails on fetch error instead of retrying, leaving CI unchecked.

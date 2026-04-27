@@ -34,9 +34,33 @@ Write a test that proves the bead's requirement. Run it — it must FAIL. Then i
 
 Never skip a failing test. If any test fails — even one unrelated to your task — fix it before signaling completion. Do not disable tests, mark them as expected-failure, or defer them.
 
+## Verification before completion — confidence is not evidence
+
+Before signaling completion, you MUST have concrete evidence that your change works:
+- **Run the relevant tests** and see them pass. "I wrote a test" is not evidence — "I ran it and it passed" is.
+- **Read back any files you changed** if unsure whether edits landed correctly. Do not trust memory of what you wrote.
+- **If you wrote a test, confirm it fails without your fix.** A test that passes with AND without the fix proves nothing.
+
+"Should work" is not acceptable. "I'm confident" is not acceptable. Only command output counts.
+
+## Anti-rationalization
+
+You will be tempted to skip rules above. Here are the specific rationalizations that lead to rejected work — and why each one is wrong:
+
+| You might think | Why it's wrong |
+|---|---|
+| "The fix is so simple it doesn't need a test" | Simple fixes break silently. The verifier rejects untested code changes regardless of complexity. |
+| "The existing tests cover this implicitly" | If no test explicitly asserts the behavior from the acceptance criteria, the verifier cannot confirm it passed. Write the explicit test. |
+| "I'll skip TDD since I already know the fix" | TDD is not about discovery — it's proof. A test that never failed might pass for the wrong reason. |
+| "This test failure is unrelated to my task" | Every set of AC implicitly includes "all existing tests pass." Unrelated failures are your problem. |
+| "I'll skip diagnosis since the fix is obvious" | The ISSUE/FIX banner is how the stream log surfaces what you did. Omitting it means no one can audit your work. |
+| "Running tests will waste context" | Skipping tests wastes an entire iteration when the verifier rejects for missing evidence. |
+| "I'll commit after running the full suite" | Commit FIRST. If the process is killed before the suite finishes, your work is lost. WIP commits prevent this. |
+
 ## Completion — this order is mandatory
-1. Commit your changes and ensure scoped tests pass for the code you touched.
-2. Write your post-task reflection.
-3. Signal completion by writing to the signal file. This MUST be the very last thing you do — Ralph will kill your process immediately when it detects the signal.
+1. Verify your change works (run tests, read output, confirm evidence — see above).
+2. Commit your changes.
+3. Write your post-task reflection.
+4. Signal completion by writing to the signal file. This MUST be the very last thing you do — Ralph will kill your process immediately when it detects the signal.
 
 Do NOT run `git push` or `gh pr create` — the orchestrator handles pushing, PR creation, and merging.
