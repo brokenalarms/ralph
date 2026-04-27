@@ -318,6 +318,15 @@ func (a *Analyzer) checkRepeatedErrors(text, taskKey string) bool {
 	return false
 }
 
+// ResetForNewTask zeros the per-task iteration counters when the loop
+// transitions to a new task. errorHashes is preserved — it is keyed per task
+// and accumulates across sessions intentionally.
+func (a *Analyzer) ResetForNewTask() {
+	a.testOnlyCount = 0
+	a.stagnantCount = 0
+	a.stuckCount = 0
+}
+
 // ClearErrorHashes removes all recorded error hashes for a given task key,
 // resetting the repeated-error counter for that task.
 func (a *Analyzer) ClearErrorHashes(taskKey string) {
