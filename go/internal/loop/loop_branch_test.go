@@ -2,15 +2,18 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -863,13 +866,11 @@ func TestLoop_BranchForTask_RenameFailure_ReturnsError(t *testing.T) {
 	}
 }
 
-// BranchForTask failure aborts the iteration — the agent must never run on a
-// placeholder branch like ralph/next. Observable via status="error" and the
-// backend receiving no close.
-//
-// Phase C migration: dropped `gm.ShipCalls > 0` assertion (pure call count).
-// The status=error assertion and absence of any bead close capture the same
-// end-state: the iteration aborted before reaching ship.
+// A local (non-transport) branch rename failure is unrecoverable — the agent
+// must never run on a placeholder branch like ralph/next. Loop exits with
+// status=error and no bead is closed. Uses a plain local git error (not a
+// TransportError) so this remains the unrecoverable-path gate; contrast with
+// TestLoop_BranchForTask_TransportError_SkipsTask which tests the recoverable path.
 func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -913,6 +914,148 @@ func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 0 {
 		t.Errorf("no bead should be closed when branch setup fails, got %v", backend.ClosedIDs)
+	}
+}
+
+// seqTaskBackend is a test-local tasks.Backend that serves tasks from a
+// fixed queue in order. SkipTask advances the cursor so the next
+// GetNextTaskInfo call returns the following task, enabling tests to verify
+// that the loop genuinely advances to a new task after a skip rather than
+// re-selecting the same one indefinitely.
+type seqTaskBackend struct {
+	*testutil.TrackingBackend
+	mu    sync.Mutex
+	queue []tasks.TaskInfo
+	pos   int
+}
+
+func (b *seqTaskBackend) HasRemaining() (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pos < len(b.queue), nil
+}
+
+func (b *seqTaskBackend) CountRemaining() (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.queue) - b.pos, nil
+}
+
+func (b *seqTaskBackend) GetNextTaskInfo() (tasks.TaskInfo, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.pos < len(b.queue) {
+		return b.queue[b.pos], nil
+	}
+	return tasks.TaskInfo{}, nil
+}
+
+func (b *seqTaskBackend) GetNextTask() (string, error) {
+	info, err := b.GetNextTaskInfo()
+	return info.Title, err
+}
+
+func (b *seqTaskBackend) GetNextTaskID() (string, error) {
+	info, err := b.GetNextTaskInfo()
+	return info.ID, err
+}
+
+func (b *seqTaskBackend) SkipTask(id, reason string) error {
+	b.mu.Lock()
+	b.pos++
+	b.mu.Unlock()
+	return b.TrackingBackend.SkipTask(id, reason)
+}
+
+// A transient transport error (exit 128 from fetch) during BranchForTask is
+// recoverable: the loop must skip the current task, advance to the next task,
+// and never write status=error. The bead stays open for a future iteration
+// when the network recovers.
+//
+// Investigation (musicXmusic session 2026-04-27, "Failed to fetch origin/main:
+// exit status 128" → status=error despite 2 remaining tasks):
+// EnsureUpToDate logged Warn and returned nil for the exit-128 fetch failure.
+// BranchForTask then fell through to checkoutExistingBranch, which called
+// FetchBranch — that also returned exit 128, an unclassified error that
+// propagated up through BranchForTask to loop.go, which wrote status=error.
+// Fix: EnsureUpToDate now returns *TransportError for exit-128 fetch failures.
+// BranchForTask propagates it (it is not a LocalRebaseConflictError) and
+// loop.go classifies *TransportError as recoverable — skip the task and
+// continue iterating.
+//
+// Two tasks are used so assertion (c) — "loop continues to the next iteration"
+// — is verified by observing that both "ralph-abc" and "ralph-def" are skipped
+// in sequence, proving the loop advanced past the first transport failure.
+func TestLoop_BranchForTask_TransportError_SkipsTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &seqTaskBackend{
+		TrackingBackend: &testutil.TrackingBackend{
+			MutableBackend: testutil.MutableBackend{
+				StubBackend: testutil.StubBackend{Total: 2},
+			},
+		},
+		queue: []tasks.TaskInfo{
+			{ID: "ralph-abc", Title: "Fix login"},
+			{ID: "ralph-def", Title: "Fix signup"},
+		},
+	}
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        workDir,
+		WorktreeBranch: "ralph/next",
+		BranchForTaskErr: &git.TransportError{
+			Op:  "fetch",
+			Err: errors.New("exit status 128"),
+		},
+	})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: workDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	_ = l.Run(context.Background())
+
+	status, _ := st.Read("status")
+	if status == "error" {
+		t.Errorf("transient transport error should not produce status=error, got %q", status)
+	}
+
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	if len(backend.SkippedIDs) != 2 {
+		t.Fatalf("expected both tasks skipped after transport errors, got %v", backend.SkippedIDs)
+	}
+	if backend.SkippedIDs[0] != "ralph-abc" {
+		t.Errorf("expected first skipped id=%q, got %q", "ralph-abc", backend.SkippedIDs[0])
+	}
+	if backend.SkippedIDs[1] != "ralph-def" {
+		t.Errorf("expected second skipped id=%q, got %q", "ralph-def", backend.SkippedIDs[1])
+	}
+	for i, reason := range backend.SkipReasons {
+		if reason != "transport_error:fetch" {
+			t.Errorf("skip[%d]: expected reason %q, got %q", i, "transport_error:fetch", reason)
+		}
+	}
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("bead must not be closed after transport skip, got %v", backend.ClosedIDs)
 	}
 }
 

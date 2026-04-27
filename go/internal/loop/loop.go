@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -581,9 +582,17 @@ iterLoop:
 				if ctx.Err() != nil {
 					l.state.Write("status", "stopped")
 					l.setPhaseInterrupted(task.id)
-				} else {
-					l.state.Write("status", "error")
+					break
 				}
+				var transportErr *git.TransportError
+				if errors.As(err, &transportErr) {
+					skipReason := "transport_error:" + transportErr.Op
+					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+						"Branch setup failed (transient transport error) — skipping task %s: %v", task.id, err)
+					l.skipTask(task.id, skipReason)
+					continue iterLoop
+				}
+				l.state.Write("status", "error")
 				break
 			}
 			l.state.WriteRunBranch(branch)
