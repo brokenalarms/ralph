@@ -792,7 +792,8 @@ func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
 	}
 }
 
-// onResumeDone sends TaskCompleted and TaskMerged when PR is already merged and Notify is enabled.
+// onResumeDone sends only TaskMerged (not TaskCompleted+TaskMerged pair) when PR is already
+// merged and Notify is enabled — one notification per task, never two.
 func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -849,8 +850,8 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 	})
 
 	got := buf.String()
-	if !strings.Contains(got, "Task done: [ralph-rm1] Fix login") {
-		t.Errorf("expected TaskCompleted notification, got %q", got)
+	if strings.Contains(got, "Task done") {
+		t.Errorf("expected no TaskCompleted notification for merged task, got %q", got)
 	}
 	if !strings.Contains(got, "Task merged: [ralph-rm1] Fix login") {
 		t.Errorf("expected TaskMerged notification, got %q", got)
@@ -921,7 +922,7 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 	}
 }
 
-// onResumeDone does NOT send TaskCompleted when Notify is disabled, but still sends TaskMerged.
+// onResumeDone sends no notifications when Notify is disabled — neither TaskCompleted nor TaskMerged.
 func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -981,7 +982,7 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 	if strings.Contains(got, "Task done") {
 		t.Errorf("expected no TaskCompleted when Notify=false, got %q", got)
 	}
-	if !strings.Contains(got, "Task merged: [ralph-rd1] Fix logout") {
-		t.Errorf("expected TaskMerged even when Notify=false, got %q", got)
+	if strings.Contains(got, "Task merged") {
+		t.Errorf("expected no TaskMerged when Notify=false, got %q", got)
 	}
 }
