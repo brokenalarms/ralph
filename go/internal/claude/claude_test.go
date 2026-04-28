@@ -1970,6 +1970,43 @@ func TestDisallowedTools_BlocksOrchestratorOwnedOps(t *testing.T) {
 	}
 }
 
+// Verifies that IterationDisallowedTools blocks SQL clients (mysql, sqlite3, psql)
+// that could directly access the dolt sql-server, .beads/ file reads via shell
+// commands, and Read-tool path denials for .beads/. Each command pattern must
+// appear both bare and with a leading wildcard for cd-prefixed command variants.
+func TestDisallowedTools_BlocksSQLClientsAndBeadsReads(t *testing.T) {
+	sqlClients := []string{"mysql ", "sqlite3 ", "psql "}
+	beadsReaders := []string{"cat *.beads", "sed *.beads", "awk *.beads", "less *.beads"}
+
+	joined := strings.Join(IterationDisallowedTools, "\n")
+
+	for _, cmd := range sqlClients {
+		barePattern := "Bash(" + cmd
+		if !strings.Contains(joined, barePattern) {
+			t.Errorf("IterationDisallowedTools must block bare SQL client %q", cmd)
+		}
+		wildcardPattern := "Bash(*" + cmd
+		if !strings.Contains(joined, wildcardPattern) {
+			t.Errorf("IterationDisallowedTools must block wildcard-prefixed SQL client %q", cmd)
+		}
+	}
+
+	for _, cmd := range beadsReaders {
+		barePattern := "Bash(" + cmd
+		if !strings.Contains(joined, barePattern) {
+			t.Errorf("IterationDisallowedTools must block bare .beads reader %q", cmd)
+		}
+		wildcardPattern := "Bash(*" + cmd
+		if !strings.Contains(joined, wildcardPattern) {
+			t.Errorf("IterationDisallowedTools must block wildcard-prefixed .beads reader %q", cmd)
+		}
+	}
+
+	if !strings.Contains(joined, "Read(*.beads*") {
+		t.Error("IterationDisallowedTools must include a Read deny pattern for .beads/ paths")
+	}
+}
+
 // Verifies that every Emit call with Domain: logging.LLM includes the Model
 // from RunConfig. Uses CmdFactory to run a real process so the full Run()
 // path fires, including the "Claude started (PID: ...)" log line.

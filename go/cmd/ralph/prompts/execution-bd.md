@@ -10,6 +10,8 @@
 ## Invariants
 - Work only in the worktree at {{WORK_DIR}}. Do not create or modify files outside this directory.
 - NEVER create directories named after task IDs.
+- Never define aliases, shell functions, or env vars that shadow bd, dolt, gh, git push, mysql, sqlite3, psql, or other restricted commands.
+- Never read .beads/ files directly (cat, sed, awk, less, Read, etc.) — use bd commands exclusively.
 
 ## Diagnosis format (MANDATORY)
 Before writing any code, state the diagnosis clearly in the log. This is
