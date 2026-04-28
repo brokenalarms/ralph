@@ -158,6 +158,33 @@ var IterationDisallowedTools = []string{
 	"Bash(*pkill*dolt*)",
 	"Bash(*kill*dolt*)",
 
+	// Block direct SQL clients that could bypass bd and hit the dolt sql-server
+	// via the MySQL protocol on 127.0.0.1. Both bare invocations and those
+	// chained after a cd prefix (e.g. "cd /tmp && mysql ...").
+	"Bash(mysql *)",
+	"Bash(*mysql *)",
+	"Bash(sqlite3 *)",
+	"Bash(*sqlite3 *)",
+	"Bash(psql *)",
+	"Bash(*psql *)",
+
+	// Block shell reads of raw .beads/ files (JSONL bead data). Agents must use
+	// bd commands exclusively — direct file reads expose internal schema fields
+	// the agent should never see.
+	"Bash(cat *.beads*)",
+	"Bash(*cat *.beads*)",
+	"Bash(sed *.beads*)",
+	"Bash(*sed *.beads*)",
+	"Bash(awk *.beads*)",
+	"Bash(*awk *.beads*)",
+	"Bash(less *.beads*)",
+	"Bash(*less *.beads*)",
+
+	// Block Read-tool access to .beads/ paths. Requires claude CLI to support
+	// Read path patterns in --disallowedTools; if not, the agent prompt in
+	// execution-bd.md also explicitly forbids .beads/ reads as a fallback.
+	"Read(*.beads*)",
+
 	// claude-mem MCP tools — inherited from the host session but the agent
 	// wastes iterations on memory retrieval loops instead of writing code.
 	"mcp__plugin_claude-mem_mcp-search__*",
