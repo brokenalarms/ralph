@@ -350,8 +350,8 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		Logger:     log,
 	})
 	ctx := context.Background()
-	if err := gm.Init(ctx); err != nil {
-		log.Emit(logging.Opts{Level: logging.Warn}, "Worktree setup failed, falling back to project dir: %v", err)
+	if err := gm.InitTask(ctx); err != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Task worktree setup failed, falling back to project dir: %v", err)
 	}
 	workDir := gm.GetWorkDir()
 	defer func() {

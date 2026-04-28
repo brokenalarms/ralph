@@ -250,6 +250,127 @@ func (r *repo) SetupWorktree(ctx context.Context) error {
 	return nil
 }
 
+// InitTask is the worktree-setup entry point for `ralph task` — the
+// interactive triage session. It mirrors Init's pre-flight checks but
+// installs a per-instance worktree on a unique branch so it does NOT
+// share state with the loop's `ralph/next` wip branch and does NOT
+// destroy other concurrent ralph processes' worktrees.
+//
+// Steps:
+//  1. ValidateRemoteBranch — same as Init.
+//  2. EnsureGitignored(".ralph") — same as Init.
+//  3. PruneOrphanedWorktrees — best-effort cleanup of stale dirs.
+//  4. SetupTaskWorktree — creates a fresh worktree on a unique
+//     `ralph/task/YYYYMMDD-NN` branch under
+//     `.ralph/worktrees/ralph-task-YYYYMMDD-NN`.
+//
+// Unlike Init: skips the dirty-tree check (the task manager doesn't
+// modify the project checkout) and does not write worktree state to
+// .ralph/state.json (task worktrees are ephemeral and must not
+// contaminate the loop's resume state).
+func (r *repo) InitTask(ctx context.Context) error {
+	if err := r.ValidateRemoteBranch(ctx); err != nil {
+		return err
+	}
+	r.EnsureGitignored(".ralph")
+	r.PruneOrphanedWorktrees()
+	if err := r.SetupTaskWorktree(ctx); err != nil {
+		return fmt.Errorf("task worktree setup failed: %w", err)
+	}
+	return nil
+}
+
+// SetupTaskWorktree creates a per-instance git worktree for `ralph task`.
+// Uses a unique branch (`ralph/task/YYYYMMDD-NN`) and dir
+// (`.ralph/worktrees/ralph-task-YYYYMMDD-NN`) per invocation so it can
+// run alongside the loop or another task manager without collision.
+//
+// On any error after the candidate paths are computed, r.workDir is
+// reset to r.projectDir so callers that fall back to the project dir
+// don't accidentally chdir into a non-existent path.
+//
+// Does NOT persist worktree_dir / worktree_branch to state — task
+// manager worktrees are ephemeral and must not interfere with the
+// loop's resume state.
+func (r *repo) SetupTaskWorktree(ctx context.Context) error {
+	r.workDir = r.projectDir
+
+	if !IsGitRepo(r.projectDir) {
+		return fmt.Errorf("not a git repo — ralph requires git")
+	}
+
+	worktreeRoot, err := r.resolveWorktreeRoot()
+	if err != nil {
+		return fmt.Errorf("resolving worktree root: %w", err)
+	}
+
+	today := time.Now().Format("20060102")
+	runSeq := 1
+	if entries, err := os.ReadDir(worktreeRoot); err == nil {
+		prefix := "ralph-task-" + today + "-"
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
+				runSeq++
+			}
+		}
+	}
+
+	candidateBranch := TaskBranchName(today, runSeq)
+	candidateDir := filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-%02d", today, runSeq))
+
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		return fmt.Errorf("creating worktrees dir: %w", err)
+	}
+
+	r.gitCmd(r.projectDir, "worktree", "prune")
+
+	// If a previous task-manager session crashed and left this exact
+	// candidate dir behind, clear the directory and any stale branch
+	// reference for THIS branch only. Never touch other worktrees.
+	if _, err := os.Stat(candidateDir); err == nil {
+		os.RemoveAll(candidateDir)
+	}
+	if r.refExists(r.projectDir, candidateBranch) {
+		// Only delete the branch if no live worktree currently has it
+		// checked out. If something does have it checked out, that's a
+		// concurrent run with a colliding seq — bump runSeq instead.
+		if wt := r.findWorktreeForBranch(r.projectDir, candidateBranch); wt == "" {
+			_ = r.gitCmdErr(r.projectDir, "branch", "-D", candidateBranch)
+		} else {
+			runSeq++
+			candidateBranch = TaskBranchName(today, runSeq)
+			candidateDir = filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-%02d", today, runSeq))
+		}
+	}
+
+	defaultBranch := r.detectDefaultBranch()
+	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", defaultBranch)
+
+	if !r.refExists(r.projectDir, "origin/"+defaultBranch) &&
+		r.refExists(r.projectDir, "HEAD") &&
+		r.remoteExists() {
+		r.gitCmdCtx(ctx, r.projectDir, "push", "-u", "origin", defaultBranch)
+	}
+
+	if err := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", candidateBranch, candidateDir, "origin/"+defaultBranch); err != nil {
+		if err := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", candidateBranch, candidateDir, "HEAD"); err != nil {
+			// r.workDir already set to r.projectDir at the top — leave it.
+			return fmt.Errorf("failed to create task worktree: %w", err)
+		}
+	}
+
+	r.workDir = candidateDir
+	r.worktreeBranch = candidateBranch
+	r.gitCmd(r.workDir, "config", "rebase.updateRefs", "true")
+	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Task worktree: %s (branch: %s)", r.workDir, r.worktreeBranch)
+
+	// Intentionally do NOT write worktree_dir / worktree_branch to state.
+	// Task manager worktrees are ephemeral and must not contaminate the
+	// loop's resume state.
+
+	return nil
+}
+
 // tryResumeWorktree attempts to reuse a stored worktree from a previous run.
 // Only restores the worktree path and state — no rebase or reset. The actual
 // branch setup happens later in checkoutExistingBranch once the task is known

@@ -794,7 +794,8 @@ func (s *stubRepo) DeleteRemoteBranchByName(_ string) error {
 
 // --- Init / worktree lifecycle ---
 
-func (s *stubRepo) Init(_ context.Context) error { return s.cfg.InitErr }
+func (s *stubRepo) Init(_ context.Context) error     { return s.cfg.InitErr }
+func (s *stubRepo) InitTask(_ context.Context) error { return s.cfg.InitErr }
 
 // RemoveWorktree is a no-op: there is no real worktree to remove.
 func (s *stubRepo) RemoveWorktree() {}
