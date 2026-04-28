@@ -14,6 +14,13 @@ type Ops interface {
 	// once after construction, before any task execution.
 	Init(ctx context.Context) error
 
+	// InitTask is the worktree-setup entry point for `ralph task` —
+	// the interactive triage session. Like Init but installs a
+	// per-instance worktree on a unique `ralph/task/YYYYMMDD-NN`
+	// branch so it never collides with the loop's `ralph/next` wip
+	// branch or other concurrent task managers.
+	InitTask(ctx context.Context) error
+
 	// State accessors — replace direct field reads on *repo.
 	GetProjectDir() string
 	GetWorkDir() string

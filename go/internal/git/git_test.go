@@ -283,6 +283,37 @@ func TestWipBranchName(t *testing.T) {
 	}
 }
 
+func TestTaskBranchName(t *testing.T) {
+	cases := []struct {
+		date string
+		seq  int
+		want string
+	}{
+		{"20260429", 1, "ralph/task/20260429-01"},
+		{"20260429", 2, "ralph/task/20260429-02"},
+		{"20260429", 12, "ralph/task/20260429-12"},
+	}
+	for _, tc := range cases {
+		got := TaskBranchName(tc.date, tc.seq)
+		if got != tc.want {
+			t.Errorf("TaskBranchName(%q, %d) = %q, want %q", tc.date, tc.seq, got, tc.want)
+		}
+	}
+}
+
+// TaskBranchName must NOT collide with WipBranchName under any seq —
+// the whole point of the fix is namespace separation between
+// `ralph task` and the loop's `ralph/next` wip branch.
+func TestTaskBranchName_DistinctFromWipBranch(t *testing.T) {
+	wip := WipBranchName()
+	for seq := 1; seq <= 99; seq++ {
+		got := TaskBranchName("20260429", seq)
+		if got == wip {
+			t.Errorf("TaskBranchName(%d) = %q collides with WipBranchName %q", seq, got, wip)
+		}
+	}
+}
+
 func TestNormalizeBranch_StripsDuplicatePrefix(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"ralph/ralph/ralph-abc-slug", "ralph/ralph-abc-slug"},
@@ -481,6 +512,167 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 		if strings.Contains(msg, oldBranch) {
 			t.Errorf("resume log should not contain old branch name %q, got %q", oldBranch, msg)
 		}
+	}
+}
+
+// SetupTaskWorktree creates a per-instance worktree on a unique
+// `ralph/task/YYYYMMDD-NN` branch, never on `ralph/next`.
+func TestSetupTaskWorktree_UsesUniqueBranchNotRalphNext(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+
+	if err := mgr.SetupTaskWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupTaskWorktree: %v", err)
+	}
+
+	if mgr.worktreeBranch == "ralph/next" {
+		t.Errorf("task worktree branch must NOT be ralph/next (loop's wip branch); got %q", mgr.worktreeBranch)
+	}
+	if !strings.HasPrefix(mgr.worktreeBranch, "ralph/task/") {
+		t.Errorf("task worktree branch must start with ralph/task/; got %q", mgr.worktreeBranch)
+	}
+	if _, err := os.Stat(mgr.workDir); err != nil {
+		t.Errorf("task worktree dir does not exist: %v", err)
+	}
+}
+
+// SetupTaskWorktree must NOT write worktree_dir / worktree_branch to
+// state.json — task worktrees are ephemeral and must not contaminate
+// the loop's resume state.
+func TestSetupTaskWorktree_DoesNotWriteState(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	// Pre-populate with sentinel loop state so we can detect contamination.
+	state.Write("worktree_dir", "/loop/preserved/path")
+	state.Write("worktree_branch", "ralph/next")
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+
+	if err := mgr.SetupTaskWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupTaskWorktree: %v", err)
+	}
+
+	if got, _ := state.Read("worktree_dir"); got != "/loop/preserved/path" {
+		t.Errorf("state worktree_dir was overwritten by task setup: got %q, want /loop/preserved/path", got)
+	}
+	if got, _ := state.Read("worktree_branch"); got != "ralph/next" {
+		t.Errorf("state worktree_branch was overwritten by task setup: got %q, want ralph/next", got)
+	}
+}
+
+// Two SetupTaskWorktree calls back-to-back must produce two distinct
+// worktrees on distinct branches, with both still on disk after the
+// second call. This is the regression test for the data-loss bug
+// where a second `ralph task` was force-removing the first.
+func TestSetupTaskWorktree_DoesNotDestroyConcurrentWorktree(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr1 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr1.SetupTaskWorktree(context.Background()); err != nil {
+		t.Fatalf("first SetupTaskWorktree: %v", err)
+	}
+	firstDir := mgr1.workDir
+	firstBranch := mgr1.worktreeBranch
+
+	// Drop a sentinel file in the first worktree to detect destruction.
+	sentinel := filepath.Join(firstDir, "uncommitted-edit.txt")
+	if err := os.WriteFile(sentinel, []byte("important work"), 0o644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr2.SetupTaskWorktree(context.Background()); err != nil {
+		t.Fatalf("second SetupTaskWorktree: %v", err)
+	}
+	secondDir := mgr2.workDir
+	secondBranch := mgr2.worktreeBranch
+
+	if firstDir == secondDir {
+		t.Errorf("two task worktrees got the same dir: %q", firstDir)
+	}
+	if firstBranch == secondBranch {
+		t.Errorf("two task worktrees got the same branch: %q", firstBranch)
+	}
+	if _, err := os.Stat(firstDir); err != nil {
+		t.Errorf("first worktree was destroyed by second SetupTaskWorktree: %v", err)
+	}
+	if data, err := os.ReadFile(sentinel); err != nil {
+		t.Errorf("sentinel file was deleted (uncommitted work would be lost): %v", err)
+	} else if string(data) != "important work" {
+		t.Errorf("sentinel file was modified: got %q", string(data))
+	}
+	if _, err := os.Stat(secondDir); err != nil {
+		t.Errorf("second worktree does not exist: %v", err)
+	}
+}
+
+// SetupTaskWorktree must not touch a pre-existing `ralph/next` worktree
+// (the loop's). Set one up via SetupWorktree, then run a task setup,
+// then verify the loop's worktree and branch are unmodified.
+func TestSetupTaskWorktree_LeavesLoopWorktreeAlone(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	loopMgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := loopMgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("loop SetupWorktree: %v", err)
+	}
+	loopDir := loopMgr.workDir
+	loopBranch := loopMgr.worktreeBranch
+	if loopBranch != "ralph/next" {
+		t.Fatalf("expected loop branch ralph/next, got %q", loopBranch)
+	}
+
+	// Drop a sentinel into the loop worktree.
+	sentinel := filepath.Join(loopDir, "loop-uncommitted.txt")
+	if err := os.WriteFile(sentinel, []byte("loop work"), 0o644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	taskMgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := taskMgr.SetupTaskWorktree(context.Background()); err != nil {
+		t.Fatalf("task SetupTaskWorktree: %v", err)
+	}
+
+	if _, err := os.Stat(loopDir); err != nil {
+		t.Errorf("loop worktree dir was destroyed by task setup: %v", err)
+	}
+	if data, err := os.ReadFile(sentinel); err != nil {
+		t.Errorf("loop sentinel deleted: %v", err)
+	} else if string(data) != "loop work" {
+		t.Errorf("loop sentinel modified: got %q", string(data))
+	}
+
+	// ralph/next branch must still exist and still be checked out by the loop's worktree.
+	if !loopMgr.refExists(project, "ralph/next") {
+		t.Errorf("ralph/next branch was deleted by task setup")
+	}
+	gotWT := loopMgr.findWorktreeForBranch(project, "ralph/next")
+	gotResolved, _ := filepath.EvalSymlinks(gotWT)
+	wantResolved, _ := filepath.EvalSymlinks(loopDir)
+	if gotResolved != wantResolved {
+		t.Errorf("ralph/next no longer attached to loop worktree: got %q, want %q", gotWT, loopDir)
+	}
+}
+
+// On a non-git directory SetupTaskWorktree must error AND leave
+// r.workDir set to r.projectDir, so the caller's "fall back to project
+// dir" log isn't a lie.
+func TestSetupTaskWorktree_ErrorResetsWorkDirToProject(t *testing.T) {
+	tmp := t.TempDir()
+	mgr := newRepoForTest(Config{ProjectDir: tmp, RalphDir: filepath.Join(tmp, ".ralph"), BaseBranch: "main", Logger: &testLog{}}, nil)
+
+	err := mgr.SetupTaskWorktree(context.Background())
+	if err == nil {
+		t.Fatal("expected error for non-git dir")
+	}
+	if mgr.workDir != tmp {
+		t.Errorf("workDir on error = %q, want projectDir %q", mgr.workDir, tmp)
 	}
 }
 

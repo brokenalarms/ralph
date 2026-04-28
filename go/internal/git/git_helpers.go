@@ -38,9 +38,19 @@ func BranchName(beadID, slug string) string {
 	return normalizeBranch(slug)
 }
 
-// WipBranchName returns the placeholder branch used between tasks.
+// WipBranchName returns the placeholder branch used between tasks by the loop.
+// ralph task does NOT use this — it has its own per-instance branch via
+// TaskBranchName so it never collides with the loop's worktree.
 func WipBranchName() string {
 	return normalizeBranch("next")
+}
+
+// TaskBranchName returns the per-instance branch used by an interactive
+// `ralph task` worktree. Each invocation gets a unique date+seq suffix so
+// concurrent task managers (or a task manager running alongside the loop)
+// never share a branch and never tear down each other's worktrees.
+func TaskBranchName(date string, seq int) string {
+	return normalizeBranch(fmt.Sprintf("task/%s-%02d", date, seq))
 }
 
 // BranchListPattern returns the glob pattern for listing ralph branches.
