@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Homebrew dependencies ---
-BREW_DEPS=(bd gh tmux)
+BREW_DEPS=(bd gh tmux terminal-notifier)
 missing=()
 for dep in "${BREW_DEPS[@]}"; do
   command -v "$dep" &>/dev/null || missing+=("$dep")
