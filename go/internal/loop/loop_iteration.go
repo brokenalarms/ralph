@@ -29,7 +29,6 @@ type completeTaskParams struct {
 	nextTask   string
 	// config
 	postSignalTimeout time.Duration
-	evolve            bool
 	notify            bool
 	ralphDir          string
 }
@@ -234,9 +233,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 							notify.TaskMerged(p.taskID, p.nextTask)
 						}
 					}
-					if p.evolve {
-						return completeTaskOut{action: l.maybeEvolve(signalSkipped), merged: merged}
-					}
 					return completeTaskOut{action: signalSkipped, merged: merged}
 				}
 				if prState == git.PRStateMerged {
@@ -250,9 +246,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 					if p.notify {
 						notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 						notify.TaskMerged(p.taskID, p.nextTask)
-					}
-					if p.evolve {
-						return completeTaskOut{action: l.maybeEvolve(signalSkipped), merged: true}
 					}
 					return completeTaskOut{action: signalSkipped, merged: true}
 				}
@@ -286,9 +279,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		l.execRunPostTask(ctx, p.taskID, 0, false)
 		if p.notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
-		}
-		if p.evolve {
-			return completeTaskOut{action: l.maybeEvolve(signalSkipped)}
 		}
 		return completeTaskOut{action: signalSkipped}
 	}
@@ -494,13 +484,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	if merged {
 		notify.TaskMerged(p.taskID, p.nextTask)
-	}
-
-	if p.evolve {
-		if l.maybeEvolve(signalComplete) == signalEvolve {
-			l.git.TagTaskEnd(p.taskID)
-			return completeTaskOut{action: signalEvolve, ct: &ct, merged: merged}
-		}
 	}
 
 	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged}

@@ -565,6 +565,14 @@ iterLoop:
 		lastTaskMerged = false
 		currentTaskID = task.id
 
+		// ── Evolve check: install new binary before iteration prep ──
+		// Fires after the task is dequeued but before any network or worktree
+		// operation. Covers the case where a fix landed on main while the loop
+		// was idle in --wait between iterations.
+		if l.cfg.Evolve && l.maybeEvolve(signalSkipped) == signalEvolve {
+			break iterLoop
+		}
+
 		// Retry counters are local variables inside runVerifyPipeline, so
 		// they are naturally scoped per-iteration — no reset needed.
 
@@ -671,7 +679,6 @@ iterLoop:
 				taskID:            task.id,
 				nextTask:          task.title,
 				postSignalTimeout: l.cfg.PostSignalTimeout,
-				evolve:            l.cfg.Evolve,
 				notify:            l.cfg.Notify,
 				ralphDir:          l.cfg.Dirs.RalphDir,
 			})
