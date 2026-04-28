@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func platformCommand() string {
@@ -45,7 +46,7 @@ func argsJoined(calls []notifyCall) string {
 func TestTaskCompleted_UsesOsascript(t *testing.T) {
 	calls := captureRunner(t)
 
-	TaskCompleted("ralph-abc", "Fix login bug", "Fixed auth token expiry")
+	TaskCompleted("ralph-abc", "Fix login bug", "Fixed auth token expiry", time.Now())
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 command call, got %d", len(*calls))
@@ -67,7 +68,7 @@ func TestTaskCompleted_UsesOsascript(t *testing.T) {
 func TestTaskCompleted_NoSummary(t *testing.T) {
 	calls := captureRunner(t)
 
-	TaskCompleted("ralph-xyz", "Add caching", "")
+	TaskCompleted("ralph-xyz", "Add caching", "", time.Now())
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 command call, got %d", len(*calls))
@@ -82,7 +83,7 @@ func TestTaskCompleted_NoSummary(t *testing.T) {
 func TestTaskCompleted_Empty(t *testing.T) {
 	calls := captureRunner(t)
 
-	TaskCompleted("", "", "")
+	TaskCompleted("", "", "", time.Now())
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 command call, got %d", len(*calls))
@@ -97,7 +98,7 @@ func TestTaskCompleted_Empty(t *testing.T) {
 func TestTaskMerged_UsesOsascript(t *testing.T) {
 	calls := captureRunner(t)
 
-	TaskMerged("ralph-abc", "Fix login bug")
+	TaskMerged("ralph-abc", "Fix login bug", time.Now())
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 command call, got %d", len(*calls))
@@ -116,7 +117,7 @@ func TestTaskMerged_UsesOsascript(t *testing.T) {
 func TestTaskMerged_IDOnly(t *testing.T) {
 	calls := captureRunner(t)
 
-	TaskMerged("ralph-xyz", "")
+	TaskMerged("ralph-xyz", "", time.Now())
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 command call, got %d", len(*calls))
@@ -131,7 +132,7 @@ func TestTaskMerged_IDOnly(t *testing.T) {
 func TestTaskMerged_Empty(t *testing.T) {
 	calls := captureRunner(t)
 
-	TaskMerged("", "")
+	TaskMerged("", "", time.Now())
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 command call, got %d", len(*calls))
@@ -151,7 +152,7 @@ func TestTaskCompleted_SpecialCharsEscapedForAppleScript(t *testing.T) {
 	calls := captureRunner(t)
 
 	summary := "line1\npath\\to\\file\"done\"café"
-	TaskCompleted("ralph-abc", "Fix bug", summary)
+	TaskCompleted("ralph-abc", "Fix bug", summary, time.Now())
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 command call, got %d", len(*calls))
@@ -188,7 +189,7 @@ func TestTaskCompleted_NoGoStyleEscapesInScript(t *testing.T) {
 	calls := captureRunner(t)
 
 	summary := "newline:\n unicode:é hex:\x41 path:\\dir"
-	TaskCompleted("ralph-abc", "Fix bug", summary)
+	TaskCompleted("ralph-abc", "Fix bug", summary, time.Now())
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 command call, got %d", len(*calls))
@@ -218,5 +219,37 @@ func TestTaskCompleted_NoGoStyleEscapesInScript(t *testing.T) {
 	// No bare \n (Go newline escape) — only valid escapes are \\ and \".
 	if strings.Contains(scriptArg, `\n`) {
 		t.Errorf("script contains bare \\n Go escape sequence, got %q", scriptArg)
+	}
+}
+
+// A stale event timestamp causes sendNotification to drop the notification without calling
+// the command runner. This is the timeliness gate: notifications that arrive long after
+// their event (e.g. deferred by macOS when the terminal was backgrounded) are silently dropped.
+func TestSendNotification_StaleTimestamp_Dropped(t *testing.T) {
+	calls := captureRunner(t)
+
+	prev := SetStalenessThreshold(1 * time.Second)
+	t.Cleanup(func() { SetStalenessThreshold(prev) })
+
+	staleAt := time.Now().Add(-2 * time.Second)
+	TaskCompleted("ralph-abc", "Fix bug", "summary", staleAt)
+
+	if len(*calls) != 0 {
+		t.Errorf("expected 0 command calls for stale notification, got %d: %v", len(*calls), *calls)
+	}
+}
+
+// A fresh event timestamp causes sendNotification to fire — the notification arrives promptly
+// and is delivered to the user.
+func TestSendNotification_FreshTimestamp_Fires(t *testing.T) {
+	calls := captureRunner(t)
+
+	prev := SetStalenessThreshold(60 * time.Second)
+	t.Cleanup(func() { SetStalenessThreshold(prev) })
+
+	TaskCompleted("ralph-abc", "Fix bug", "summary", time.Now())
+
+	if len(*calls) != 1 {
+		t.Errorf("expected 1 command call for fresh notification, got %d", len(*calls))
 	}
 }

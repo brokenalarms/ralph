@@ -796,6 +796,79 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	}
 }
 
+// completeTask fires exactly one notification (TaskMerged) when a task is shipped and merged —
+// not the prior TaskCompleted+TaskMerged pair. This prevents the notification burst where users
+// receive 2 notifications per merged task, multiplied across back-to-back completions.
+func TestCompleteTask_MergedPath_SingleNotification(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:  "Next task",
+				NextID:    "ralph-mrg",
+			},
+		},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		HeadRev:    "after",
+		Ship:       git.ShipResult{PRNumber: 42, Merged: true},
+	})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		Notify:        true,
+		AutoMerge:     true,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook:  passingVerifyHook(),
+	})
+	l.runner = &stubRunner{}
+
+	var notifyCalls []string
+	prev := notify.SetCommandRunner(func(_ string, args ...string) error {
+		notifyCalls = append(notifyCalls, strings.Join(args, " "))
+		return nil
+	})
+	t.Cleanup(func() { notify.SetCommandRunner(prev) })
+
+	l.completeTask(context.Background(), completeTaskParams{
+		result:     claude.Result{SignalDetected: true, Summary: "Fixed it"},
+		headBefore: "",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-mrg",
+		nextTask:   "Next task",
+		notify:     true,
+		ralphDir:   ralphDir,
+	})
+
+	if len(notifyCalls) != 1 {
+		t.Errorf("expected exactly 1 notification for merged task, got %d: %v", len(notifyCalls), notifyCalls)
+	}
+	if len(notifyCalls) > 0 && !strings.Contains(notifyCalls[0], "Task merged") {
+		t.Errorf("expected TaskMerged notification, got %q", notifyCalls[0])
+	}
+	if len(notifyCalls) > 0 && strings.Contains(notifyCalls[0], "Task done") {
+		t.Errorf("expected no TaskCompleted notification for merged path, got %q", notifyCalls[0])
+	}
+}
+
 // runPostTask passes RALPH_PROJECT_DIR set to projectDir so project-level
 // scripts like sync-and-build.sh can operate on the main checkout instead
 // of the worktree branch.

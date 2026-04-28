@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -102,10 +103,11 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 func (l *Loop) onResumeDone(ctx context.Context, taskID, taskTitle string, result git.ResumeTaskResult) {
 	l.closeResumedTask(ctx, taskID, taskTitle, result)
 	if l.cfg.Notify {
-		notify.TaskCompleted(taskID, taskTitle, "")
-	}
-	if result.AlreadyMerged {
-		notify.TaskMerged(taskID, taskTitle)
+		if result.AlreadyMerged {
+			notify.TaskMerged(taskID, taskTitle, time.Now())
+		} else {
+			notify.TaskCompleted(taskID, taskTitle, "", time.Now())
+		}
 	}
 }
 
@@ -147,7 +149,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context, lastTaskMerged bool) {
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush: %v", err)
 	}
 	if merged {
-		notify.TaskMerged(taskID, taskDesc)
+		notify.TaskMerged(taskID, taskDesc, time.Now())
 	}
 }
 

@@ -228,9 +228,10 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 					l.git.TagTaskEnd(p.taskID)
 					l.execRunPostTask(ctx, p.taskID, prNum, merged)
 					if p.notify {
-						notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 						if merged {
-							notify.TaskMerged(p.taskID, p.nextTask)
+							notify.TaskMerged(p.taskID, p.nextTask, time.Now())
+						} else {
+							notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary, time.Now())
 						}
 					}
 					return completeTaskOut{action: signalSkipped, merged: merged}
@@ -244,8 +245,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 					l.git.TagTaskEnd(p.taskID)
 					l.execRunPostTask(ctx, p.taskID, prNum, true)
 					if p.notify {
-						notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
-						notify.TaskMerged(p.taskID, p.nextTask)
+						notify.TaskMerged(p.taskID, p.nextTask, time.Now())
 					}
 					return completeTaskOut{action: signalSkipped, merged: true}
 				}
@@ -278,7 +278,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		l.git.TagTaskEnd(p.taskID)
 		l.execRunPostTask(ctx, p.taskID, 0, false)
 		if p.notify {
-			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
+			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary, time.Now())
 		}
 		return completeTaskOut{action: signalSkipped}
 	}
@@ -479,11 +479,11 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	l.execRunPostTask(ctx, p.taskID, prNumber, merged)
 
 	if p.notify {
-		notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
-	}
-
-	if merged {
-		notify.TaskMerged(p.taskID, p.nextTask)
+		if merged {
+			notify.TaskMerged(p.taskID, p.nextTask, time.Now())
+		} else {
+			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary, time.Now())
+		}
 	}
 
 	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged}

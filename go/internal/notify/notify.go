@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // commandRunner executes an OS command. Tests replace this to capture calls without running them.
@@ -12,10 +13,22 @@ var commandRunner = func(name string, args ...string) error {
 	return exec.Command(name, args...).Run()
 }
 
+// stalenessThreshold is the maximum age of an event before its notification is silently dropped.
+// Notifications older than this are stale (e.g. queued while the terminal was backgrounded) and
+// would arrive confusingly after the fact. Default is 60s per user requirement.
+var stalenessThreshold = 60 * time.Second
+
 // SetCommandRunner overrides the notification command executor. Returns previous runner for cleanup.
 func SetCommandRunner(r func(string, ...string) error) func(string, ...string) error {
 	prev := commandRunner
 	commandRunner = r
+	return prev
+}
+
+// SetStalenessThreshold overrides the staleness gate duration. Returns previous value for cleanup.
+func SetStalenessThreshold(d time.Duration) time.Duration {
+	prev := stalenessThreshold
+	stalenessThreshold = d
 	return prev
 }
 
@@ -30,7 +43,12 @@ func escapeForAppleScript(s string) string {
 	return s
 }
 
-func sendNotification(title, body string) {
+// sendNotification delivers the notification if eventAt is within the staleness threshold.
+// Notifications older than stalenessThreshold are dropped — they arrived too late to be useful.
+func sendNotification(title, body string, eventAt time.Time) {
+	if time.Since(eventAt) > stalenessThreshold {
+		return
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		script := `display notification "` + escapeForAppleScript(body) + `" with title "` + escapeForAppleScript(title) + `"`
@@ -46,7 +64,7 @@ func sendNotification(title, body string) {
 	}
 }
 
-func TaskCompleted(taskID, title, summary string) {
+func TaskCompleted(taskID, title, summary string, eventAt time.Time) {
 	notifTitle := "Task done"
 	if taskID != "" {
 		notifTitle += ": [" + taskID + "]"
@@ -54,10 +72,10 @@ func TaskCompleted(taskID, title, summary string) {
 	if title != "" {
 		notifTitle += " " + title
 	}
-	sendNotification(notifTitle, summary)
+	sendNotification(notifTitle, summary, eventAt)
 }
 
-func TaskMerged(taskID, title string) {
+func TaskMerged(taskID, title string, eventAt time.Time) {
 	notifTitle := "Task merged"
 	if taskID != "" {
 		notifTitle += ": [" + taskID + "]"
@@ -65,5 +83,5 @@ func TaskMerged(taskID, title string) {
 	if title != "" {
 		notifTitle += " " + title
 	}
-	sendNotification(notifTitle, "")
+	sendNotification(notifTitle, "", eventAt)
 }
