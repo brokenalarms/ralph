@@ -27,6 +27,8 @@ func captureRunner(t *testing.T) *[]notifyCall {
 		return nil
 	})
 	t.Cleanup(func() { SetCommandRunner(prev) })
+	prevTN := SetTerminalNotifierPath("")
+	t.Cleanup(func() { SetTerminalNotifierPath(prevTN) })
 	return calls
 }
 
@@ -251,5 +253,103 @@ func TestSendNotification_FreshTimestamp_Fires(t *testing.T) {
 
 	if len(*calls) != 1 {
 		t.Errorf("expected 1 command call for fresh notification, got %d", len(*calls))
+	}
+}
+
+// When terminal-notifier is available, sendNotification uses it with -title/-message argv
+// instead of routing through osascript/Script Editor.
+func TestSendNotification_TerminalNotifier_Used(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal-notifier path is darwin-only")
+	}
+	calls := captureRunner(t)
+	prev := SetTerminalNotifierPath("/usr/local/bin/terminal-notifier")
+	t.Cleanup(func() { SetTerminalNotifierPath(prev) })
+	t.Setenv("TERM_PROGRAM", "")
+
+	TaskCompleted("ralph-abc", "Fix login bug", "Fixed auth token expiry", time.Now())
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 command call, got %d", len(*calls))
+	}
+	got := (*calls)[0]
+	if got.name != "terminal-notifier" {
+		t.Errorf("expected terminal-notifier, got %q", got.name)
+	}
+	argv := strings.Join(got.args, " ")
+	if !strings.Contains(argv, "-title") {
+		t.Errorf("missing -title flag, got %q", argv)
+	}
+	if !strings.Contains(argv, "Task done: [ralph-abc] Fix login bug") {
+		t.Errorf("missing expected title value, got %q", argv)
+	}
+	if !strings.Contains(argv, "-message") {
+		t.Errorf("missing -message flag, got %q", argv)
+	}
+	if !strings.Contains(argv, "Fixed auth token expiry") {
+		t.Errorf("missing expected message value, got %q", argv)
+	}
+}
+
+// The -sender arg is included only when TERM_PROGRAM maps to a known bundle ID;
+// unknown values (including empty) cause -sender to be omitted entirely.
+func TestSendNotification_TerminalNotifier_SenderResolution(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal-notifier sender resolution is darwin-only")
+	}
+	cases := []struct {
+		termProgram    string
+		wantSender     bool
+		expectedBundle string
+	}{
+		{"iTerm.app", true, "com.googlecode.iterm2"},
+		{"Apple_Terminal", true, "com.apple.Terminal"},
+		{"vscode", false, ""},
+		{"", false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.termProgram, func(t *testing.T) {
+			calls := captureRunner(t)
+			prev := SetTerminalNotifierPath("/usr/local/bin/terminal-notifier")
+			t.Cleanup(func() { SetTerminalNotifierPath(prev) })
+			t.Setenv("TERM_PROGRAM", tc.termProgram)
+
+			TaskCompleted("ralph-abc", "title", "body", time.Now())
+
+			if len(*calls) != 1 {
+				t.Fatalf("expected 1 call, got %d", len(*calls))
+			}
+			argv := strings.Join((*calls)[0].args, " ")
+			hasSender := strings.Contains(argv, "-sender")
+			if hasSender != tc.wantSender {
+				t.Errorf("TERM_PROGRAM=%q: wantSender=%v but hasSender=%v, argv=%q",
+					tc.termProgram, tc.wantSender, hasSender, argv)
+			}
+			if tc.wantSender && !strings.Contains(argv, tc.expectedBundle) {
+				t.Errorf("TERM_PROGRAM=%q: expected bundle %q in argv %q",
+					tc.termProgram, tc.expectedBundle, argv)
+			}
+		})
+	}
+}
+
+// When terminal-notifier is not available (empty path), sendNotification falls back to
+// the existing osascript invocation unchanged.
+func TestSendNotification_NoTerminalNotifier_FallsBackToOsascript(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("osascript fallback is darwin-only")
+	}
+	calls := captureRunner(t)
+	// captureRunner already sets terminal-notifier to ""; this confirms the fallback path.
+	prev := SetTerminalNotifierPath("")
+	t.Cleanup(func() { SetTerminalNotifierPath(prev) })
+
+	TaskCompleted("ralph-abc", "Fix bug", "Summary text", time.Now())
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 command call, got %d", len(*calls))
+	}
+	if (*calls)[0].name != "osascript" {
+		t.Errorf("expected osascript fallback, got %q", (*calls)[0].name)
 	}
 }

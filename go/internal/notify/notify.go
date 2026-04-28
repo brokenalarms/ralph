@@ -2,9 +2,11 @@ package notify
 
 import (
 	"log"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,6 +20,11 @@ var commandRunner = func(name string, args ...string) error {
 // would arrive confusingly after the fact. Default is 60s per user requirement.
 var stalenessThreshold = 60 * time.Second
 
+var (
+	terminalNotifierPath string
+	terminalNotifierOnce sync.Once
+)
+
 // SetCommandRunner overrides the notification command executor. Returns previous runner for cleanup.
 func SetCommandRunner(r func(string, ...string) error) func(string, ...string) error {
 	prev := commandRunner
@@ -30,6 +37,38 @@ func SetStalenessThreshold(d time.Duration) time.Duration {
 	prev := stalenessThreshold
 	stalenessThreshold = d
 	return prev
+}
+
+// SetTerminalNotifierPath overrides the resolved terminal-notifier binary path.
+// Empty string means not available; falls back to osascript. Returns previous value for cleanup.
+func SetTerminalNotifierPath(p string) string {
+	// Consume the Once so that resolveTerminalNotifier won't overwrite the test value.
+	terminalNotifierOnce.Do(func() {})
+	prev := terminalNotifierPath
+	terminalNotifierPath = p
+	return prev
+}
+
+// resolveTerminalNotifier returns the terminal-notifier binary path, resolving via LookPath once.
+func resolveTerminalNotifier() string {
+	terminalNotifierOnce.Do(func() {
+		p, _ := exec.LookPath("terminal-notifier")
+		terminalNotifierPath = p
+	})
+	return terminalNotifierPath
+}
+
+// terminalNotifierSender maps $TERM_PROGRAM to the terminal app's bundle ID for -sender.
+// Returns empty string when TERM_PROGRAM is unknown — omit -sender entirely in that case.
+func terminalNotifierSender() string {
+	switch os.Getenv("TERM_PROGRAM") {
+	case "iTerm.app":
+		return "com.googlecode.iterm2"
+	case "Apple_Terminal":
+		return "com.apple.Terminal"
+	default:
+		return ""
+	}
 }
 
 // escapeForAppleScript produces a value safe to embed inside AppleScript double-quoted strings.
@@ -51,9 +90,19 @@ func sendNotification(title, body string, eventAt time.Time) {
 	}
 	switch runtime.GOOS {
 	case "darwin":
-		script := `display notification "` + escapeForAppleScript(body) + `" with title "` + escapeForAppleScript(title) + `"`
-		if err := commandRunner("osascript", "-e", script); err != nil {
-			log.Printf("notify: osascript failed: %v", err)
+		if tn := resolveTerminalNotifier(); tn != "" {
+			args := []string{"-title", title, "-message", body}
+			if bundle := terminalNotifierSender(); bundle != "" {
+				args = append(args, "-sender", bundle)
+			}
+			if err := commandRunner("terminal-notifier", args...); err != nil {
+				log.Printf("notify: terminal-notifier failed: %v", err)
+			}
+		} else {
+			script := `display notification "` + escapeForAppleScript(body) + `" with title "` + escapeForAppleScript(title) + `"`
+			if err := commandRunner("osascript", "-e", script); err != nil {
+				log.Printf("notify: osascript failed: %v", err)
+			}
 		}
 	case "linux":
 		if err := commandRunner("notify-send", title, body); err != nil {
