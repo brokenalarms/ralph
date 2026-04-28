@@ -430,6 +430,15 @@ type StubRepoConfig struct {
 	PRDiffForTaskResult string
 }
 
+// StubInspector exposes internal call counters on the test stub so loop-level
+// tests can assert ordering invariants (e.g. that evolve fires before
+// BranchForTask). Only *stubRepo implements this; access it via type assertion:
+//
+//	gm.(git.StubInspector).GetBranchForTaskCalls()
+type StubInspector interface {
+	GetBranchForTaskCalls() int
+}
+
 // stubRepo is an unexported fake of Ops. Tests receive it only through the
 // Ops interface via NewStub. All mutable state is unexported.
 type stubRepo struct {
@@ -438,16 +447,24 @@ type stubRepo struct {
 
 	// Mutable state. Initialized from cfg, mutated by SUT-driven Ops methods
 	// so subsequent reads reflect what the SUT did.
-	worktreeBranch string
-	prevBranch     string
-	branchRenamed  bool
-	headRev        string
-	knownPRNumber  int
-	commitSeq      int
+	worktreeBranch     string
+	prevBranch         string
+	branchRenamed      bool
+	headRev            string
+	knownPRNumber      int
+	commitSeq          int
+	branchForTaskCalls int
 }
+
+// GetBranchForTaskCalls returns the number of times BranchForTask has been
+// called. Used by tests to assert that evolve fired before branch setup.
+func (s *stubRepo) GetBranchForTaskCalls() int { return s.branchForTaskCalls }
 
 // Compile-time check that *stubRepo satisfies Ops.
 var _ Ops = (*stubRepo)(nil)
+
+// Compile-time check that *stubRepo satisfies StubInspector.
+var _ StubInspector = (*stubRepo)(nil)
 
 // NewForTest returns a real *repo (as Ops) configured for integration
 // testing: real execRunner, real state store (file-backed via cfg.RalphDir
@@ -598,6 +615,7 @@ func (s *stubRepo) SyncWorktreeBase(_ context.Context, _ []string) error {
 // branchRenamed), then rename the branch for the task. Returns the resulting
 // branch name.
 func (s *stubRepo) BranchForTask(_ context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
+	s.branchForTaskCalls++
 	s.PrepareForNextTask(taskID, "")
 	if s.cfg.BranchForTaskErr != nil {
 		return "", s.cfg.BranchForTaskErr
