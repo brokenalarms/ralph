@@ -11,6 +11,48 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
+// projectDir working-tree mutation audit — all sites in the git package that
+// pass r.projectDir as workdir, classified as allowed or violation:
+//
+// runner.go
+//   remote get-url origin          read-only          allowed
+//   fetch --prune origin           fetch              allowed
+//   branch -r --list ...           read-only          allowed
+//
+// git.go (Init / SetupWorktree)
+//   diff --quiet / diff --cached   read-only          allowed
+//   worktree prune                 worktree mgmt      allowed
+//   worktree remove                worktree mgmt      allowed
+//   worktree add                   worktree mgmt      allowed
+//   branch -D                      branch delete      allowed
+//   fetch origin <branch>          fetch              allowed
+//   push -u origin <branch>        initial-push-only  allowed (one-time setup)
+//   merge-base --is-ancestor       read-only          allowed
+//
+// git_helpers.go (ValidateRemoteBranch)
+//   fetch origin <branch>          fetch              allowed
+//
+// git_helpers.go (EnsureGitignored)
+//   add .gitignore / commit        intentional edit   allowed (gitignore management)
+//
+// git_helpers.go (PruneOrphanedWorktrees)
+//   worktree prune / list          worktree mgmt      allowed
+//
+// git_merge.go (PostMergeUpdateMain / FlushUnpushedWork)
+//   fetch origin <branch>          fetch              allowed
+//   branch -D                      branch delete      allowed
+//
+// git_stack.go (RebaseStack)
+//   worktree remove / prune / add  worktree mgmt      allowed
+//   branch -D                      branch delete      allowed
+//   fetch origin <branch>          fetch              allowed
+//
+// git_stack.go (RebaseBranchOntoRemote) — FIXED: all checkout/rebase/push
+//   now run in a temp worktree; only fetch and worktree/branch ops remain in projectDir
+//
+// git_stack.go (ResetBranchToRemote) — FIXED: checkout + reset replaced with
+//   fetch + update-ref (plumbing only, no working-tree mutation)
+
 // RebaseStackOpts configures a RebaseStack call.
 type RebaseStackOpts struct {
 	TopBranch   string   // the top PR's branch name
@@ -104,27 +146,47 @@ func (r *repo) RebaseStack(ctx context.Context, opts RebaseStackOpts) error {
 	return nil
 }
 
-// RebaseBranchOntoRemote fetches branch and baseBranch from origin, checks out
-// origin/branch in detached HEAD state, rebases onto origin/baseBranch, and
-// force-pushes the result back to branch with --force-with-lease.
+// RebaseBranchOntoRemote fetches branch and baseBranch from origin, then
+// creates a temp worktree under ralphDir/worktrees/rebase-<slug> to perform
+// the rebase and force-push. projectDir's working tree is never touched.
 // Attempts auto-resolution of mechanical conflicts before returning an error.
-// Checks out baseBranch before returning.
+// The temp worktree is removed on success and on failure.
 func (r *repo) RebaseBranchOntoRemote(ctx context.Context, branch, baseBranch string) error {
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", baseBranch)
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
-	r.gitCmdCtx(ctx, r.projectDir, "checkout", "origin/"+branch)
 
-	if r.gitCmdErrCtx(ctx, r.projectDir, "rebase", "origin/"+baseBranch) != nil {
+	slug := strings.ReplaceAll(branch, "/", "-")
+	wtDir := filepath.Join(r.ralphDir, "worktrees", "rebase-"+slug)
+	tmpBranch := "ralph-rebase/" + slug
+
+	os.RemoveAll(wtDir)
+	r.gitCmdCtx(ctx, r.projectDir, "worktree", "prune")
+	r.gitCmdCtx(ctx, r.projectDir, "branch", "-D", tmpBranch)
+
+	out, err := r.run().Run(ctx, r.projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+branch)
+	if err != nil {
+		return fmt.Errorf("worktree setup failed: %s", out)
+	}
+
+	cleanup := func() {
+		r.gitCmdCtx(ctx, r.projectDir, "worktree", "remove", "--force", wtDir)
+		r.gitCmdCtx(ctx, r.projectDir, "branch", "-D", tmpBranch)
+	}
+
+	if r.gitCmdErrCtx(ctx, wtDir, "rebase", "origin/"+baseBranch) != nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict on %s — attempting auto-resolve...", branch)
-		if autoErr := rebasecontinue.Run(r.projectDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
+		if autoErr := rebasecontinue.Run(wtDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
+			cleanup()
 			return fmt.Errorf("rebase conflicts on %s: %w", branch, autoErr)
 		}
 	}
 
-	if _, pushErr := r.run().Run(ctx, r.projectDir, "push", "--force-with-lease", "origin", "HEAD:"+branch); pushErr != nil {
+	if _, pushErr := r.run().Run(ctx, wtDir, "push", "--force-with-lease", "origin", "HEAD:"+branch); pushErr != nil {
+		cleanup()
 		return fmt.Errorf("force-push failed for %s: %w", branch, pushErr)
 	}
-	r.gitCmdCtx(ctx, r.projectDir, "checkout", baseBranch)
+
+	cleanup()
 	return nil
 }
 
@@ -134,11 +196,10 @@ func (r *repo) MergeStackPR(prNumber int, opts MergeOpts) MergeResult {
 	return r.github.MergePR(prNumber, r.RemoteURL(), opts)
 }
 
-// ResetBranchToRemote fetches origin/<branch>, checks out branch, and resets
-// --hard to origin/<branch>. Used after each PR merge to sync the local default
-// branch with the updated remote state.
+// ResetBranchToRemote fetches origin/<branch> and updates the local branch ref
+// via git update-ref — no checkout, no working-tree mutation in projectDir.
+// Used after each PR merge to sync the local default branch with the remote state.
 func (r *repo) ResetBranchToRemote(ctx context.Context, branch string) {
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
-	r.gitCmdCtx(ctx, r.projectDir, "checkout", branch)
-	r.gitCmdCtx(ctx, r.projectDir, "reset", "--hard", "origin/"+branch)
+	r.gitCmdCtx(ctx, r.projectDir, "update-ref", "refs/heads/"+branch, "origin/"+branch)
 }
