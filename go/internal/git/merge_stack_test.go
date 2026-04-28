@@ -587,6 +587,120 @@ func TestMergeStack_RollsBackRetargetOnMergeFailure(t *testing.T) {
 	}
 }
 
+// RebaseBranchOntoRemote must not run checkout, rebase, or reset commands with
+// projectDir as workdir. All working-tree mutations must happen in a temp worktree.
+func TestRebaseBranchOntoRemote_DoesNotMutateProjectDir(t *testing.T) {
+	projectDir := t.TempDir()
+	ralphDir := t.TempDir()
+	runner := newStubRunner()
+
+	repo := newRepoForTest(
+		Config{ProjectDir: projectDir, RalphDir: ralphDir, Logger: discardLog{}},
+		newStubGitHub(StubGitHubConfig{}),
+		withRunner(runner),
+	)
+
+	_ = repo.RebaseBranchOntoRemote(context.Background(), "pr2", "main")
+
+	mutating := map[string]bool{"checkout": true, "rebase": true, "reset": true, "pull": true, "restore": true}
+	for _, call := range runner.Called() {
+		if call.Dir != projectDir || len(call.Args) == 0 {
+			continue
+		}
+		if mutating[call.Args[0]] {
+			t.Errorf("projectDir used for working-tree-mutating command %q: args=%v", call.Args[0], call.Args)
+		}
+	}
+}
+
+// ResetBranchToRemote must use plumbing only (fetch + update-ref) — never
+// checkout or reset --hard in projectDir.
+func TestResetBranchToRemote_DoesNotMutateProjectDir(t *testing.T) {
+	projectDir := t.TempDir()
+	runner := newStubRunner()
+
+	repo := newRepoForTest(
+		Config{ProjectDir: projectDir, Logger: discardLog{}},
+		newStubGitHub(StubGitHubConfig{}),
+		withRunner(runner),
+	)
+
+	repo.ResetBranchToRemote(context.Background(), "main")
+
+	for _, call := range runner.Called() {
+		if call.Dir != projectDir || len(call.Args) == 0 {
+			continue
+		}
+		if call.Args[0] == "checkout" || call.Args[0] == "reset" {
+			t.Errorf("projectDir used for working-tree-mutating command %q: args=%v", call.Args[0], call.Args)
+		}
+	}
+}
+
+// MergeStack must not leave projectDir's working tree dirty. After a 2-PR stack
+// merge where the second branch is rebased onto the updated default branch, the
+// projectDir must remain clean (git status --porcelain returns no output).
+func TestMergeStack_ProjectDirRemainsCleanAfterStackMerge(t *testing.T) {
+	// Set up bare remote repo.
+	remoteDir := t.TempDir()
+	run(t, "git", "-C", remoteDir, "init", "--bare", "-b", "main")
+
+	// Set up local project repo with the bare remote as origin.
+	projectDir := t.TempDir()
+	run(t, "git", "-C", projectDir, "init", "-b", "main")
+	run(t, "git", "-C", projectDir, "config", "user.email", "test@test")
+	run(t, "git", "-C", projectDir, "config", "user.name", "test")
+	run(t, "git", "-C", projectDir, "remote", "add", "origin", remoteDir)
+
+	// Initial commit on main, push to remote.
+	writeFile(t, projectDir, "file.txt", "initial\n")
+	run(t, "git", "-C", projectDir, "commit", "-m", "init")
+	run(t, "git", "-C", projectDir, "push", "-u", "origin", "main")
+
+	// Create pr1 branch with a file change, push.
+	run(t, "git", "-C", projectDir, "checkout", "-b", "pr1")
+	writeFile(t, projectDir, "pr1.txt", "pr1 change\n")
+	run(t, "git", "-C", projectDir, "commit", "-m", "pr1 change")
+	run(t, "git", "-C", projectDir, "push", "origin", "pr1")
+
+	// Create pr2 branch from pr1 with another file change, push.
+	run(t, "git", "-C", projectDir, "checkout", "-b", "pr2")
+	writeFile(t, projectDir, "pr2.txt", "pr2 change\n")
+	run(t, "git", "-C", projectDir, "commit", "-m", "pr2 change")
+	run(t, "git", "-C", projectDir, "push", "origin", "pr2")
+
+	// Add a commit to main (diverges from pr1/pr2 base, forces rebase in RebaseStack).
+	run(t, "git", "-C", projectDir, "checkout", "main")
+	writeFile(t, projectDir, "main_update.txt", "main update\n")
+	run(t, "git", "-C", projectDir, "commit", "-m", "main update")
+	run(t, "git", "-C", projectDir, "push", "origin", "main")
+
+	// projectDir is now on main, clean.
+	ralphDir := t.TempDir()
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen},
+			{Number: 2, Branch: "pr2", Base: "pr1", State: PRStateOpen},
+		},
+	})
+	repo := newRepoForTest(
+		Config{ProjectDir: projectDir, RalphDir: ralphDir, BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(&execRunner{}),
+	)
+
+	// SkipCIWait so the test doesn't need CI infrastructure.
+	_, _ = repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "2", SkipCIWait: true})
+
+	// Regardless of merge outcome, projectDir must have a clean working tree.
+	out, _ := defaultRunner.Run(context.Background(), projectDir, "status", "--porcelain")
+	if out != "" {
+		t.Errorf("projectDir has uncommitted changes after MergeStack:\n%s", out)
+	}
+}
+
 // initBareRepoIn initializes a git repo with one commit in the given directory.
 func initBareRepoIn(t *testing.T, dir string) {
 	t.Helper()
