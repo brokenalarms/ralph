@@ -141,3 +141,82 @@ func TestTaskMerged_Empty(t *testing.T) {
 		t.Errorf("notification missing base text, got %q", script)
 	}
 }
+
+// TaskCompleted with a summary containing special chars produces a correctly-escaped AppleScript.
+// Newlines become spaces, backslashes become \\, double-quotes become \", non-ASCII is passed through.
+func TestTaskCompleted_SpecialCharsEscapedForAppleScript(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("AppleScript escaping only applies on darwin")
+	}
+	calls := captureRunner(t)
+
+	summary := "line1\npath\\to\\file\"done\"café"
+	TaskCompleted("ralph-abc", "Fix bug", summary)
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 command call, got %d", len(*calls))
+	}
+	script := strings.Join((*calls)[0].args, " ")
+
+	// Newline must not appear as Go-style \n two-char sequence — it should be replaced with a space.
+	if strings.Contains(script, `\n`) {
+		t.Errorf("script contains Go-style \\n escape; want newline replaced with space, got %q", script)
+	}
+	// Newline replaced with space — surrounding words should be adjacent via space.
+	if !strings.Contains(script, "line1 path") {
+		t.Errorf("script missing newline-replaced-with-space sequence, got %q", script)
+	}
+	// Backslash must be escaped as \\.
+	if !strings.Contains(script, `\\`) {
+		t.Errorf("script missing escaped backslash, got %q", script)
+	}
+	// Double-quote must be escaped as \".
+	if !strings.Contains(script, `\"`) {
+		t.Errorf("script missing escaped double-quote, got %q", script)
+	}
+	// Non-ASCII must pass through as-is, not as \uNNNN or \xNN.
+	if !strings.Contains(script, "café") {
+		t.Errorf("script missing non-ASCII chars (want café), got %q", script)
+	}
+}
+
+// TaskCompleted with special chars produces no Go-style escape sequences (\xNN, \uNNNN, bare \n).
+func TestTaskCompleted_NoGoStyleEscapesInScript(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("AppleScript escaping only applies on darwin")
+	}
+	calls := captureRunner(t)
+
+	summary := "newline:\n unicode:é hex:\x41 path:\\dir"
+	TaskCompleted("ralph-abc", "Fix bug", summary)
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 command call, got %d", len(*calls))
+	}
+	// Inspect only the osascript -e argument (the script string itself).
+	var scriptArg string
+	for i, a := range (*calls)[0].args {
+		if a == "-e" && i+1 < len((*calls)[0].args) {
+			scriptArg = (*calls)[0].args[i+1]
+		}
+	}
+	if scriptArg == "" {
+		t.Fatal("could not find -e argument in osascript call")
+	}
+	// No Go-style \uNNNN unicode escapes.
+	for i := 0; i < len(scriptArg)-5; i++ {
+		if scriptArg[i] == '\\' && scriptArg[i+1] == 'u' {
+			t.Errorf("script contains Go-style \\uNNNN escape at pos %d: %q", i, scriptArg[i:i+6])
+		}
+	}
+	// No Go-style \xNN hex escapes.
+	for i := 0; i < len(scriptArg)-3; i++ {
+		if scriptArg[i] == '\\' && scriptArg[i+1] == 'x' {
+			t.Errorf("script contains Go-style \\xNN escape at pos %d: %q", i, scriptArg[i:i+4])
+		}
+	}
+	// No bare \n (Go newline escape) — only valid escapes are \\ and \".
+	if strings.Contains(scriptArg, `\n`) {
+		t.Errorf("script contains bare \\n Go escape sequence, got %q", scriptArg)
+	}
+}

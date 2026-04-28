@@ -1,10 +1,10 @@
 package notify
 
 import (
-	"fmt"
 	"log"
 	"os/exec"
 	"runtime"
+	"strings"
 )
 
 // commandRunner executes an OS command. Tests replace this to capture calls without running them.
@@ -19,10 +19,21 @@ func SetCommandRunner(r func(string, ...string) error) func(string, ...string) e
 	return prev
 }
 
+// escapeForAppleScript produces a value safe to embed inside AppleScript double-quoted strings.
+// Order matters: backslash must be escaped before double-quote to avoid double-escaping.
+func escapeForAppleScript(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
+}
+
 func sendNotification(title, body string) {
 	switch runtime.GOOS {
 	case "darwin":
-		script := fmt.Sprintf(`display notification %q with title %q`, body, title)
+		script := `display notification "` + escapeForAppleScript(body) + `" with title "` + escapeForAppleScript(title) + `"`
 		if err := commandRunner("osascript", "-e", script); err != nil {
 			log.Printf("notify: osascript failed: %v", err)
 		}
