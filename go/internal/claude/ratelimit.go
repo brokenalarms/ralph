@@ -14,10 +14,11 @@ var rateLimitRe = regexp.MustCompile(`(?i)hit your limit`)
 type rateLimitEventPayload struct {
 	Type          string `json:"type"`
 	RateLimitInfo struct {
-		Status        string  `json:"status"`
-		ResetsAt      int64   `json:"resetsAt"`
-		RateLimitType string  `json:"rateLimitType"`
-		Utilization   float64 `json:"utilization"`
+		Status         string  `json:"status"`
+		ResetsAt       int64   `json:"resetsAt"`
+		RateLimitType  string  `json:"rateLimitType"`
+		Utilization    float64 `json:"utilization"`
+		IsUsingOverage bool    `json:"isUsingOverage"`
 	} `json:"rate_limit_info"`
 }
 
@@ -26,7 +27,7 @@ type rateLimitEventPayload struct {
 // Throttled statuses (throttled, exceeded, blocked) set throttled=true.
 // allowed_warning sets warning=true. allowed and unknown statuses return
 // ok=true with both flags false (safe no-op).
-func ParseRateLimitEvent(line string) (resetAt time.Time, throttled bool, warning bool, rateLimitType string, utilization float64, ok bool) {
+func ParseRateLimitEvent(line string) (resetAt time.Time, throttled bool, warning bool, isUsingOverage bool, rateLimitType string, utilization float64, ok bool) {
 	if len(line) == 0 || line[0] != '{' {
 		return
 	}
@@ -40,6 +41,7 @@ func ParseRateLimitEvent(line string) (resetAt time.Time, throttled bool, warnin
 	ok = true
 	info := ev.RateLimitInfo
 	resetAt = time.Unix(info.ResetsAt, 0)
+	isUsingOverage = info.IsUsingOverage
 	rateLimitType = info.RateLimitType
 	utilization = info.Utilization
 	switch info.Status {
@@ -107,7 +109,7 @@ func ScanRawLogForRateLimit(logContent string, now time.Time) (resetAt time.Time
 
 	// JSON rate_limit_event scan first.
 	for _, line := range tail {
-		resetAt, throttled, _, _, _, ok := ParseRateLimitEvent(line)
+		resetAt, throttled, _, _, _, _, ok := ParseRateLimitEvent(line)
 		if ok && throttled {
 			return resetAt, true
 		}

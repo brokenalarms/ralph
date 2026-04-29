@@ -446,12 +446,21 @@ func isContentActivity(line string) bool {
 
 // newLinesScan holds results from scanning newly appended raw log lines.
 type newLinesScan struct {
-	hasActivity   bool
-	rlThrottled   bool
-	rlResetAt     time.Time
-	rlWarning     bool
-	rlType        string
-	rlUtilization float64
+	hasActivity             bool
+	rlThrottled             bool
+	rlResetAt               time.Time
+	rlWarning               bool
+	rlWarningIsUsingOverage bool
+	rlType                  string
+	rlUtilization           float64
+	// Populated when a non-throttled, non-warning rate_limit_event is seen (status=allowed).
+	rlAllowed               bool
+	rlAllowedResetAt        time.Time
+	rlAllowedIsUsingOverage bool
+	rlAllowedUtilization    float64
+	// True when any rate_limit_event in this scan had isUsingOverage=true.
+	rlFirstOverage  bool
+	rlOverageResetAt time.Time
 }
 
 // scanNewLines reads new output appended to rawLog since *lastOffset.
@@ -494,7 +503,7 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 		if !result.hasActivity && isContentActivity(line) {
 			result.hasActivity = true
 		}
-		resetAt, throttled, warning, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
+		resetAt, throttled, warning, isUsingOverage, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
 		if ok {
 			if throttled && !result.rlThrottled {
 				result.rlThrottled = true
@@ -507,6 +516,17 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 				result.rlResetAt = resetAt
 				result.rlType = rateLimitType
 				result.rlUtilization = utilization
+				result.rlWarningIsUsingOverage = isUsingOverage
+			}
+			if !throttled && !warning && !result.rlAllowed {
+				result.rlAllowed = true
+				result.rlAllowedResetAt = resetAt
+				result.rlAllowedIsUsingOverage = isUsingOverage
+				result.rlAllowedUtilization = utilization
+			}
+			if isUsingOverage && !result.rlFirstOverage {
+				result.rlFirstOverage = true
+				result.rlOverageResetAt = resetAt
 			}
 		}
 	}
@@ -531,6 +551,10 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	taskLogged := false
 	warningLogged := false
 	activitySeen := false
+	var warningResetsAt time.Time
+	var warningOverage bool
+	allowedTransitionLogged := false
+	nowOverageLogged := false
 	lastActivity := time.Now()
 	runStart := time.Now()
 	processDone := make(chan struct{})
@@ -596,9 +620,31 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 				if scan.rlWarning && !warningLogged {
 					warningLogged = true
+					warningResetsAt = scan.rlResetAt
+					warningOverage = scan.rlWarningIsUsingOverage
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Info, Model: cfg.Model},
 						"rate limit warning: %s at %.0f%%, resets at %s",
 						scan.rlType, scan.rlUtilization*100, scan.rlResetAt.Format("3:04pm"))
+				}
+				if warningLogged {
+					if scan.rlAllowed && !allowedTransitionLogged {
+						allowedTransitionLogged = true
+						if scan.rlAllowedResetAt.Equal(warningResetsAt) {
+							r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Info, Model: cfg.Model},
+								"rate limit: allowed back in at %.0f%%, original reset confirmed",
+								scan.rlAllowedUtilization*100)
+						} else {
+							r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model},
+								"rate limit: consuming extended usage — original reset %s has advanced to %s",
+								warningResetsAt.Format("3:04pm"), scan.rlAllowedResetAt.Format("3:04pm"))
+						}
+					}
+					if scan.rlFirstOverage && !warningOverage && !nowOverageLogged {
+						nowOverageLogged = true
+						r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model},
+							"rate limit: now using overage capacity (overage resets at %s)",
+							scan.rlOverageResetAt.Format("3:04pm"))
+					}
 				}
 			}
 

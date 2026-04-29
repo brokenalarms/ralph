@@ -9,7 +9,7 @@ import (
 // Verify allowed_warning parses as warning=true, throttled=false, with utilization and type.
 func TestParseRateLimitEvent_AllowedWarning(t *testing.T) {
 	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1776412800,"rateLimitType":"seven_day","utilization":0.84,"isUsingOverage":false,"surpassedThreshold":0.75}}`
-	resetAt, throttled, warning, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
+	resetAt, throttled, warning, _, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
 	if !ok {
 		t.Fatal("expected ok=true for allowed_warning")
 	}
@@ -35,7 +35,7 @@ func TestParseRateLimitEvent_AllowedWarning(t *testing.T) {
 func TestParseRateLimitEvent_Throttled(t *testing.T) {
 	for _, status := range []string{"throttled", "exceeded", "blocked"} {
 		line := `{"type":"rate_limit_event","rate_limit_info":{"status":"` + status + `","resetsAt":1776412800,"rateLimitType":"daily","utilization":1.0}}`
-		resetAt, throttled, warning, _, _, ok := ParseRateLimitEvent(line)
+		resetAt, throttled, warning, _, _, _, ok := ParseRateLimitEvent(line)
 		if !ok {
 			t.Fatalf("status=%q: expected ok=true", status)
 		}
@@ -56,7 +56,7 @@ func TestParseRateLimitEvent_Throttled(t *testing.T) {
 func TestParseRateLimitEvent_AllowedAndUnknown(t *testing.T) {
 	for _, status := range []string{"allowed", "some_future_status"} {
 		line := `{"type":"rate_limit_event","rate_limit_info":{"status":"` + status + `","resetsAt":1776412800,"rateLimitType":"daily","utilization":0.5}}`
-		_, throttled, warning, _, _, ok := ParseRateLimitEvent(line)
+		_, throttled, warning, _, _, _, ok := ParseRateLimitEvent(line)
 		if !ok {
 			t.Fatalf("status=%q: expected ok=true (safe no-op)", status)
 		}
@@ -71,7 +71,7 @@ func TestParseRateLimitEvent_AllowedAndUnknown(t *testing.T) {
 
 // Verify malformed JSON returns ok=false so caller falls through to plaintext.
 func TestParseRateLimitEvent_MalformedJSON(t *testing.T) {
-	_, _, _, _, _, ok := ParseRateLimitEvent("not json at all")
+	_, _, _, _, _, _, ok := ParseRateLimitEvent("not json at all")
 	if ok {
 		t.Error("expected ok=false for non-JSON input")
 	}
@@ -80,7 +80,7 @@ func TestParseRateLimitEvent_MalformedJSON(t *testing.T) {
 // Verify non-rate_limit_event JSON type returns ok=false.
 func TestParseRateLimitEvent_WrongType(t *testing.T) {
 	line := `{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`
-	_, _, _, _, _, ok := ParseRateLimitEvent(line)
+	_, _, _, _, _, _, ok := ParseRateLimitEvent(line)
 	if ok {
 		t.Error("expected ok=false for non-rate_limit_event JSON")
 	}
