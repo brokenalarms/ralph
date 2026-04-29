@@ -835,6 +835,19 @@ func TestEvolveValidation(t *testing.T) {
 	}
 }
 
+// Verifies that --admin-merge-on-ci-infra-failure validation rejects missing --auto-merge.
+func TestAdminMergeOnCIInfraFailureValidation(t *testing.T) {
+	cfg, _ := Parse([]string{"--admin-merge-on-ci-infra-failure"})
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error: --admin-merge-on-ci-infra-failure without --auto-merge")
+	}
+
+	cfg, _ = Parse([]string{"--admin-merge-on-ci-infra-failure", "--auto-merge"})
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid --admin-merge-on-ci-infra-failure combo should pass: %v", err)
+	}
+}
+
 // Verifies that --branch-strategy is rejected as an unknown flag.
 func TestBranchStrategyFlag_Rejected(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
