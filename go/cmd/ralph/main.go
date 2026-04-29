@@ -127,7 +127,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	defer logFileWriter.Close()
 	log = logging.New(logFileWriter)
 
-	backend, err := initTaskBackend(cfg, promptsDir, log)
+	backend, err := initTaskBackend(cfg, promptsDir, ralphDir, log)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Task backend init failed: %v", err)
 		return 1
@@ -360,10 +360,11 @@ func (h *resumeScriptHook) OnIterationStart() {
 
 // initTaskBackend initializes the bd task backend. BD is required — if
 // unavailable, ralph exits with an error.
-func initTaskBackend(cfg config.Config, promptsDir string, log *logging.Logger) (tasks.Backend, error) {
+func initTaskBackend(cfg config.Config, promptsDir, ralphDir string, log *logging.Logger) (tasks.Backend, error) {
 	bd := &tasks.BD{
 		ProjectDir: cfg.ProjectDir,
 		PromptsDir: promptsDir,
+		RalphDir:   ralphDir,
 	}
 	if err := bd.Init(); err != nil {
 		return nil, fmt.Errorf("bd is required but unavailable: %w", err)
