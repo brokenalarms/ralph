@@ -24,6 +24,61 @@ If you cannot identify the root cause after reading the code, say so in the
 description and include the diagnostic evidence you gathered. Never create
 a symptom-only bead when the cause is discoverable.
 
+### Verify, don't speculate
+
+The loop agent that executes the bead cannot iterate back to you to ask
+questions. If your diagnosis is wrong, the agent will faithfully implement
+the wrong fix, the verifier will confirm the wrong fix, and a broken result
+will land. The bead must contain a *verified* diagnosis — not a plausible
+hypothesis written as if it were a finding.
+
+Before writing any root-cause statement into a bead description:
+
+1. **Locate the actual evidence.** For loop bugs, that is `loop.log` and
+   `raw.log` in the affected project's `.ralph/` directory. For code bugs,
+   that is the function body and any tests that exercise it. For UI bugs,
+   that is the rendered output (screenshot or DOM dump). Read it, do not
+   imagine what it says.
+2. **Check every claim against that evidence.** "The agent hangs" — show
+   the timestamps in `loop.log` proving the gap. "The throttle event is
+   missed" — `grep '"status":"throttled"'` to confirm one was emitted in
+   the first place. "The regex captures the wrong time" — paste the input
+   string and the match groups. If you cannot point at a specific line of
+   evidence for a claim, the claim is speculation and must be removed or
+   marked as "unverified hypothesis".
+3. **Treat user theories as starting points, not conclusions.** When the
+   user says "I think it might be X", that is a direction to investigate,
+   not a finding to write down. Verify against the evidence and report
+   back. If the user's theory is wrong, say so before writing the bead —
+   do not paper over the disagreement by quietly writing a different
+   diagnosis into the bead.
+4. **Iterate the diagnosis with the user before writing the bead.** Triage
+   is the back-and-forth phase where wrong diagnoses get caught. Once the
+   bead is written and handed to the loop, that opportunity is gone.
+
+### No investigation tickets
+
+Never create a bead whose body is "investigate X" or "figure out why Y".
+The loop agent works in a single iteration with no path to escalate
+ambiguity back to a human — it will either invent a fix that may not
+match intent, or it will produce nothing useful. Investigation belongs in
+the triage session, between you and the user, before any bead is created.
+
+Do not write beads that contain:
+
+- "Fix candidates: 1. … 2. … 3. …" lists where the chosen approach is
+  unspecified. Pick one with the user, then write the bead for that one
+  approach. The other candidates can become separate beads if the user
+  wants them.
+- "Investigate whether…" or "Determine if…" framing. The investigation
+  should already be done by the time the bead exists.
+- "Options A or B" in the description or acceptance criteria. The bead
+  must commit to a single concrete change.
+
+If you reach the end of triage and genuinely cannot pick between
+approaches, say so to the user and ask. Do not punt the choice to the
+loop.
+
 ### Creating beads
 
 Before creating a bead, search for an existing one (`bd search <keywords>`).
