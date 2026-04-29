@@ -549,7 +549,7 @@ iterLoop:
 		for _, ct := range sessionTasks {
 			completedIDs[ct.ID] = true
 		}
-		task, action := l.selectNextTask(ctx, selectNextTaskParams{
+		task, action, waited := l.selectNextTask(ctx, selectNextTaskParams{
 			runIteration:   runIteration,
 			maxIterations:  l.cfg.MaxIterations,
 			wait:           l.cfg.Wait,
@@ -560,18 +560,19 @@ iterLoop:
 			break
 		}
 
+		// ── End-of-wait: sync + evolve after idle wait ──
+		// Fires when the loop just exited waitForTasks with a new task. Catches
+		// any binary rebuild that occurred while the loop was idle between tasks.
+		if waited && ctx.Err() == nil {
+			if res := l.postTaskAndMaybeEvolve(ctx, task.id, 0, false); res == signalEvolve {
+				break iterLoop
+			}
+		}
+
 		runIteration++
 		iteration++
 		lastTaskMerged = false
 		currentTaskID = task.id
-
-		// ── Evolve check: install new binary before iteration prep ──
-		// Fires after the task is dequeued but before any network or worktree
-		// operation. Covers the case where a fix landed on main while the loop
-		// was idle in --wait between iterations.
-		if l.cfg.Evolve && l.maybeEvolve(signalSkipped) == signalEvolve {
-			break iterLoop
-		}
 
 		// Retry counters are local variables inside runVerifyPipeline, so
 		// they are naturally scoped per-iteration — no reset needed.
@@ -691,11 +692,18 @@ iterLoop:
 			switch out.action {
 			case signalRetry:
 				continue
-			case signalSkipped:
+			}
+			// ── End-of-task: sync + evolve after task completes ──
+			// signalSkipped or signalComplete: fire post-task hook and check for
+			// binary rebuild. On signalRetry the task is not yet done — skip.
+			if ctx.Err() == nil {
+				if res := l.postTaskAndMaybeEvolve(ctx, task.id, out.prNumber, out.merged); res == signalEvolve {
+					break iterLoop
+				}
+			}
+			if out.action == signalSkipped {
 				l.state.WriteRunBranch("")
 				continue
-			case signalEvolve:
-				break iterLoop
 			}
 			// signalComplete: fall through to tagTaskEnd
 		}

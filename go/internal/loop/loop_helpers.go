@@ -29,6 +29,19 @@ func (l *Loop) binaryHashChanged() bool {
 	return !bytes.Equal(l.startupBinaryHash, current)
 }
 
+// postTaskAndMaybeEvolve runs the post-task hook unconditionally, then checks
+// whether the binary changed (when cfg.Evolve is true). Returns signalEvolve
+// if the binary hash changed, signalSkipped otherwise. Called from exactly two
+// places in iterLoop: end-of-task (after completeTask) and end-of-wait (after
+// waitForTasks). Must not be called on signalRetry or when ctx is cancelled.
+func (l *Loop) postTaskAndMaybeEvolve(ctx context.Context, taskID string, prNumber int, merged bool) postSignalAction {
+	l.execRunPostTask(ctx, taskID, prNumber, merged)
+	if l.cfg.Evolve {
+		return l.maybeEvolve(signalSkipped)
+	}
+	return signalSkipped
+}
+
 // maybeEvolve checks whether the on-disk binary has changed since loop
 // startup. If it has, it records the evolve_restart status and returns
 // signalEvolve so the caller can restart. When the binary is unchanged,

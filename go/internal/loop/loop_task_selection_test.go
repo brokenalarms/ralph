@@ -32,7 +32,7 @@ func TestSelectNextTask_ReturnsTask(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
 	l, _ := newTestLoopForSelection(t, backend)
 
-	tc, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+	tc, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
 		completedIDs: map[string]bool{},
 	})
 
@@ -55,7 +55,7 @@ func TestSelectNextTask_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, action := l.selectNextTask(ctx, selectNextTaskParams{
+	_, action, _ := l.selectNextTask(ctx, selectNextTaskParams{
 		completedIDs: map[string]bool{},
 	})
 
@@ -69,7 +69,7 @@ func TestSelectNextTask_SkipsCompletedIDs(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-done", NextTask: "Already done"}
 	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
 		completedIDs: map[string]bool{"ralph-done": true},
 	})
 
@@ -86,7 +86,7 @@ func TestSelectNextTask_MaxIterationsReached(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
 	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
 		runIteration:  5,
 		maxIterations: 5,
 		completedIDs:  map[string]bool{},
@@ -106,7 +106,7 @@ func TestSelectNextTask_NoTasksNoWait(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 0, Total: 1}
 	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
 		runIteration: 1, // not first iteration, so flushUnpushedWork is called
 		completedIDs: map[string]bool{},
 	})
@@ -125,7 +125,7 @@ func TestSelectNextTask_NoTasksAtAll(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 0, Total: 0}
 	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
 		runIteration: 0,
 		completedIDs: map[string]bool{},
 	})
@@ -149,7 +149,7 @@ func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
 	for _, ct := range l.completedTasks {
 		completedIDs[ct.ID] = true
 	}
-	tc, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+	tc, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
 		runIteration:  0,
 		maxIterations: l.cfg.MaxIterations,
 		wait:          l.cfg.Wait,
@@ -171,7 +171,7 @@ func TestSelectNextTask_SetResumeIDOnFirstIteration(t *testing.T) {
 	l, _ := newTestLoopForSelection(t, backend)
 	l.state.Write("last_task_id", "ralph-abc")
 
-	l.selectNextTask(context.Background(), selectNextTaskParams{
+	_, _, _ = l.selectNextTask(context.Background(), selectNextTaskParams{
 		runIteration: 0,
 		completedIDs: map[string]bool{},
 	})
@@ -206,7 +206,7 @@ func TestSelectNextTask_WaitMode_AllSkipped(t *testing.T) {
 		cancel()
 	}}
 
-	_, action := l.selectNextTask(ctx, selectNextTaskParams{
+	_, action, _ := l.selectNextTask(ctx, selectNextTaskParams{
 		runIteration:  1,
 		maxIterations: 100,
 		wait:          true,
@@ -233,7 +233,7 @@ func TestSelectNextTask_NoResumeIDOnSubsequentIterations(t *testing.T) {
 	l, _ := newTestLoopForSelection(t, backend)
 	l.state.Write("last_task_id", "ralph-abc")
 
-	l.selectNextTask(context.Background(), selectNextTaskParams{
+	_, _, _ = l.selectNextTask(context.Background(), selectNextTaskParams{
 		runIteration: 1,
 		completedIDs: map[string]bool{},
 	})

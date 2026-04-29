@@ -12,12 +12,12 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// Verifies that when Evolve is enabled and the binary changes between iterations,
-// the loop exits with "evolve_restart" — whether the previous iteration ended with
-// a merged PR or a stacked (not-yet-merged) PR. The evolve check fires at the
-// START of iteration N+1, before any branch setup. Proven by asserting that
-// BranchForTask is called exactly once (for iter1 only, not for the iter2 that
-// triggers evolve).
+// Verifies that when Evolve is enabled and the binary changes at the end of an
+// iteration (after sync-and-build), the loop exits with "evolve_restart" — whether
+// the iteration ended with a merged PR or a stacked (not-yet-merged) PR. The evolve
+// check fires at the END of the iteration, after post-task, before the next
+// BranchForTask. Proven by asserting BranchForTask is called exactly once (iter1
+// only) and postTask fires exactly once (iter1 end-of-task only).
 func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	cases := []struct {
 		name string
@@ -33,7 +33,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 			promptsDir := filepath.Join(dir, "prompts")
 			createPromptTemplates(t, promptsDir)
 
-			// Two tasks: iter1 runs normally with binary=old; iter2 triggers evolve.
+			// Two tasks: iter1 runs normally; binary changes after iter1 ends.
 			backend := &testutil.MutableBackend{
 				StubBackend: testutil.StubBackend{
 					Remaining: 2,
@@ -63,21 +63,16 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 			}
 			logger := logging.New(nil)
 
-			// Binary unchanged for startup and iter1-start; changed for iter2-start.
+			// Binary unchanged at startup; changes after iter1 completes (end-of-task
+			// evolve check detects the rebuild and restarts before iter2 begins).
 			hasher := &stubBinaryHasher{Hashes: [][]byte{
 				[]byte("old"), // startup
-				[]byte("old"), // iter1-start: no restart
-				[]byte("new"), // iter2-start: restart
+				[]byte("new"), // iter1-end: rebuild detected → restart before iter2
 			}}
 
 			postTaskFired := 0
 			postTaskHook := &stubPostTaskHook{fn: func(_ context.Context, _ string, _ int, _ bool) {
 				postTaskFired++
-				// Serve the second task so the loop dequeues it on the next iteration.
-				backend.Lock()
-				backend.NextID = "ralph-t2"
-				backend.NextTask = "Task 2"
-				backend.Unlock()
 			}}
 
 			l := New(cfg, Modules{
@@ -106,20 +101,20 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 				t.Errorf("[%s] expected status 'evolve_restart', got %q", tc.name, finalState.Status)
 			}
 			if postTaskFired != 1 {
-				t.Errorf("[%s] expected post-task to fire once (iter1 only), got %d", tc.name, postTaskFired)
+				t.Errorf("[%s] expected post-task to fire once (iter1 end-of-task), got %d", tc.name, postTaskFired)
 			}
-			// Ordering proof: evolve fired at start of iter2 before BranchForTask.
+			// Ordering proof: evolve fires at end of iter1, before iter2's BranchForTask.
 			if got := gm.(git.StubInspector).GetBranchForTaskCalls(); got != 1 {
-				t.Errorf("[%s] BranchForTask must be called once (iter1 only, not iter2): got %d — evolve must fire before BranchForTask", tc.name, got)
+				t.Errorf("[%s] BranchForTask must be called once (iter1 only): got %d — evolve must fire before iter2 BranchForTask", tc.name, got)
 			}
 		})
 	}
 }
 
-// Verifies that when Evolve is enabled and the binary has already changed when
-// the first iteration begins, the loop exits with "evolve_restart" before any
-// iteration work (no agent run, no post-task, no BranchForTask call). This is
-// the degenerate case of the start-of-iteration evolve check.
+// Verifies that when Evolve is enabled and the binary changes after an iteration
+// that produced no new commits, the loop exits with "evolve_restart" at the
+// end-of-task evolve check. Post-task fires once (before maybeEvolve in the
+// helper) and BranchForTask fires once (the iteration ran to completion).
 func TestLoop_EvolveRestartsOnNoCommitsWhenBinaryChanged(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -167,7 +162,7 @@ func TestLoop_EvolveRestartsOnNoCommitsWhenBinaryChanged(t *testing.T) {
 		BinaryHasher: changedBinaryHasher(),
 	})
 
-	// Runner never commits — but the agent won't even run since evolve fires first.
+	// Agent signals completion but makes no commits.
 	l.runner = &stubRunner{result: claude.Result{SignalDetected: true}}
 
 	err := l.Run(context.Background())
@@ -179,13 +174,13 @@ func TestLoop_EvolveRestartsOnNoCommitsWhenBinaryChanged(t *testing.T) {
 	if finalState.Status != "evolve_restart" {
 		t.Errorf("expected status 'evolve_restart', got %q", finalState.Status)
 	}
-	// Evolve fires before the agent runs, so post-task must never fire.
-	if postTaskFired != 0 {
-		t.Errorf("post-task must not fire when evolve triggers before agent: fired %d times", postTaskFired)
+	// End-of-task evolve: post-task fires once before the hash check triggers restart.
+	if postTaskFired != 1 {
+		t.Errorf("post-task must fire once at end-of-task before evolve restarts: fired %d times", postTaskFired)
 	}
-	// Evolve fires before BranchForTask.
-	if got := gm.(git.StubInspector).GetBranchForTaskCalls(); got != 0 {
-		t.Errorf("BranchForTask must not be called when evolve triggers at start of iter1: got %d", got)
+	// The iteration ran to completion, so BranchForTask was called once.
+	if got := gm.(git.StubInspector).GetBranchForTaskCalls(); got != 1 {
+		t.Errorf("BranchForTask must be called once (iter1 ran fully): got %d", got)
 	}
 }
 
@@ -248,10 +243,10 @@ func TestLoop_EvolveNoRestartOnUnchangedBinary(t *testing.T) {
 
 // Verifies that Evolve runs across multiple stacked iterations (merged=false,
 // Stacked=true) and only triggers restart when the binary actually changes.
-// Simulates 3 tasks with stacked-close; the binary is swapped before
-// iteration 3 starts, so iteration 3's start-of-iteration evolve check
-// detects the change and triggers restart without running the agent.
-// Iterations 1 and 2 must complete normally.
+// Post-task fires at the END of each iteration before its evolve check. All
+// three iterations fire post-task; the binary changes after iter3's sync step,
+// so iter3's end-of-task evolve check detects the change and triggers restart.
+// Ordering proof: postTask[i] sees hasher.Calls == i+1 (fires before Hash call i+2).
 func TestLoop_EvolveStackedCloseRestartsOnBinaryChange(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -287,18 +282,19 @@ func TestLoop_EvolveStackedCloseRestartsOnBinaryChange(t *testing.T) {
 	}
 	logger := logging.New(nil)
 
-	// Calls #1-4: startup=old, iter1-start=old, iter2-start=old, iter3-start=new.
-	// iter1 and iter2 complete; iter3's start-of-iteration check triggers restart.
+	// Calls: startup=old, iter1-end=old, iter2-end=old, iter3-end=new.
+	// iter1 and iter2 complete; iter3's end-of-task check detects the change.
 	hasher := &stubBinaryHasher{Hashes: [][]byte{
 		[]byte("old"), // startup
-		[]byte("old"), // iter1-start
-		[]byte("old"), // iter2-start
-		[]byte("new"), // iter3-start → change detected
+		[]byte("old"), // iter1-end: no restart
+		[]byte("old"), // iter2-end: no restart
+		[]byte("new"), // iter3-end: change detected → restart
 	}}
 
 	// postTaskCallsSeen records hasher.Calls at the moment each post-task fires.
-	// With start-of-iteration evolve, each post-task fires after the iteration's
-	// start-of-iter hash check: iter1-post-task sees Calls=2, iter2-post-task sees Calls=3.
+	// With end-of-task evolve, post-task fires BEFORE the evolve hash call:
+	// iter1-post-task sees Calls=1 (startup only), iter2-post-task sees Calls=2,
+	// iter3-post-task sees Calls=3. So postTask[i] sees Calls == i+1.
 	postTaskCallsSeen := []int{}
 	postTaskHook := &stubPostTaskHook{fn: func(_ context.Context, _ string, _ int, _ bool) {
 		postTaskCallsSeen = append(postTaskCallsSeen, hasher.Calls)
@@ -332,17 +328,16 @@ func TestLoop_EvolveStackedCloseRestartsOnBinaryChange(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// iter3 restarts at start-of-iteration — its post-task never fires.
-	if len(postTaskCallsSeen) != 2 {
-		t.Fatalf("expected 2 completed iterations (iter3 restarts at start), got %d", len(postTaskCallsSeen))
+	// All 3 iterations fire post-task at end-of-task before maybeEvolve.
+	if len(postTaskCallsSeen) != 3 {
+		t.Fatalf("expected 3 post-task calls (all iterations fire post-task before evolve check), got %d", len(postTaskCallsSeen))
 	}
-	// Ordering proof per iteration: post-task for iter N fires after iter N's
-	// start-of-iter hash check. Startup=call#1; iter1-start=call#2 (before post-task),
-	// iter2-start=call#3 (before post-task), so post-task[i] sees Calls == i+2.
+	// Ordering proof: post-task fires BEFORE the evolve hash call each iteration.
+	// startup=call#1; iter1-post fires (Calls=1), then iter1-evolve Hash #2 (Calls=2), etc.
 	for i, got := range postTaskCallsSeen {
-		want := i + 2
+		want := i + 1
 		if got != want {
-			t.Errorf("iteration %d: post-task must run AFTER start-of-iteration evolve check; expected hasher.Calls=%d at post-task, got %d", i+1, want, got)
+			t.Errorf("iteration %d: post-task must run BEFORE evolve hash check; expected hasher.Calls=%d at post-task, got %d", i+1, want, got)
 		}
 	}
 	finalState, _ := st.Load()
@@ -351,10 +346,10 @@ func TestLoop_EvolveStackedCloseRestartsOnBinaryChange(t *testing.T) {
 	}
 }
 
-// Verifies that when Evolve is enabled and the binary changes between iterations,
-// the loop restarts at the start of the next iteration even when the previous
-// iteration's merge attempt failed (PR created but not merged). Binary freshness
-// is the only condition — prior merge outcome does not gate evolve.
+// Verifies that when Evolve is enabled and the binary changes after an iteration
+// that created a PR but did not merge it, the loop exits with "evolve_restart"
+// at the end-of-task evolve check. Binary freshness is the only condition —
+// prior merge outcome does not gate evolve.
 func TestLoop_EvolveRestartsAfterMergeFailure(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -364,7 +359,7 @@ func TestLoop_EvolveRestartsAfterMergeFailure(t *testing.T) {
 	workDir := filepath.Join(dir, "worktree")
 
 	// iter1: binary=old, agent runs, PR created but not merged.
-	// iter2: binary=new → evolve fires at start → restart.
+	// End of iter1: post-task fires, evolve checks hash → new → restart.
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
 			Remaining: 2,
@@ -394,19 +389,15 @@ func TestLoop_EvolveRestartsAfterMergeFailure(t *testing.T) {
 	}
 	logger := logging.New(nil)
 
+	// Binary unchanged at startup; changes after iter1 completes.
 	hasher := &stubBinaryHasher{Hashes: [][]byte{
 		[]byte("old"), // startup
-		[]byte("old"), // iter1-start: no restart
-		[]byte("new"), // iter2-start: restart
+		[]byte("new"), // iter1-end: restart before iter2
 	}}
 
 	postTaskFired := 0
 	postTaskHook := &stubPostTaskHook{fn: func(_ context.Context, _ string, _ int, _ bool) {
 		postTaskFired++
-		backend.Lock()
-		backend.NextID = "ralph-imp2"
-		backend.NextTask = "Task 2"
-		backend.Unlock()
 	}}
 
 	l := New(cfg, Modules{
@@ -432,37 +423,34 @@ func TestLoop_EvolveRestartsAfterMergeFailure(t *testing.T) {
 		t.Errorf("expected evolve_restart when binary changed and prior merge failed, got %q", finalState.Status)
 	}
 	if postTaskFired != 1 {
-		t.Errorf("expected post-task to fire once (iter1), got %d", postTaskFired)
+		t.Errorf("expected post-task to fire once (iter1 end-of-task), got %d", postTaskFired)
 	}
 }
 
-// Verifies the AC#4 ordering invariant: after --wait returns a task, maybeEvolve
-// fires before BranchForTask or any other pre-iteration network operation. Uses
-// a two-task backend simulating a wait gap where the binary changes between
-// iterations. Proven by asserting BranchForTask was called exactly once (iter1
-// only) and IterationHook.OnIterationStart fired exactly once (iter1 only) —
-// since both fire after the evolve check in the iteration entry point.
-func TestLoop_EvolveAtStartBeforeBranchForTask(t *testing.T) {
+// AC6: Verifies end-of-task ordering: after a successful iteration,
+// execRunPostTask runs and then maybeEvolve runs (binary check), both at the
+// iterLoop level after completeTask returns. Proven by recording hasher.Calls
+// at post-task time: post-task fires BEFORE the end-of-task hash call, so
+// Calls==1 (startup only) at post-task time; after the loop Calls==2
+// (startup + end-of-task check).
+func TestLoop_EvolveEndOfTaskOrdering(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.MutableBackend{
-		StubBackend: testutil.StubBackend{
-			Remaining: 2,
-			Total:     2,
-			NextTask:  "Task 1",
-			NextID:    "ralph-ord1",
-		},
-	}
-
 	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/wip-branch",
-		Ship:           git.ShipResult{PRNumber: 1, Merged: true},
+		Ship:           git.ShipResult{PRNumber: 10, Merged: true},
 	})
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Fix bug",
+		NextID:    "ralph-ord",
+	}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -470,29 +458,21 @@ func TestLoop_EvolveAtStartBeforeBranchForTask(t *testing.T) {
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
-		MaxIterations: 5,
+		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Evolve:        true,
 	}
 	logger := logging.New(nil)
 
-	// Binary unchanged for startup and iter1-start; changed for iter2-start
-	// (simulates a fix landing during the wait period between iterations).
-	hasher := &stubBinaryHasher{Hashes: [][]byte{
-		[]byte("old"), // startup
-		[]byte("old"), // iter1-start: no restart
-		[]byte("new"), // iter2-start: fix landed during wait → restart
-	}}
+	// Binary unchanged throughout — loop completes normally without restarting.
+	hasher := unchangedBinaryHasher()
 
-	iterationHookCalls := 0
-	postTaskFired := 0
+	var postTaskHasherCallsAtFire int
 	postTaskHook := &stubPostTaskHook{fn: func(_ context.Context, _ string, _ int, _ bool) {
-		postTaskFired++
-		backend.Lock()
-		backend.NextID = "ralph-ord2"
-		backend.NextTask = "Task 2"
-		backend.Unlock()
+		// Snapshot Calls at the moment post-task fires: must be BEFORE the
+		// end-of-task hash call (which increments Calls inside maybeEvolve).
+		postTaskHasherCallsAtFire = hasher.Calls
 	}}
 
 	l := New(cfg, Modules{
@@ -504,7 +484,6 @@ func TestLoop_EvolveAtStartBeforeBranchForTask(t *testing.T) {
 		Connectivity: onlineStubConnectivity(),
 		PostTaskHook: postTaskHook,
 		BinaryHasher: hasher,
-		IterationHook: &stubIterationHook{fn: func() { iterationHookCalls++ }},
 	})
 
 	l.runner = &stubRunner{
@@ -512,29 +491,187 @@ func TestLoop_EvolveAtStartBeforeBranchForTask(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	err := l.Run(context.Background())
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
+	_ = l.Run(context.Background())
 
+	// post-task must fire (exactly once for this 1-iteration run).
+	if postTaskHasherCallsAtFire == 0 {
+		t.Fatal("post-task hook was never called — postTaskAndMaybeEvolve did not run")
+	}
+	// post-task fires BEFORE the end-of-task hash call: startup is the only
+	// Hash() call before post-task fires, so Calls==1 at post-task time.
+	if postTaskHasherCallsAtFire != 1 {
+		t.Errorf("post-task must fire before end-of-task maybeEvolve: expected hasher.Calls=1 at post-task, got %d", postTaskHasherCallsAtFire)
+	}
+	// After the loop: startup (1) + end-of-task hash check (1) = 2 calls total.
+	if hasher.Calls != 2 {
+		t.Errorf("expected 2 total hash calls (startup + end-of-task), got %d", hasher.Calls)
+	}
+	// Loop completes normally — binary unchanged, no evolve restart.
 	finalState, _ := st.Load()
-	if finalState.Status != "evolve_restart" {
-		t.Errorf("expected 'evolve_restart', got %q", finalState.Status)
+	if finalState.Status == "evolve_restart" {
+		t.Error("should NOT restart when binary hash is unchanged")
 	}
+}
 
-	// iter1 completes, iter2 triggers evolve before BranchForTask.
-	// BranchForTask must be called exactly once (iter1 only).
-	if got := gm.(git.StubInspector).GetBranchForTaskCalls(); got != 1 {
-		t.Errorf("BranchForTask called %d times, want 1: evolve must fire before BranchForTask on iter2", got)
-	}
+// AC7: Verifies end-of-wait ordering: with --wait enabled and an empty initial
+// backlog, after a stub injects a task and waitForTasks returns, postTaskAndMaybeEvolve
+// fires (execRunPostTask then maybeEvolve) before BranchForTask runs.
+// Also verifies that with a non-empty initial backlog (no wait), the end-of-wait
+// helper does NOT fire — only the end-of-task helper fires after the iteration.
+func TestLoop_EvolveEndOfWaitOrdering(t *testing.T) {
+	t.Run("empty backlog: end-of-wait helper fires before BranchForTask", func(t *testing.T) {
+		dir, st := setupTestDir(t)
+		ralphDir := filepath.Join(dir, ".ralph")
+		promptsDir := filepath.Join(dir, "prompts")
+		createPromptTemplates(t, promptsDir)
 
-	// IterationHook fires after BranchForTask. Since evolve breaks the loop
-	// before reaching IterationHook for iter2, it must fire exactly once (iter1).
-	if iterationHookCalls != 1 {
-		t.Errorf("IterationHook fired %d times, want 1: must not fire when evolve exits before BranchForTask", iterationHookCalls)
-	}
+		backend := &testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 0,
+				Total:     0,
+				NextTask:  "",
+				NextID:    "",
+			},
+		}
 
-	if postTaskFired != 1 {
-		t.Errorf("post-task fired %d times, want 1 (iter1 only)", postTaskFired)
-	}
+		gm := git.NewStub(git.StubRepoConfig{
+			ProjectDir:     dir,
+			WorkDir:        dir,
+			WorktreeBranch: "ralph/wip-branch",
+		})
+		cfg := Config{
+			Dirs: workctx.WorkContext{
+				ProjectDir: dir,
+				WorkDir:    dir,
+				RalphDir:   ralphDir,
+				PromptsDir: promptsDir,
+			},
+			MaxIterations: 5,
+			CallsPerHour:  80,
+			Wait:          true,
+			Evolve:        true,
+		}
+		logger := logging.New(nil)
+
+		// Binary unchanged at startup; changes after waitForTasks exits (simulating
+		// a rebuild that happened during the wait period).
+		hasher := &stubBinaryHasher{Hashes: [][]byte{
+			[]byte("old"), // startup
+			[]byte("new"), // end-of-wait check: rebuild detected → restart
+		}}
+
+		postTaskFired := 0
+		postTaskHook := &stubPostTaskHook{fn: func(_ context.Context, _ string, _ int, _ bool) {
+			postTaskFired++
+		}}
+
+		// waitHook injects the task so waitForTasks returns with waited=true.
+		waitHook := &stubWaitHook{fn: func() {
+			backend.Lock()
+			backend.Remaining = 1
+			backend.Total = 1
+			backend.NextID = "ralph-w1"
+			backend.NextTask = "Waited task"
+			backend.Unlock()
+		}}
+
+		iterationHookCalls := 0
+		l := New(cfg, Modules{
+			State:         st,
+			Git:           gm,
+			TaskBackend:   backend,
+			Logger:        logger,
+			Verifier:      newTestVerifier(t, cfg, logger),
+			Connectivity:  onlineStubConnectivity(),
+			PostTaskHook:  postTaskHook,
+			WaitHook:      waitHook,
+			BinaryHasher:  hasher,
+			IterationHook: &stubIterationHook{fn: func() { iterationHookCalls++ }},
+		})
+
+		l.runner = &stubRunner{result: claude.Result{}}
+
+		err := l.Run(context.Background())
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		finalState, _ := st.Load()
+		if finalState.Status != "evolve_restart" {
+			t.Errorf("expected 'evolve_restart' after end-of-wait binary change, got %q", finalState.Status)
+		}
+		// end-of-wait: post-task fires once before BranchForTask.
+		if postTaskFired != 1 {
+			t.Errorf("post-task must fire once (end-of-wait helper), got %d", postTaskFired)
+		}
+		// evolve fires before BranchForTask — BranchForTask must not be called.
+		if got := gm.(git.StubInspector).GetBranchForTaskCalls(); got != 0 {
+			t.Errorf("BranchForTask must not be called when end-of-wait evolve fires: got %d", got)
+		}
+		// IterationHook fires after BranchForTask — must not be called either.
+		if iterationHookCalls != 0 {
+			t.Errorf("IterationHook must not fire when end-of-wait evolve exits: got %d", iterationHookCalls)
+		}
+	})
+
+	t.Run("non-empty backlog: end-of-wait helper does not fire extra call", func(t *testing.T) {
+		dir, st := setupTestDir(t)
+		ralphDir := filepath.Join(dir, ".ralph")
+		promptsDir := filepath.Join(dir, "prompts")
+		createPromptTemplates(t, promptsDir)
+
+		gm := git.NewStub(git.StubRepoConfig{
+			ProjectDir:     dir,
+			WorkDir:        dir,
+			WorktreeBranch: "ralph/wip-branch",
+			Ship:           git.ShipResult{PRNumber: 5, Merged: true},
+		})
+		backend := &testutil.StubBackend{
+			Remaining: 1,
+			Total:     1,
+			NextTask:  "Immediate task",
+			NextID:    "ralph-imm",
+		}
+		cfg := Config{
+			Dirs: workctx.WorkContext{
+				ProjectDir: dir,
+				WorkDir:    dir,
+				RalphDir:   ralphDir,
+				PromptsDir: promptsDir,
+			},
+			MaxIterations: 1,
+			CallsPerHour:  80,
+			Evolve:        true,
+			AutoMerge:     true,
+		}
+		logger := logging.New(nil)
+
+		postTaskCalls := 0
+		postTaskHook := &stubPostTaskHook{fn: func(_ context.Context, _ string, _ int, _ bool) {
+			postTaskCalls++
+		}}
+
+		l := New(cfg, Modules{
+			State:        st,
+			Git:          gm,
+			TaskBackend:  backend,
+			Logger:       logger,
+			Verifier:     newTestVerifier(t, cfg, logger),
+			Connectivity: onlineStubConnectivity(),
+			PostTaskHook: postTaskHook,
+			BinaryHasher: unchangedBinaryHasher(),
+		})
+
+		l.runner = &stubRunner{
+			onRun:  func() { gm.CommitAll("immediate agent commit") },
+			result: claude.Result{SignalDetected: true},
+		}
+
+		_ = l.Run(context.Background())
+
+		// No wait occurred, so only the end-of-task helper fires — exactly once.
+		if postTaskCalls != 1 {
+			t.Errorf("expected exactly 1 post-task call (end-of-task only, no end-of-wait): got %d", postTaskCalls)
+		}
+	})
 }
