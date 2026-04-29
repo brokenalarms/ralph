@@ -129,7 +129,7 @@ func TestInitTaskBackend_ErrorsWhenBDUnavailable(t *testing.T) {
 
 	t.Setenv("PATH", t.TempDir())
 
-	_, err := initTaskBackend(cfg, t.TempDir(), log)
+	_, err := initTaskBackend(cfg, t.TempDir(), t.TempDir(), log)
 	if err == nil {
 		t.Fatal("expected error when bd is unavailable, got nil")
 	}

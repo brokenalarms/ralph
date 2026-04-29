@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // ErrNeedsFallback signals that the bd backend is unavailable.
@@ -26,10 +28,24 @@ type BD struct {
 	Ctx        context.Context
 	ProjectDir string
 	PromptsDir string
-	RunBD        CommandRunner // injectable for testing; nil uses defaultRunBD
-	bdPath       string        // resolved absolute path to the bd binary
-	skippedIDs   map[string]bool
+	RalphDir   string        // .ralph state directory for invocation logging; empty disables logging
+	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
+	bdPath     string        // resolved absolute path to the bd binary
+	skippedIDs map[string]bool
 	resumeTaskID string
+}
+
+// bdCallRecord is one JSONL entry in .ralph/bd-calls.log.
+type bdCallRecord struct {
+	Time              string   `json:"time"`
+	Args              []string `json:"args"`
+	Dir               string   `json:"dir"`
+	DurationMs        int64    `json:"durationMs"`
+	ExitCode          int      `json:"exitCode"`
+	Signal            string   `json:"signal,omitempty"`
+	KilledByCtxCancel bool     `json:"killedByCtxCancel"`
+	CtxErr            string   `json:"ctxErr,omitempty"`
+	StderrTail        string   `json:"stderrTail,omitempty"`
 }
 
 func (b *BD) SetSkippedIDs(ids []string) {
@@ -86,14 +102,68 @@ func (b *BD) resolveBD() error {
 func (b *BD) defaultRunBD(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, b.bdPath, args...)
 	cmd.Dir = dir
+	start := time.Now()
 	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
-		}
+
+	var stderrBytes []byte
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		stderrBytes = exitErr.Stderr
+	}
+
+	b.logBDCall(ctx, dir, args, start, cmd.ProcessState, stderrBytes)
+
+	if err != nil && len(stderrBytes) > 0 {
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(stderrBytes)))
 	}
 	return strings.TrimSpace(string(out)), err
+}
+
+// logBDCall appends one JSONL record to .ralph/bd-calls.log.
+// No log rotation or size cap — the file is append-only; the user manages it.
+// Best-effort: any failure to open or write the log is silently ignored and
+// never affects the bd call's return value.
+func (b *BD) logBDCall(ctx context.Context, dir string, args []string, start time.Time, ps *os.ProcessState, stderr []byte) {
+	if b.RalphDir == "" {
+		return
+	}
+
+	rec := bdCallRecord{
+		Time:       start.UTC().Format(time.RFC3339Nano),
+		Args:       args,
+		Dir:        dir,
+		DurationMs: time.Since(start).Milliseconds(),
+	}
+
+	if ps != nil {
+		rec.ExitCode = ps.ExitCode()
+		if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			rec.Signal = ws.Signal().String()
+		}
+	} else {
+		rec.ExitCode = -1
+	}
+
+	if ctx.Err() != nil {
+		rec.KilledByCtxCancel = true
+		rec.CtxErr = ctx.Err().Error()
+	}
+
+	if len(stderr) > 0 {
+		s := strings.TrimSpace(string(stderr))
+		if len(s) > 500 {
+			s = s[len(s)-500:]
+		}
+		rec.StderrTail = s
+	}
+
+	logPath := filepath.Join(b.RalphDir, "bd-calls.log")
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_ = json.NewEncoder(f).Encode(rec)
 }
 
 // Init prepares the bd backend: verifies health and manages .gitignore

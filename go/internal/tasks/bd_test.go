@@ -1,13 +1,16 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockBD builds a CommandRunner that dispatches on bd subcommands.
@@ -1453,6 +1456,139 @@ func TestParseDependencyBlock_NilError(t *testing.T) {
 	blockers := ParseDependencyBlock(nil)
 	if blockers != nil {
 		t.Errorf("expected nil for nil error, got %v", blockers)
+	}
+}
+
+// Proves: a successful bd invocation writes one JSONL record to bd-calls.log
+// with exitCode 0, killedByCtxCancel false, and the expected args.
+func TestDefaultRunBD_LogsCleanInvocation(t *testing.T) {
+	ralphDir := t.TempDir()
+	b := &BD{bdPath: "/bin/sh", RalphDir: ralphDir}
+
+	_, _ = b.defaultRunBD(context.Background(), t.TempDir(), "-c", "echo hello")
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, "bd-calls.log"))
+	if err != nil {
+		t.Fatalf("expected bd-calls.log to be created: %v", err)
+	}
+	line := bytes.TrimRight(data, "\n")
+	var rec bdCallRecord
+	if err := json.Unmarshal(line, &rec); err != nil {
+		t.Fatalf("expected valid JSON record: %v\nraw: %s", err, line)
+	}
+	if rec.ExitCode != 0 {
+		t.Errorf("exitCode = %d, want 0", rec.ExitCode)
+	}
+	if rec.KilledByCtxCancel {
+		t.Error("killedByCtxCancel should be false for clean invocation")
+	}
+	wantArgs := []string{"-c", "echo hello"}
+	if len(rec.Args) != len(wantArgs) {
+		t.Errorf("args = %v, want %v", rec.Args, wantArgs)
+	} else {
+		for i := range wantArgs {
+			if rec.Args[i] != wantArgs[i] {
+				t.Errorf("args[%d] = %q, want %q", i, rec.Args[i], wantArgs[i])
+			}
+		}
+	}
+}
+
+// Proves: when the parent context is cancelled mid-command, the log record
+// has killedByCtxCancel true and a non-empty ctxErr.
+func TestDefaultRunBD_LogsContextCancellation(t *testing.T) {
+	ralphDir := t.TempDir()
+	b := &BD{bdPath: "/bin/sh", RalphDir: ralphDir}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, _ = b.defaultRunBD(ctx, t.TempDir(), "-c", "sleep 10")
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, "bd-calls.log"))
+	if err != nil {
+		t.Fatalf("expected bd-calls.log to be created: %v", err)
+	}
+	line := bytes.TrimRight(data, "\n")
+	var rec bdCallRecord
+	if err := json.Unmarshal(line, &rec); err != nil {
+		t.Fatalf("expected valid JSON record: %v\nraw: %s", err, line)
+	}
+	if !rec.KilledByCtxCancel {
+		t.Error("killedByCtxCancel should be true when context is cancelled")
+	}
+	if rec.CtxErr == "" {
+		t.Error("ctxErr should be non-empty when context is cancelled")
+	}
+}
+
+// Proves: a command exiting non-zero with stderr output produces a log record
+// with exitCode != 0 and a populated stderrTail.
+func TestDefaultRunBD_LogsNonZeroExit(t *testing.T) {
+	ralphDir := t.TempDir()
+	b := &BD{bdPath: "/bin/sh", RalphDir: ralphDir}
+
+	_, _ = b.defaultRunBD(context.Background(), t.TempDir(), "-c", "echo 'bd error output' >&2; exit 2")
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, "bd-calls.log"))
+	if err != nil {
+		t.Fatalf("expected bd-calls.log to be created: %v", err)
+	}
+	line := bytes.TrimRight(data, "\n")
+	var rec bdCallRecord
+	if err := json.Unmarshal(line, &rec); err != nil {
+		t.Fatalf("expected valid JSON record: %v\nraw: %s", err, line)
+	}
+	if rec.ExitCode == 0 {
+		t.Error("exitCode should be non-zero for failing command")
+	}
+	if rec.StderrTail == "" {
+		t.Error("stderrTail should be populated for non-zero exit with stderr output")
+	}
+}
+
+// Proves: when RalphDir is empty, no log file is created and the bd call's
+// return value is unaffected.
+func TestDefaultRunBD_NoLogPathSkipsWrite(t *testing.T) {
+	b := &BD{
+		bdPath:   "/bin/sh",
+		RalphDir: "", // empty — logging disabled
+	}
+	workDir := t.TempDir()
+
+	out, err := b.defaultRunBD(context.Background(), workDir, "-c", "echo hello")
+	if err != nil {
+		t.Fatalf("bd call should succeed with empty RalphDir, got: %v", err)
+	}
+	if out != "hello" {
+		t.Errorf("output = %q, want %q", out, "hello")
+	}
+
+	// No log file should appear in the command's working dir (the only
+	// temp dir we control) since RalphDir is empty and logging is skipped.
+	if _, statErr := os.Stat(filepath.Join(workDir, "bd-calls.log")); !os.IsNotExist(statErr) {
+		t.Error("bd-calls.log should not exist when RalphDir is empty")
+	}
+}
+
+// Proves: a failed log write (e.g. read-only RalphDir) does not affect the
+// bd call's return value or error.
+func TestDefaultRunBD_LogWriteFailureIsBestEffort(t *testing.T) {
+	ralphDir := t.TempDir()
+	// Make the directory read-only so OpenFile fails.
+	if err := os.Chmod(ralphDir, 0o555); err != nil {
+		t.Skipf("cannot chmod temp dir: %v", err)
+	}
+	defer os.Chmod(ralphDir, 0o755) //nolint: errcheck
+
+	b := &BD{bdPath: "/bin/sh", RalphDir: ralphDir}
+
+	out, err := b.defaultRunBD(context.Background(), t.TempDir(), "-c", "echo hello")
+	if err != nil {
+		t.Errorf("bd call should succeed even when log write fails, got: %v", err)
+	}
+	if out != "hello" {
+		t.Errorf("output = %q, want %q", out, "hello")
 	}
 }
 
