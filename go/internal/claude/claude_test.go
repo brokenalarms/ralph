@@ -1496,6 +1496,172 @@ func TestPoll_AllowedWarningRateLimitEventLogsOnce(t *testing.T) {
 	}
 }
 
+// Verifies that after an allowed_warning event, a subsequent allowed event with the
+// same resetsAt emits exactly one "allowed back in" log and no "consuming extended usage" log.
+func TestPoll_RateLimitAllowedBackIn_LogsOnce(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  500 * time.Millisecond,
+	}
+
+	const resetsAt = int64(1776412800)
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%d,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":false}}`+"\n", resetsAt)
+		f.Close()
+		time.Sleep(80 * time.Millisecond)
+		f, _ = os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
+		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":%d,"rateLimitType":"five_hour","utilization":0.5,"isUsingOverage":false}}`+"\n", resetsAt)
+		f.Close()
+	}()
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "5")
+
+	if result.RateLimited {
+		t.Error("expected RateLimited=false")
+	}
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout")
+	}
+	var allowedBackCount, extendedUsageCount int
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "allowed back in") {
+			allowedBackCount++
+		}
+		if strings.Contains(msg, "consuming extended usage") {
+			extendedUsageCount++
+		}
+	}
+	if allowedBackCount != 1 {
+		t.Errorf("expected exactly 1 'allowed back in' log, got %d: %v", allowedBackCount, log.logs)
+	}
+	if extendedUsageCount != 0 {
+		t.Errorf("expected 0 'consuming extended usage' logs, got %d", extendedUsageCount)
+	}
+}
+
+// Verifies that after an allowed_warning event, a subsequent allowed event with an advanced
+// resetsAt emits exactly one "consuming extended usage" log and no "allowed back in" log.
+func TestPoll_RateLimitConsumingExtendedUsage_LogsOnce(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  500 * time.Millisecond,
+	}
+
+	const warningResetsAt = int64(1776412800)
+	const advancedResetsAt = int64(1776430800) // 5 hours later
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%d,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":false}}`+"\n", warningResetsAt)
+		f.Close()
+		time.Sleep(80 * time.Millisecond)
+		f, _ = os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
+		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":%d,"rateLimitType":"five_hour","utilization":0.2,"isUsingOverage":false}}`+"\n", advancedResetsAt)
+		f.Close()
+	}()
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "5")
+
+	if result.RateLimited {
+		t.Error("expected RateLimited=false")
+	}
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout")
+	}
+	var allowedBackCount, extendedUsageCount int
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "allowed back in") {
+			allowedBackCount++
+		}
+		if strings.Contains(msg, "consuming extended usage") {
+			extendedUsageCount++
+		}
+	}
+	if extendedUsageCount != 1 {
+		t.Errorf("expected exactly 1 'consuming extended usage' log, got %d: %v", extendedUsageCount, log.logs)
+	}
+	if allowedBackCount != 0 {
+		t.Errorf("expected 0 'allowed back in' logs, got %d", allowedBackCount)
+	}
+}
+
+// Verifies that after an allowed_warning with isUsingOverage=false, a subsequent event
+// with isUsingOverage=true emits exactly one "now using overage" log.
+func TestPoll_RateLimitNowUsingOverage_LogsOnce(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  500 * time.Millisecond,
+	}
+
+	const resetsAt = int64(1776412800)
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%d,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":false}}`+"\n", resetsAt)
+		f.Close()
+		time.Sleep(80 * time.Millisecond)
+		f, _ = os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
+		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%d,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":true}}`+"\n", resetsAt)
+		f.Close()
+	}()
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "5")
+
+	if result.RateLimited {
+		t.Error("expected RateLimited=false")
+	}
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout")
+	}
+	var overageCount int
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "now using overage") {
+			overageCount++
+		}
+	}
+	if overageCount != 1 {
+		t.Errorf("expected exactly 1 'now using overage' log, got %d: %v", overageCount, log.logs)
+	}
+}
+
 // --- Process group cleanup tests ---
 
 // Verifies that stopProcessGroup kills child processes spawned by a bash
