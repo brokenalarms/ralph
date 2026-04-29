@@ -211,6 +211,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("--evolve is incompatible with --tmux")
 		}
 	}
+	if c.AdminMergeOnCIInfraFailure && !c.AutoMerge {
+		return fmt.Errorf("--admin-merge-on-ci-infra-failure requires --auto-merge")
+	}
 	return nil
 }
 
