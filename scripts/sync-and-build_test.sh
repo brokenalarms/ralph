@@ -25,7 +25,6 @@ PKG
 
   mkdir -p "$tmp/repo/scripts"
   cp "$SCRIPT_DIR/sync-and-build.sh" "$tmp/repo/scripts/"
-  cp "$SCRIPT_DIR/sync-and-tag.sh" "$tmp/repo/scripts/"
 
   cat > "$tmp/repo/scripts/build-go.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -108,7 +107,6 @@ test_ralph_project_dir_override() {
 
   mkdir -p "$tmp/worktree/scripts"
   cp "$SCRIPT_DIR/sync-and-build.sh" "$tmp/worktree/scripts/"
-  cp "$SCRIPT_DIR/sync-and-tag.sh" "$tmp/worktree/scripts/"
   cat > "$tmp/worktree/scripts/build-go.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "BUILD_RAN"
@@ -124,10 +122,30 @@ STUB
   [ "$rc" -eq 0 ] || fail "project_dir override: failed with RALPH_PROJECT_DIR set ($rc): $output"
 }
 
+# Test: sync-and-build.sh must not modify package.json — version bumping is CI-only
+test_no_local_bump() {
+  # Regression guard: local commits must not cause package.json version to be bumped.
+  # Version bumping now happens in CI (bump-version.yml) after push to main.
+  local tmp
+  tmp=$(setup_repo)
+  trap "rm -rf '$tmp'" RETURN
+
+  version_before=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$tmp/repo/package.json','utf8')).version)")
+
+  (cd "$tmp/repo" && git commit --allow-empty -m "local change" --quiet)
+
+  bash "$tmp/repo/scripts/sync-and-build.sh" > /dev/null 2>&1
+
+  version_after=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$tmp/repo/package.json','utf8')).version)")
+
+  [ "$version_before" = "$version_after" ] || fail "no_local_bump: package.json version changed from $version_before to $version_after — bumping must not happen locally"
+}
+
 test_push_failure
 test_pull_failure
 test_success_builds
 test_ralph_project_dir_override
+test_no_local_bump
 
 if ((failures > 0)); then
   echo "$failures test(s) failed"
