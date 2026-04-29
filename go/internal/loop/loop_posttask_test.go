@@ -299,6 +299,9 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		t.Fatalf("expected signalComplete, got %d", out.action)
 	}
 
+	// Post-task runs from postTaskAndMaybeEvolve (called by iterLoop after completeTask).
+	l.postTaskAndMaybeEvolve(context.Background(), "ralph-pt1", out.prNumber, out.merged)
+
 	data, err := os.ReadFile(envFile)
 	if err != nil {
 		t.Fatalf("post-task script did not run: %v", err)
@@ -407,6 +410,9 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		t.Fatalf("expected signalComplete despite script failure, got %d", out.action)
 	}
 
+	// Post-task runs from postTaskAndMaybeEvolve (called by iterLoop after completeTask).
+	l.postTaskAndMaybeEvolve(context.Background(), "ralph-pt3", out.prNumber, out.merged)
+
 	logOutput := logBuf.String()
 	if !strings.Contains(logOutput, "exited with error") {
 		t.Errorf("expected warning about script error in log, got: %s", logOutput)
@@ -454,7 +460,7 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 	})
 	l.runner = &stubRunner{}
 
-	l.completeTask(context.Background(), completeTaskParams{
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
 		workDir:    dir,
@@ -463,6 +469,9 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 		nextTask:   "Fix bug",
 		ralphDir:   ralphDir,
 	})
+
+	// Post-task runs from postTaskAndMaybeEvolve (called by iterLoop after completeTask).
+	l.postTaskAndMaybeEvolve(context.Background(), "ralph-npt", out.prNumber, out.merged)
 
 	logOutput := logBuf.String()
 	if !strings.Contains(logOutput, "No post_task config and no ralph:post-task script found in package.json — skipping post-task") {
@@ -516,6 +525,9 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	if out.action != signalSkipped {
 		t.Fatalf("expected signalSkipped, got %d", out.action)
 	}
+
+	// Post-task runs from postTaskAndMaybeEvolve (called by iterLoop after completeTask).
+	l.postTaskAndMaybeEvolve(context.Background(), "ralph-pt4", out.prNumber, out.merged)
 
 	data, err := os.ReadFile(envFile)
 	if err != nil {
@@ -587,6 +599,9 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 	if out.action != signalComplete {
 		t.Fatalf("expected signalComplete, got %d", out.action)
 	}
+
+	// Post-task runs from postTaskAndMaybeEvolve (called by iterLoop after completeTask).
+	l.postTaskAndMaybeEvolve(context.Background(), "ralph-pkg1", out.prNumber, out.merged)
 
 	data, err := os.ReadFile(envFile)
 	if err != nil {

@@ -39,38 +39,43 @@ type selectNextTaskParams struct {
 // context cancelled, all tasks complete). Returns actionProceed with a
 // taskContext when a task is ready to run.
 //
+// The waited return value is true when waitForTasks was entered during this
+// selection. iterLoop uses this to trigger postTaskAndMaybeEvolve before
+// starting the new iteration — catching any binary rebuild that occurred
+// while the loop was idle.
+//
 // Handles: max iterations, context cancellation, stop file, no remaining
 // tasks (with wait mode), empty backend response, and completed-task dedup.
-func (l *Loop) selectNextTask(ctx context.Context, p selectNextTaskParams) (taskContext, loopAction) {
-	return l.selectNextTaskInner(ctx, p, 0)
+func (l *Loop) selectNextTask(ctx context.Context, p selectNextTaskParams) (taskContext, loopAction, bool) {
+	return l.selectNextTaskInner(ctx, p, 0, false)
 }
 
 const maxSelectionAttempts = 50
 
-func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, attempts int) (taskContext, loopAction) {
+func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, attempts int, waited bool) (taskContext, loopAction, bool) {
 	if attempts >= maxSelectionAttempts {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Exhausted %d task selection attempts", maxSelectionAttempts)
 		l.state.Write("status", "error")
-		return taskContext{}, actionDone
+		return taskContext{}, actionDone, waited
 	}
 	maxIter := l.state.ReadMaxIterations(p.maxIterations)
 
 	if p.runIteration >= maxIter {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Max iterations (%d) reached", maxIter)
 		l.state.Write("status", "max_iterations_reached")
-		return taskContext{}, actionDone
+		return taskContext{}, actionDone, waited
 	}
 
 	if err := ctx.Err(); err != nil {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Interrupted — stopping")
 		l.state.Write("status", "stopped")
-		return taskContext{}, actionDone
+		return taskContext{}, actionDone, waited
 	}
 
 	if l.state.CheckStop() {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Stop file detected - halting")
 		l.state.Write("status", "stopped")
-		return taskContext{}, actionDone
+		return taskContext{}, actionDone, waited
 	}
 
 	avail, err := tasks.CheckAvailability(l.taskBackend)
@@ -81,7 +86,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		if p.runIteration == 0 && !avail.HasAny && !p.wait {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error}, "No tasks found — run ralph task to create tasks")
 			l.state.Write("status", "error")
-			return taskContext{}, actionDone
+			return taskContext{}, actionDone, waited
 		}
 		if p.runIteration > 0 {
 			l.flushUnpushedWork(ctx, p.lastTaskMerged)
@@ -89,13 +94,13 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		if !p.wait {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Success}, "All tasks complete!")
 			l.state.Write("status", "completed")
-			return taskContext{}, actionDone
+			return taskContext{}, actionDone, waited
 		}
 		if resumed := l.waitForTasks(ctx); !resumed {
-			return taskContext{}, actionDone
+			return taskContext{}, actionDone, true
 		}
 		// Tasks appeared — re-enter selection to pick one up.
-		return l.selectNextTaskInner(ctx, p, attempts+1)
+		return l.selectNextTaskInner(ctx, p, attempts+1, true)
 	}
 
 	// Only resume to the last task when starting fresh (first iteration of
@@ -114,11 +119,11 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task backend returned empty — no task to run")
 		if p.wait {
 			if resumed := l.waitForTasks(ctx); !resumed {
-				return taskContext{}, actionDone
+				return taskContext{}, actionDone, true
 			}
-			return l.selectNextTaskInner(ctx, p, attempts+1)
+			return l.selectNextTaskInner(ctx, p, attempts+1, true)
 		}
-		return taskContext{}, actionDone
+		return taskContext{}, actionDone, waited
 	}
 
 	if p.completedIDs[taskID] {
@@ -126,7 +131,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		l.skipTask(taskID, "already_completed_this_session")
 		// Recurse to try the next task. runIteration stays the same since
 		// we didn't actually run anything.
-		return l.selectNextTaskInner(ctx, p, attempts+1)
+		return l.selectNextTaskInner(ctx, p, attempts+1, waited)
 	}
 
 	lastID, _ := l.state.Read("last_task_id")
@@ -137,5 +142,5 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		id:      taskID,
 		title:   nextTask,
 		changed: changed,
-	}, actionProceed
+	}, actionProceed, waited
 }

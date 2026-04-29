@@ -35,9 +35,10 @@ type completeTaskParams struct {
 
 // completeTaskOut carries the results of completeTask back to Run().
 type completeTaskOut struct {
-	action postSignalAction
-	ct     *CompletedTask
-	merged bool
+	action   postSignalAction
+	ct       *CompletedTask
+	merged   bool
+	prNumber int
 }
 
 // postSignalAction describes the outcome of post-signal processing.
@@ -226,7 +227,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 					}
 					_ = l.taskBackend.CloseTask(p.taskID, closeReason)
 					l.git.TagTaskEnd(p.taskID)
-					l.execRunPostTask(ctx, p.taskID, prNum, merged)
 					if p.notify {
 						if merged {
 							notify.TaskMerged(p.taskID, p.nextTask, time.Now())
@@ -234,7 +234,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 							notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary, time.Now())
 						}
 					}
-					return completeTaskOut{action: signalSkipped, merged: merged}
+					return completeTaskOut{action: signalSkipped, merged: merged, prNumber: prNum}
 				}
 				if prState == git.PRStateMerged {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged — closing bead", prNum)
@@ -243,11 +243,10 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 					_ = l.taskBackend.CloseTask(p.taskID, closeReason)
 					l.persistCompleted(p.taskID, true)
 					l.git.TagTaskEnd(p.taskID)
-					l.execRunPostTask(ctx, p.taskID, prNum, true)
 					if p.notify {
 						notify.TaskMerged(p.taskID, p.nextTask, time.Now())
 					}
-					return completeTaskOut{action: signalSkipped, merged: true}
+					return completeTaskOut{action: signalSkipped, merged: true, prNumber: prNum}
 				}
 			}
 		}
@@ -276,7 +275,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			}
 		}
 		l.git.TagTaskEnd(p.taskID)
-		l.execRunPostTask(ctx, p.taskID, 0, false)
 		if p.notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary, time.Now())
 		}
@@ -432,14 +430,12 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				l.persistCompleted(p.taskID, false)
 			}
 			l.git.TagTaskEnd(p.taskID)
-			l.execRunPostTask(ctx, p.taskID, prNumber, false)
-			return completeTaskOut{action: signalComplete, ct: &ct}
+			return completeTaskOut{action: signalComplete, ct: &ct, prNumber: prNumber}
 		}
 		// Actual test failures — leave task open for manual investigation.
 		l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
 		l.git.TagTaskEnd(p.taskID)
-		l.execRunPostTask(ctx, p.taskID, prNumber, false)
-		return completeTaskOut{action: signalComplete}
+		return completeTaskOut{action: signalComplete, prNumber: prNumber}
 	}
 
 	// Close the task based on merge outcome.
@@ -476,8 +472,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		}
 	}
 
-	l.execRunPostTask(ctx, p.taskID, prNumber, merged)
-
 	if p.notify {
 		if merged {
 			notify.TaskMerged(p.taskID, p.nextTask, time.Now())
@@ -486,7 +480,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		}
 	}
 
-	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged}
+	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged, prNumber: prNumber}
 }
 
 // verifyCompletion delegates to the VerifyHook when set, otherwise runs

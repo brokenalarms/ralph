@@ -506,6 +506,7 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 		nextTask:   "Fix bug",
 		ralphDir:   ralphDir,
 	})
+	l.postTaskAndMaybeEvolve(context.Background(), "ralph-retry1", out.prNumber, out.merged)
 
 	// The task should be closed (finalizePR handles close).
 	backend.CloseMu.Lock()
