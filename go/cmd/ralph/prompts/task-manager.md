@@ -15,6 +15,25 @@ specs in `docs/specs/` and breaking work into beads. Present the summary
 before addressing whatever the user's first message is, then respond to
 their message normally.
 
+**Recent-closure audit check (non-blocking):** After presenting the startup
+summary, check for unaudited bead closures:
+
+1. Read `{{RALPH_DIR}}/last-audit.timestamp` (may not exist — treat as epoch 0
+   if missing). The file contains a Unix timestamp of the last completed or
+   skipped audit.
+2. Run `bd list --status=closed` and identify beads whose close timestamp is
+   after the marker value.
+3. If any unaudited closures exist, append this block to your first response:
+
+   > **Recent closures since last audit (N beads):** ralph-xxx, ralph-yyy …
+   > Audit these? (`yes` / `no` / `skip` — *skip marks as audited without running*)
+
+   If N ≥ 10, add a note: *"(window is large — audit will read N diffs)"*
+4. If no unaudited closures exist, remain silent — do not mention the audit.
+
+The audit prompt is non-blocking: after appending it, respond to the user's
+first real message normally. Do not wait for an answer before continuing.
+
 <startup-context>
 {{STARTUP_CONTEXT}}
 </startup-context>
@@ -161,6 +180,41 @@ lessons all belong in in-repo documentation where they are permanent and
 accessible to every tool that reads the repo. The documentation hierarchy
 is: CLAUDE.md references AGENTS.md, AGENTS.md is a table of contents
 for docs/.
+
+## Recent-closure audit
+
+When the user answers `yes` to the audit prompt, run the audit for every bead
+in the unaudited window:
+
+1. Fetch the bead's acceptance criteria via `bd show <id>`.
+2. Locate the merge commit(s): check the bead's `external-ref` field first; if
+   absent, run `git log --grep=<id> --oneline` in the project directory.
+3. Read the diff for those commits: `git show <sha>` or `git diff <sha>^..<sha>`.
+4. For each AC criterion, verify it is **genuinely satisfied** in the diff —
+   not worked around, not silently skipped, not papered over.
+5. Flag any of these as mismatches:
+   - Stub-only changes (real implementation replaced by a no-op or placeholder)
+   - Deleted tests (tests that previously exercised the behavior are removed)
+   - AC criteria silently dropped — the diff does not address the criterion at all
+6. Present findings with: bead ID, which specific AC criterion failed, what the
+   diff actually did vs. what was required.
+7. When all beads are audited, write the marker:
+   `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
+
+**Token-cost rationale (do not trim):** Opus on a first pass with no
+verification step still misinterprets work — an audit catches compounding errors
+before they accumulate. The token cost was discussed and accepted. Do NOT
+optimize by sampling beads, skipping diff reads, or relying on commit messages
+instead of diffs. Commit messages describe intent; diffs show reality.
+
+### Dismiss semantics
+
+- `yes` → run the full audit as above; write marker on completion
+- `no` → skip the audit for this session; do NOT write the marker (user gets
+  re-prompted next session — they can ignore indefinitely)
+- `skip` → no audit, write marker immediately:
+  `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
+  (treated as audited; no re-prompt for these beads)
 
 ## Constraints
 
