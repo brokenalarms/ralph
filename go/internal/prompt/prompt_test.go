@@ -1189,3 +1189,85 @@ func TestBuildPrompt_RebaseBaselineInstructionPresentWithStaleAttemptHistory(t *
 		t.Error("prompt must explicitly prohibit reverting rebased changes")
 	}
 }
+
+// Proves: bead-creation.md gates substantive bead creation on a pre-creation
+// architecture echo — the task manager must emit the proposed approach and wait
+// for explicit user confirmation before calling bd create.
+func TestBeadCreation_PreCreationArchitectureEcho(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
+	if err != nil {
+		t.Fatalf("reading bead-creation.md: %v", err)
+	}
+	s := string(content)
+	lower := strings.ToLower(s)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Pre-creation architecture echo", "must have a named Pre-creation architecture echo section"},
+		{"feature", "trigger conditions must include feature type"},
+		{"refactor", "trigger conditions must include refactor/extraction scope tasks"},
+		{"clearly identified", "must distinguish clearly-identified cause (exempt) from unclear cause (trigger)"},
+		{"multiple", "trigger conditions must include bugs with multiple plausible fix paths"},
+		{"files and functions", "echo contents must require listing files and functions to be modified"},
+		{"shape", "echo contents must require describing the shape of the change"},
+		{"call-site", "echo contents must require describing call-site impact"},
+		{"ac sketch", "echo contents must require an AC sketch"},
+		{"explicit", "must require waiting for explicit user confirmation before bd create"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	// Section placement: echo section must appear before 'Creating beads'
+	echoIdx := strings.Index(s, "Pre-creation architecture echo")
+	creatingIdx := strings.Index(s, "Creating beads")
+	if echoIdx < 0 {
+		t.Fatal("Pre-creation architecture echo section not found")
+	}
+	if creatingIdx < 0 {
+		t.Fatal("Creating beads section not found")
+	}
+	if echoIdx > creatingIdx {
+		t.Error("Pre-creation architecture echo section must appear before 'Creating beads'")
+	}
+}
+
+// Proves: bead-creation.md requires a minimal DOM markup repro in the description
+// for all UI/DOM/visual bug beads, independent of whether the architecture echo fires.
+func TestBeadCreation_DOMToyCase(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
+	if err != nil {
+		t.Fatalf("reading bead-creation.md: %v", err)
+	}
+	s := string(content)
+	lower := strings.ToLower(s)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"ui/dom", "must name UI/DOM/visual bug beads as the target scope"},
+		{"constructed repro", "must specify the constructed-repro path when user provides no markup"},
+		{"⚠️", "constructed repro must use the ⚠️ marker as specified"},
+		{"verbatim", "must require verbatim inclusion of user-pasted markup"},
+		{"infer", "rationale must explain agents infer/invent their own version of the problem without a toy case"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	// DOM toy case must appear inside the 'Creating beads' section (after its header)
+	creatingIdx := strings.Index(s, "### Creating beads")
+	domIdx := strings.Index(s[creatingIdx:], "DOM")
+	if creatingIdx < 0 || domIdx < 0 {
+		t.Error("DOM toy case requirement must appear within the 'Creating beads' section")
+	}
+}

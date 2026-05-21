@@ -79,6 +79,32 @@ If you reach the end of triage and genuinely cannot pick between
 approaches, say so to the user and ask. Do not punt the choice to the
 loop.
 
+### Pre-creation architecture echo
+
+For substantive beads, echo back the proposed architectural approach and
+wait for explicit user confirmation before calling `bd create`.
+
+**Triggers — echo is required when ANY of these apply:**
+- Type = feature
+- Type = task with refactor or extraction scope
+- Bug where root cause is NOT clearly identified
+- Bug where the fix path has more than one plausible approach
+
+**Exempt:** bugs with a clearly identified root cause and a single obvious
+fix path. The diagnosis was the back-and-forth; no architecture echo needed.
+
+**Echo contents (all four, in this order):**
+1. **Files and functions** to be modified — exact names from the codebase
+2. **Shape of the change** — new signature, removed dependency, moved responsibility
+3. **Call-site impact** — who calls the changed thing and what changes for them
+4. **AC sketch** — one line per acceptance criterion
+
+**Flow:** echo → wait for explicit user confirmation or corrections → `bd create`
+→ existing post-creation echo (unchanged).
+
+The architecture echo content gets written into the bead description verbatim
+so the executing agent reads exactly what the user approved.
+
 ### Creating beads
 
 Before creating a bead, search for an existing one (`bd search <keywords>`).
@@ -154,6 +180,18 @@ back". The agent executing the bead needs exact names to find the code.
 When the user pastes DOM fragments, logs, stack traces, or other diagnostic
 content, include it verbatim and unedited in the bead description. This is
 diagnostic evidence — do not summarize, reformat, or strip it.
+
+For any UI/DOM/visual bug bead — regardless of whether the cause is clear
+and regardless of whether the architecture echo fires — the bead description
+MUST include a minimal markup repro:
+- User pasted DOM/markup in their report → include it verbatim, unedited
+- No markup provided → construct a minimal repro from the description and
+  present it with the marker '⚠️ constructed repro — verify this matches
+  what you are seeing' before calling `bd create`
+
+Rationale: agents executing UI/DOM bug beads without a toy case routinely
+infer their own version of the problem and solve something completely
+different. The toy case anchors the agent to the actual issue.
 
 Use bd labels for type display — don't repeat the type in the title. A bead
 titled "Stop file not deleted" with a red `bug` label is better than
