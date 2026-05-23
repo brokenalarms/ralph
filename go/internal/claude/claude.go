@@ -206,6 +206,12 @@ var IterationDisallowedTools = []string{
 	// claude-mem MCP tools — inherited from the host session but the agent
 	// wastes iterations on memory retrieval loops instead of writing code.
 	"mcp__plugin_claude-mem_mcp-search__*",
+
+	// claude-mem skills via the Skill tool — the Skill tool can invoke any
+	// registered slash command. Blocking at the Skill layer prevents the agent
+	// from loading skill instructions that then attempt the blocked MCP tools,
+	// wasting the iteration on a doomed memory-retrieval loop.
+	"Skill(claude-mem:*)",
 }
 
 // CmdFactory builds the exec.Cmd that Run() will start. Receives the

@@ -78,9 +78,27 @@ func extractAssistantText(msg *streamMsg) string {
 	for _, c := range msg.Content {
 		if c.Type == "tool_use" {
 			parts = append(parts, formatToolUse(c))
+			if warn := blockedSkillWarning(c); warn != "" {
+				parts = append(parts, warn)
+			}
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// blockedSkillWarning returns a warning log line when a Skill tool_use
+// invokes a claude-mem:* skill. This is the stream-filter fallback for
+// cases where the claude CLI does not honor the Skill(claude-mem:*) pattern
+// in --disallowedTools. The warning is visible in the filtered loop.log.
+func blockedSkillWarning(c streamContent) string {
+	if c.Name != "Skill" {
+		return ""
+	}
+	skill, _ := c.Input["skill"].(string)
+	if strings.HasPrefix(skill, "claude-mem:") {
+		return "[warn] agent invoked blocked skill: " + skill
+	}
+	return ""
 }
 
 // formatToolUse returns a short summary of a tool invocation.
