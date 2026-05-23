@@ -255,6 +255,26 @@ func TestExecutionBD_RequiresTDD(t *testing.T) {
 	}
 }
 
+// Proves: execution-bd.md contains an explicit Working directory section that
+// prohibits absolute-path cd and orchestrator-owned ralph:* npm scripts.
+func TestExecutionBD_WorkingDirectorySection(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	s := string(content)
+	lower := strings.ToLower(s)
+	if !strings.Contains(lower, "working directory") {
+		t.Error("execution-bd.md must contain a 'Working directory' section")
+	}
+	if !strings.Contains(s, "npm run ralph:") {
+		t.Error("execution-bd.md must explicitly prohibit npm run ralph:* scripts")
+	}
+	if !strings.Contains(s, "CWD") && !strings.Contains(s, "cd /absolute") {
+		t.Error("execution-bd.md must explain the risk of absolute-path cd (mention CWD or cd /absolute)")
+	}
+}
+
 // Proves: attempt history is injected into the prompt when previous
 // attempts exist on the current task.
 func TestBuildPrompt_IncludesAttemptHistory(t *testing.T) {

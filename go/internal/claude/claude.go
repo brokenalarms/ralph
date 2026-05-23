@@ -185,6 +185,24 @@ var IterationDisallowedTools = []string{
 	// execution-bd.md also explicitly forbids .beads/ reads as a fallback.
 	"Read(*.beads*)",
 
+	// Block absolute-path cd escapes. The agent's CWD is set to the worktree;
+	// cd /abs/path would change it to the project root or another directory,
+	// causing tools like tsx to pick up the wrong tsconfig and compile with the
+	// wrong JSX factory. Relative cd (cd subdir) remains allowed.
+	// The leading-wildcard form catches cd chained after another command prefix.
+	"Bash(cd /Users/*)",
+	"Bash(*cd /Users/*)",
+	"Bash(cd /home/*)",
+	"Bash(*cd /home/*)",
+	"Bash(cd /tmp/*)",
+	"Bash(*cd /tmp/*)",
+
+	// Block orchestrator-owned ralph:* npm scripts. The loop manages the
+	// ralph:verify and ralph:post-task lifecycle; agents must only run 'npm test'.
+	// The leading-wildcard form catches invocations chained after a prefix.
+	"Bash(npm run ralph:*)",
+	"Bash(*npm run ralph:*)",
+
 	// claude-mem MCP tools — inherited from the host session but the agent
 	// wastes iterations on memory retrieval loops instead of writing code.
 	"mcp__plugin_claude-mem_mcp-search__*",
