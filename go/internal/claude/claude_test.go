@@ -2237,6 +2237,46 @@ func isDisallowedBash(disallowed []string, cmd string) bool {
 	return false
 }
 
+// Verifies that IterationDisallowedTools blocks Skill invocations for all
+// claude-mem:* skills. The Skill tool can invoke any registered slash command;
+// claude-mem:* skills waste iterations on memory-retrieval loops instead of
+// writing code, and their MCP tool calls would be blocked anyway.
+func TestDisallowedTools_BlocksClaudeMemSkills(t *testing.T) {
+	// AC1: IterationDisallowedTools must contain a Skill(claude-mem:*) pattern.
+	joined := strings.Join(IterationDisallowedTools, "\n")
+	if !strings.Contains(joined, "Skill(claude-mem:") {
+		t.Error("IterationDisallowedTools must contain a Skill(claude-mem:*) pattern")
+	}
+
+	// AC2: specific claude-mem skills must be blocked.
+	for _, skill := range []string{"claude-mem:mem-search", "claude-mem:do"} {
+		if !isDisallowedSkill(IterationDisallowedTools, skill) {
+			t.Errorf("IterationDisallowedTools must block Skill invocation for %q", skill)
+		}
+	}
+
+	// Non-claude-mem skills must not be blocked.
+	if isDisallowedSkill(IterationDisallowedTools, "simplify") {
+		t.Error("IterationDisallowedTools must NOT block non-claude-mem Skill invocations")
+	}
+}
+
+// isDisallowedSkill reports whether skillName matches any Skill(...) pattern in
+// the disallowed list using the same glob semantics the claude CLI applies.
+// Pattern "Skill(claude-mem:*)" → matches any skill name starting with "claude-mem:".
+func isDisallowedSkill(disallowed []string, skillName string) bool {
+	for _, pattern := range disallowed {
+		if !strings.HasPrefix(pattern, "Skill(") || !strings.HasSuffix(pattern, ")") {
+			continue
+		}
+		inner := pattern[len("Skill(") : len(pattern)-1]
+		if matchesGlob(inner, skillName) {
+			return true
+		}
+	}
+	return false
+}
+
 // matchesGlob performs simple prefix/suffix glob matching for patterns
 // that may start with '*' (match anywhere) or not (match from start).
 // A trailing '*' matches any suffix; no trailing '*' requires exact suffix match.

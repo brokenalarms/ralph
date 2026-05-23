@@ -411,6 +411,38 @@ func TestColorTag_Signal(t *testing.T) {
 	}
 }
 
+// Verifies that extractStreamText emits a [warn] warning line when the agent
+// invokes Skill with a claude-mem:* skill name. This is the stream-filter
+// fallback for when the claude CLI does not enforce the Skill(claude-mem:*)
+// pattern in --disallowedTools at the API layer.
+func TestExtractStreamText_BlockedClaudeMemSkillWarning(t *testing.T) {
+	tests := []struct {
+		skill string
+	}{
+		{"claude-mem:mem-search"},
+		{"claude-mem:do"},
+		{"claude-mem:make-plan"},
+	}
+
+	for _, tt := range tests {
+		line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"` + tt.skill + `","args":""}}]}}`
+		got := extractStreamText(line)
+		wantWarn := "[warn] agent invoked blocked skill: " + tt.skill
+		if !strings.Contains(got, wantWarn) {
+			t.Errorf("extractStreamText for Skill(%q) must contain %q, got %q", tt.skill, wantWarn, got)
+		}
+	}
+}
+
+// Verifies that non-claude-mem Skill invocations do not produce a warning.
+func TestExtractStreamText_NonClaudeMemSkillNoWarning(t *testing.T) {
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"simplify","args":""}}]}}`
+	got := extractStreamText(line)
+	if strings.Contains(got, "[warn]") {
+		t.Errorf("non-claude-mem Skill should not produce a warning, got %q", got)
+	}
+}
+
 // Verifies that tool tags like [Edit], [Read], [Bash] use bright blue
 // so they stand out clearly in the stream log on dark terminals and mobile.
 func TestColorTag_ToolUsesBrightBlue(t *testing.T) {
