@@ -7,6 +7,11 @@
 ## Your task this iteration
 {{TASK_PROMPT}}
 
+## Working directory
+- Your CWD is {{WORK_DIR}}. Never run `cd /absolute/path` — this changes the CWD away from the worktree and causes tools like `tsx` to pick up the wrong `tsconfig.json`, producing phantom build errors.
+- Relative `cd subdir` within the worktree is allowed.
+- Never invoke `npm run ralph:*` scripts (e.g. `ralph:verify`, `ralph:post-task`, `ralph:complete`). These are orchestrator-owned. For running tests use `npm test` (or the project's equivalent test command) only.
+
 ## Invariants
 - Work only in the worktree at {{WORK_DIR}}. Do not create or modify files outside this directory.
 - NEVER create directories named after task IDs.

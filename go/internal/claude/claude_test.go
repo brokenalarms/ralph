@@ -2173,6 +2173,97 @@ func TestDisallowedTools_BlocksSQLClientsAndBeadsReads(t *testing.T) {
 	}
 }
 
+// Verifies that IterationDisallowedTools blocks absolute-path cd escapes and
+// orchestrator-owned ralph:* npm scripts. Agents must stay in their worktree
+// CWD and cannot invoke package.json scripts reserved for the orchestrator.
+func TestDisallowedTools_BlocksCdEscapeAndRalphScripts(t *testing.T) {
+	joined := strings.Join(IterationDisallowedTools, "\n")
+
+	// AC4: chained absolute-path cd (e.g. "cd /Users/... && tsx ...") is blocked
+	if !strings.Contains(joined, "Bash(cd /Users/") {
+		t.Error("IterationDisallowedTools must block bare 'cd /Users/*'")
+	}
+	if !strings.Contains(joined, "Bash(*cd /Users/") {
+		t.Error("IterationDisallowedTools must block wildcard-prefixed 'cd /Users/*'")
+	}
+
+	// AC5: direct and chained npm run ralph:* invocations are blocked
+	if !strings.Contains(joined, "Bash(npm run ralph:") {
+		t.Error("IterationDisallowedTools must block bare 'npm run ralph:*'")
+	}
+	if !strings.Contains(joined, "Bash(*npm run ralph:") {
+		t.Error("IterationDisallowedTools must block wildcard-prefixed 'npm run ralph:*'")
+	}
+
+	// AC4: the specific incident command must be blocked
+	cmd := "cd /Users/daniel/Developer/tabi && tsx tests/foo.ts"
+	if !isDisallowedBash(IterationDisallowedTools, cmd) {
+		t.Errorf("IterationDisallowedTools must reject %q", cmd)
+	}
+
+	// AC5: direct ralph:verify invocation must be blocked
+	ralphVerify := "npm run ralph:verify"
+	if !isDisallowedBash(IterationDisallowedTools, ralphVerify) {
+		t.Errorf("IterationDisallowedTools must reject %q", ralphVerify)
+	}
+
+	// AC6: relative cd within worktree must NOT be blocked
+	relativeCD := "cd subdir && ls"
+	if isDisallowedBash(IterationDisallowedTools, relativeCD) {
+		t.Errorf("IterationDisallowedTools must NOT reject relative-path cd %q", relativeCD)
+	}
+
+	// AC7: 'npm test' must NOT be blocked
+	npmTest := "npm test"
+	if isDisallowedBash(IterationDisallowedTools, npmTest) {
+		t.Errorf("IterationDisallowedTools must NOT reject %q", npmTest)
+	}
+}
+
+// isDisallowedBash reports whether cmd matches any Bash(...) pattern in the
+// disallowed list using the same glob semantics claude CLI applies.
+// Pattern "Bash(cd /Users/*)" → must match cmd starting with "cd /Users/".
+// Pattern "Bash(*cd /Users/*)" → must match cmd containing "cd /Users/".
+func isDisallowedBash(disallowed []string, cmd string) bool {
+	for _, pattern := range disallowed {
+		if !strings.HasPrefix(pattern, "Bash(") || !strings.HasSuffix(pattern, ")") {
+			continue
+		}
+		inner := pattern[len("Bash(") : len(pattern)-1]
+		if matchesGlob(inner, cmd) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesGlob performs simple prefix/suffix glob matching for patterns
+// that may start with '*' (match anywhere) or not (match from start).
+// A trailing '*' matches any suffix; no trailing '*' requires exact suffix match.
+func matchesGlob(pattern, s string) bool {
+	leadWild := strings.HasPrefix(pattern, "*")
+	trailWild := strings.HasSuffix(pattern, "*")
+
+	core := pattern
+	if leadWild {
+		core = core[1:]
+	}
+	if trailWild {
+		core = core[:len(core)-1]
+	}
+
+	if leadWild && trailWild {
+		return strings.Contains(s, core)
+	}
+	if leadWild {
+		return strings.HasSuffix(s, core)
+	}
+	if trailWild {
+		return strings.HasPrefix(s, core)
+	}
+	return s == core
+}
+
 // Verifies that every Emit call with Domain: logging.LLM includes the Model
 // from RunConfig. Uses CmdFactory to run a real process so the full Run()
 // path fires, including the "Claude started (PID: ...)" log line.
