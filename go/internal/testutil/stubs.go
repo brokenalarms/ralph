@@ -21,8 +21,9 @@ type StubBackend struct {
 	FullContext        string
 	SkippedTask        string
 	SkipReason         string
-	ResumeIDSet        string // last value passed to SetResumeTaskID
-	HasRemainingResult *bool  // when non-nil, HasRemaining returns this value instead of Remaining > 0
+	ResumeIDSet        string   // last value passed to SetResumeTaskID
+	HasRemainingResult *bool    // when non-nil, HasRemaining returns this value instead of Remaining > 0
+	OpenDependents     []string // returned by GetOpenDependents for any task
 }
 
 func (s *StubBackend) Init() error { return nil }
@@ -64,6 +65,10 @@ func (s *StubBackend) SetExternalRef(_, _ string) error           { return nil }
 func (s *StubBackend) AppendNotes(_, _ string) error              { return nil }
 func (s *StubBackend) SetMetadata(_, _, _ string) error           { return nil }
 func (s *StubBackend) GetMetadata(_, _ string) (string, error)    { return "", nil }
+func (s *StubBackend) GetOpenDependents(_ string) ([]string, error) {
+	return s.OpenDependents, nil
+}
+
 func (s *StubBackend) Label() string {
 	if s.BackendLabel != "" {
 		return s.BackendLabel

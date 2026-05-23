@@ -14,6 +14,7 @@ const (
 	actionProceed loopAction = iota // continue to next phase
 	actionRetry                     // re-run the current iteration
 	actionDone                      // exit the loop
+	actionSkip                      // task skipped by analyzer, continue to next task
 )
 
 // taskContext holds the selected task and metadata for one iteration.

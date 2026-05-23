@@ -673,4 +673,33 @@ func (b *BD) GetMetadata(id, key string) (string, error) {
 	return items[0].Metadata[key], nil
 }
 
+// GetOpenDependents returns the IDs of open issues that depend on the given task.
+// It calls bd show <id> --json and parses the dependents array, keeping only
+// non-closed entries. Returns nil on any error or when no open dependents exist.
+func (b *BD) GetOpenDependents(id string) ([]string, error) {
+	if id == "" {
+		return nil, nil
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return nil, err
+	}
+	var items []struct {
+		Dependents []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"dependents"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return nil, nil
+	}
+	var openIDs []string
+	for _, dep := range items[0].Dependents {
+		if dep.Status != "closed" && dep.ID != "" {
+			openIDs = append(openIDs, dep.ID)
+		}
+	}
+	return openIDs, nil
+}
+
 func (b *BD) Label() string { return "beads" }

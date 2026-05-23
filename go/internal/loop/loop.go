@@ -346,9 +346,17 @@ func (l *Loop) SessionTasks() []CompletedTask {
 // skipTask sets the task back to open in bd, records the reason as a comment,
 // and adds the ID to both the backend's in-memory skip set and the state.json
 // skipped_tasks list so it stays excluded from future selection.
-func (l *Loop) skipTask(id, reason string) {
+// Returns (true, haltReason) when the skip is escalated because the task has
+// open dependents that would be stranded; (false, "") on a normal successful skip.
+func (l *Loop) skipTask(id, reason string) (bool, string) {
 	if id == "" {
-		return
+		return false, ""
+	}
+	if l.taskBackend != nil {
+		deps, err := l.taskBackend.GetOpenDependents(id)
+		if err == nil && len(deps) > 0 {
+			return true, "skip_would_strand_dependents:" + deps[0]
+		}
 	}
 	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
 	if err := l.taskBackend.SkipTask(id, reason); err != nil {
@@ -359,6 +367,7 @@ func (l *Loop) skipTask(id, reason string) {
 	}
 	skipped, _ := l.state.GetSkippedTasks()
 	l.taskBackend.SetSkippedIDs(skipped)
+	return false, ""
 }
 
 // ensureActiveReviewers populates l.activeReviewers on first call. Subsequent
@@ -493,6 +502,9 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 	if halt {
 		return agentRunResult{action: actionDone, iterAction: iterAction}
 	}
+	if iterAction == analyzer.Skip {
+		return agentRunResult{action: actionSkip, iterAction: iterAction}
+	}
 
 	return agentRunResult{
 		prep:       prep,
@@ -539,6 +551,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	var lastTaskMerged bool
 	var sessionTasks []CompletedTask
 	var currentTaskID string
+	var consecutiveSkipCount int
 	st, _ := l.state.Load()
 	iteration := st.Iteration
 
@@ -666,8 +679,22 @@ iterLoop:
 			if agentRun.action == actionRetry {
 				continue
 			}
+			if agentRun.action == actionSkip {
+				// Task skipped by analyzer. Track consecutive skips for cascade detection.
+				consecutiveSkipCount++
+				if consecutiveSkipCount >= 3 {
+					haltReason := fmt.Sprintf("cascade_skipped:%d", consecutiveSkipCount)
+					l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", haltReason)
+					l.state.Write("status", "halted_"+haltReason)
+					break iterLoop
+				}
+				l.state.WriteRunBranch("")
+				currentTaskID = ""
+				continue iterLoop
+			}
 			break
 		}
+		consecutiveSkipCount = 0
 
 		// ── Complete task (post-signal pipeline) ──
 		if agentRun.result.SignalDetected {

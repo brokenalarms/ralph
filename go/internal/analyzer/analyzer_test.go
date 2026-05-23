@@ -288,8 +288,10 @@ func TestFilesUnderSuffixedTestDirsCountAsTestFiles(t *testing.T) {
 	}
 }
 
-// Proves: ralph detects repeated identical errors across iterations and
-// halts after 3 occurrences of the same error for the same task key.
+// Proves: ralph detects repeated identical errors and returns Skip on the first
+// iteration that triggers the threshold (3 occurrences accumulated across
+// iterations for the same task). The second consecutive iteration that triggers
+// the threshold escalates to Halt with reason repeated_error_recurring.
 func TestRepeatedErrorFingerprintTriggersHalt(t *testing.T) {
 	a := New()
 	log := assistantTextMsg("Error: cannot find module 'foo'\nsome other output")
@@ -297,18 +299,25 @@ func TestRepeatedErrorFingerprintTriggersHalt(t *testing.T) {
 	state := IterationState{IterationLog: log, TaskKey: "test-task-1"}
 
 	r := a.Analyze(state)
-	if r.Action == Halt && r.Reason == "repeated_error" {
-		t.Fatal("first call should not trigger repeated_error")
+	if r.Action == Skip && r.Reason == "repeated_error" {
+		t.Fatal("first call should not trigger repeated_error (count only 1)")
 	}
 
 	r = a.Analyze(state)
-	if r.Action == Halt && r.Reason == "repeated_error" {
-		t.Fatal("second call should not trigger repeated_error")
+	if r.Action == Skip && r.Reason == "repeated_error" {
+		t.Fatal("second call should not trigger repeated_error (count only 2)")
 	}
 
+	// Third call: count hits 3 — first detection, returns Skip (not Halt yet).
 	r = a.Analyze(state)
-	if r.Action != Halt || r.Reason != "repeated_error" {
-		t.Errorf("third call: got %+v, want Halt/repeated_error", r)
+	if r.Action != Skip || r.Reason != "repeated_error" {
+		t.Errorf("third call: got %+v, want Skip/repeated_error", r)
+	}
+
+	// Fourth call: same task, second consecutive iteration with repeated_error — escalates to Halt.
+	r = a.Analyze(state)
+	if r.Action != Halt || r.Reason != "repeated_error_recurring" {
+		t.Errorf("fourth call: got %+v, want Halt/repeated_error_recurring", r)
 	}
 }
 
@@ -323,10 +332,18 @@ func TestErrorNormalizationCollapsesTimestampsAndUUIDs(t *testing.T) {
 
 	a.Analyze(IterationState{IterationLog: text1, TaskKey: "test-task-2"})
 	a.Analyze(IterationState{IterationLog: text2, TaskKey: "test-task-2"})
-	r := a.Analyze(IterationState{IterationLog: text3, TaskKey: "test-task-2"})
 
-	if r.Action != Halt || r.Reason != "repeated_error" {
-		t.Errorf("normalized errors: got %+v, want Halt/repeated_error", r)
+	// Third call: count hits 3 — first detection, returns Skip (not Halt yet).
+	r := a.Analyze(IterationState{IterationLog: text3, TaskKey: "test-task-2"})
+	if r.Action != Skip || r.Reason != "repeated_error" {
+		t.Errorf("third call: got %+v, want Skip/repeated_error", r)
+	}
+
+	// Fourth call: same task, second consecutive — escalates to Halt.
+	text4 := assistantTextMsg("Error: 2026-03-23T12:00:00Z request aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee failed")
+	r = a.Analyze(IterationState{IterationLog: text4, TaskKey: "test-task-2"})
+	if r.Action != Halt || r.Reason != "repeated_error_recurring" {
+		t.Errorf("fourth call: got %+v, want Halt/repeated_error_recurring", r)
 	}
 }
 
@@ -432,6 +449,62 @@ func TestTestSaturationStillFiresWithinSameTask(t *testing.T) {
 	r := a.Analyze(testOnly)
 	if r.Action != Halt || r.Reason != "test_saturation" {
 		t.Errorf("3rd test-only iteration within same task: got %+v, want Halt/test_saturation", r)
+	}
+}
+
+// Proves: after a Skip on iteration 1, a second iteration with the same task
+// and same error returns Halt/repeated_error_recurring (not Skip again).
+func TestRepeatedError_SecondConsecutiveHaltsWithRecurring(t *testing.T) {
+	a := New()
+	errorLog := assistantTextMsg("Error: cannot find module 'foo'")
+	state := IterationState{IterationLog: errorLog, TaskKey: "task-consec"}
+
+	// Build up 3 occurrences of the same error (threshold).
+	a.Analyze(state)
+	a.Analyze(state)
+
+	// Third call: first detection → Skip.
+	r := a.Analyze(state)
+	if r.Action != Skip || r.Reason != "repeated_error" {
+		t.Fatalf("third call: got %+v, want Skip/repeated_error", r)
+	}
+
+	// Fourth call: same task, second consecutive repeated_error → Halt.
+	r = a.Analyze(state)
+	if r.Action != Halt || r.Reason != "repeated_error_recurring" {
+		t.Errorf("fourth call: got %+v, want Halt/repeated_error_recurring", r)
+	}
+}
+
+// Proves: a clean iteration between two Skip-triggering iterations resets the
+// consecutive counter, so the next error detection is Skip again, not Halt.
+func TestRepeatedError_CleanIterationResetsConsecutiveCounter(t *testing.T) {
+	a := New()
+	errorLog := assistantTextMsg("Error: cannot find module 'foo'")
+	cleanLog := assistantTextMsg("task completed successfully")
+	state := IterationState{IterationLog: errorLog, TaskKey: "task-reset"}
+
+	// Build to threshold and get first Skip.
+	a.Analyze(state)
+	a.Analyze(state)
+	r := a.Analyze(state)
+	if r.Action != Skip || r.Reason != "repeated_error" {
+		t.Fatalf("pre-reset: got %+v, want Skip/repeated_error", r)
+	}
+
+	// A clean iteration (no error lines) resets the consecutive counter to 0.
+	cleanState := IterationState{IterationLog: cleanLog, TaskKey: "task-reset", HasSignal: true}
+	r = a.Analyze(cleanState)
+	if r.Action == Halt {
+		t.Fatalf("clean iteration: should not halt, got %+v", r)
+	}
+
+	// errorHashes still has count >= 3, so the very next error iteration triggers
+	// repeated_error again. But because the consecutive counter was reset, it
+	// returns Skip (repeatedErrorIterations=1), not Halt.
+	r = a.Analyze(state)
+	if r.Action != Skip || r.Reason != "repeated_error" {
+		t.Errorf("first error after reset: got %+v, want Skip/repeated_error (not Halt)", r)
 	}
 }
 
