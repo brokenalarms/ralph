@@ -101,6 +101,10 @@ type Backend interface {
 	// GetMetadata returns the value of a custom metadata key on a task.
 	GetMetadata(id, key string) (string, error)
 
+	// GetOpenDependents returns the IDs of open issues that depend on the given task.
+	// Returns nil when there are no open dependents or when the query fails.
+	GetOpenDependents(id string) ([]string, error)
+
 	// Label returns a human-readable name for the backend.
 	Label() string
 }

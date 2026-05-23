@@ -22,6 +22,7 @@ const (
 	Continue Action = iota
 	Warn
 	Halt
+	Skip // first repeated_error in an iteration; escalates to Halt on second consecutive
 )
 
 // IterationState captures the git/signal state observed after an iteration,
@@ -38,10 +39,11 @@ type IterationState struct {
 // Analyzer tracks multi-iteration patterns and decides whether to continue,
 // warn, or halt the execution loop. Matches ralph.sh's analyze_iteration.
 type Analyzer struct {
-	stagnantCount int
-	testOnlyCount int
-	stuckCount    int
-	errorHashes   map[string]map[string]int // task_key → error_hash → count
+	stagnantCount            int
+	testOnlyCount            int
+	stuckCount               int
+	errorHashes              map[string]map[string]int // task_key → error_hash → count
+	repeatedErrorIterations  map[string]int            // task_key → consecutive repeated_error iteration count
 }
 
 // New creates an Analyzer with zeroed counters, matching ralph.sh's
@@ -83,10 +85,23 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 	}
 	a.stuckCount = 0
 
-	// --- Repeated error detection: same error fingerprint 3x → halt ---
+	// --- Repeated error detection: same error fingerprint 3x in one iteration ---
+	// First detection → Skip (give the agent one chance to recover after task skip).
+	// Second consecutive iteration with the same task triggering repeated_error → Halt.
 	if state.TaskKey != "" {
 		if a.checkRepeatedErrors(parsed.AssistantText, state.TaskKey) {
-			return Result{Action: Halt, Reason: "repeated_error"}
+			if a.repeatedErrorIterations == nil {
+				a.repeatedErrorIterations = make(map[string]int)
+			}
+			a.repeatedErrorIterations[state.TaskKey]++
+			if a.repeatedErrorIterations[state.TaskKey] >= 2 {
+				return Result{Action: Halt, Reason: "repeated_error_recurring",
+					Detail: fmt.Sprintf("consecutive iteration %d", a.repeatedErrorIterations[state.TaskKey])}
+			}
+			return Result{Action: Skip, Reason: "repeated_error"}
+		}
+		if a.repeatedErrorIterations != nil {
+			a.repeatedErrorIterations[state.TaskKey] = 0
 		}
 	}
 
@@ -325,6 +340,7 @@ func (a *Analyzer) ResetForNewTask() {
 	a.testOnlyCount = 0
 	a.stagnantCount = 0
 	a.stuckCount = 0
+	a.repeatedErrorIterations = nil
 }
 
 // ClearErrorHashes removes all recorded error hashes for a given task key,
