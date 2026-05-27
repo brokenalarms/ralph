@@ -227,6 +227,15 @@ type Runner struct {
 	OnTaskDetected OnTaskDetected
 	CmdFactory     CmdFactory
 
+	// ProjectDir is the repository root that agent spawns must NEVER chdir
+	// into. Run() rejects RunConfig.WorkDir values equal to ProjectDir or
+	// empty — the structural defense against "worktree leaked into main"
+	// failures where a misconfigured workDir falls back to the project root.
+	//
+	// May be empty in tests and in direct claude.Runner construction; in
+	// production it is set by agent.New() so all paths into Run() are guarded.
+	ProjectDir string
+
 	mu         sync.Mutex
 	stdinPipe  io.WriteCloser
 	filterStop chan struct{}
@@ -284,6 +293,14 @@ func UserInputMessage(content string) string {
 // Run spawns a Claude process, polls for signal files, and returns when the
 // process exits or a completion signal is detected. Mirrors ralph.sh run_claude.
 func (r *Runner) Run(cfg RunConfig) (Result, error) {
+	// Worktree invariant: refuse to spawn an agent in the project root or
+	// with an empty cwd. See Runner.ProjectDir for rationale.
+	if cfg.WorkDir == "" {
+		return Result{}, fmt.Errorf("agent spawn refused: WorkDir is empty (worktree setup must have failed)")
+	}
+	if r.ProjectDir != "" && cfg.WorkDir == r.ProjectDir {
+		return Result{}, fmt.Errorf("agent spawn refused: WorkDir == ProjectDir (%s) — worktree setup must have failed", cfg.WorkDir)
+	}
 	if cfg.Ctx == nil {
 		cfg.Ctx = context.Background()
 	}

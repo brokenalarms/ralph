@@ -660,10 +660,12 @@ func TestSetupTaskWorktree_LeavesLoopWorktreeAlone(t *testing.T) {
 	}
 }
 
-// On a non-git directory SetupTaskWorktree must error AND leave
-// r.workDir set to r.projectDir, so the caller's "fall back to project
-// dir" log isn't a lie.
-func TestSetupTaskWorktree_ErrorResetsWorkDirToProject(t *testing.T) {
+// On a non-git directory SetupTaskWorktree must error AND must NOT set
+// r.workDir to anything that would resolve to the project root. The
+// previous "fall back to project dir" behavior was the recurring source
+// of worktree contents leaking into main; callers now must treat any
+// error from SetupTaskWorktree as fatal.
+func TestSetupTaskWorktree_ErrorDoesNotSetWorkDirToProject(t *testing.T) {
 	tmp := t.TempDir()
 	mgr := newRepoForTest(Config{ProjectDir: tmp, RalphDir: filepath.Join(tmp, ".ralph"), BaseBranch: "main", Logger: &testLog{}}, nil)
 
@@ -671,8 +673,8 @@ func TestSetupTaskWorktree_ErrorResetsWorkDirToProject(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-git dir")
 	}
-	if mgr.workDir != tmp {
-		t.Errorf("workDir on error = %q, want projectDir %q", mgr.workDir, tmp)
+	if mgr.workDir == tmp {
+		t.Errorf("workDir on error must not equal projectDir (%q) — that was the bug", tmp)
 	}
 }
 

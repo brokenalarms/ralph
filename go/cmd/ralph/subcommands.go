@@ -24,9 +24,11 @@ import (
 )
 
 // newInteractiveAgent creates a centralized agent runner for interactive
-// sessions (review, task manager).
-func newInteractiveAgent(log *logging.Logger, model string) *agent.Runner {
-	r := agent.New(log)
+// sessions (review, task manager). projectDir is the repository root that
+// the agent must NEVER chdir into — every agent spawn validates workDir
+// against it as the structural defense against "worktree leaked into main".
+func newInteractiveAgent(log *logging.Logger, projectDir, model string) *agent.Runner {
+	r := agent.New(log, projectDir)
 	r.Model = model
 	return r
 }
@@ -238,8 +240,27 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	r := newInteractiveAgent(log, reviewModel)
-	exitCode, err := r.Interactive(projectDir, systemPrompt)
+	// Spawn review inside an isolated worktree — never the project root.
+	// Mirrors `ralph task`: agents must not run with cwd == projectDir.
+	gm := git.New(git.Config{
+		ProjectDir: projectDir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		Logger:     log,
+	})
+	if err := gm.InitTask(context.Background()); err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "Review worktree setup failed: %v", err)
+		return 1
+	}
+	workDir := gm.GetWorkDir()
+	defer func() {
+		if workDir != projectDir && gm.LogOneline("origin/main", "HEAD") == "" {
+			gm.RemoveWorktree()
+		}
+	}()
+
+	r := newInteractiveAgent(log, projectDir, reviewModel)
+	exitCode, err := r.Interactive(workDir, systemPrompt)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Review session failed: %v", err)
 		return 1
@@ -350,8 +371,12 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		Logger:     log,
 	})
 	ctx := context.Background()
+	// Worktree invariant: never silently fall back to projectDir. If the
+	// worktree can't be set up, the agent must not run — that fallback is
+	// the recurring root cause of "work leaking into main".
 	if err := gm.InitTask(ctx); err != nil {
-		log.Emit(logging.Opts{Level: logging.Warn}, "Task worktree setup failed, falling back to project dir: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "Task worktree setup failed: %v", err)
+		return 1
 	}
 	workDir := gm.GetWorkDir()
 	defer func() {
@@ -368,7 +393,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	r := newInteractiveAgent(log, taskModel)
+	r := newInteractiveAgent(log, projectDir, taskModel)
 	exitCode, err := r.Interactive(workDir, systemPrompt)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Task manager failed: %v", err)

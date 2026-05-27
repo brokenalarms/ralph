@@ -167,13 +167,23 @@ func (r *repo) Init(ctx context.Context) error {
 	if err := r.SetupWorktree(ctx); err != nil {
 		return fmt.Errorf("worktree setup failed: %w", err)
 	}
+	// Worktree invariant: SetupWorktree must have assigned a real worktree
+	// path distinct from the project root. If this fails, there's a bug in
+	// the setup paths above — bail out before any caller can spawn an agent
+	// at the wrong cwd.
+	if r.workDir == "" || r.workDir == r.projectDir {
+		return fmt.Errorf("worktree setup post-condition failed: workDir=%q projectDir=%q", r.workDir, r.projectDir)
+	}
 	return nil
 }
 
 // SetupWorktree creates (or resumes) a git worktree for isolated work.
+//
+// On success, r.workDir is set to a fresh or resumed worktree path distinct
+// from r.projectDir. On error, r.workDir is left unchanged — callers MUST
+// treat any error from this function as fatal (do not read GetWorkDir() to
+// look for a fallback path). Init's post-condition check enforces this.
 func (r *repo) SetupWorktree(ctx context.Context) error {
-	r.workDir = r.projectDir
-
 	if !IsGitRepo(r.projectDir) {
 		return fmt.Errorf("not a git repo — ralph requires git")
 	}
@@ -277,6 +287,10 @@ func (r *repo) InitTask(ctx context.Context) error {
 	if err := r.SetupTaskWorktree(ctx); err != nil {
 		return fmt.Errorf("task worktree setup failed: %w", err)
 	}
+	// Worktree invariant — see Init for rationale. Same check, same reason.
+	if r.workDir == "" || r.workDir == r.projectDir {
+		return fmt.Errorf("task worktree setup post-condition failed: workDir=%q projectDir=%q", r.workDir, r.projectDir)
+	}
 	return nil
 }
 
@@ -285,16 +299,15 @@ func (r *repo) InitTask(ctx context.Context) error {
 // (`.ralph/worktrees/ralph-task-YYYYMMDD-NN`) per invocation so it can
 // run alongside the loop or another task manager without collision.
 //
-// On any error after the candidate paths are computed, r.workDir is
-// reset to r.projectDir so callers that fall back to the project dir
-// don't accidentally chdir into a non-existent path.
+// On error, r.workDir is left unchanged. Callers (subcommands.handleTask,
+// handleReview) MUST treat any error from this function as fatal — the
+// previous "silently fall back to project dir" behavior was the recurring
+// source of worktree contents leaking into main.
 //
 // Does NOT persist worktree_dir / worktree_branch to state — task
 // manager worktrees are ephemeral and must not interfere with the
 // loop's resume state.
 func (r *repo) SetupTaskWorktree(ctx context.Context) error {
-	r.workDir = r.projectDir
-
 	if !IsGitRepo(r.projectDir) {
 		return fmt.Errorf("not a git repo — ralph requires git")
 	}
@@ -354,7 +367,7 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 
 	if err := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", candidateBranch, candidateDir, "origin/"+defaultBranch); err != nil {
 		if err := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", candidateBranch, candidateDir, "HEAD"); err != nil {
-			// r.workDir already set to r.projectDir at the top — leave it.
+			// Leave r.workDir unchanged — caller must treat this as fatal.
 			return fmt.Errorf("failed to create task worktree: %w", err)
 		}
 	}

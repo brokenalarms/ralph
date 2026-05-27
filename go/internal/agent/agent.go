@@ -27,26 +27,56 @@ type Runner struct {
 	Logger         claude.Log
 	OnTaskDetected claude.OnTaskDetected
 	Model          string
-	Stdout         io.Writer
-	Stderr         io.Writer
-	inner          *claude.Runner
+	// ProjectDir is the repository root that agents must NEVER chdir into.
+	// All agent spawn paths (Run, Query, Interactive) reject workDir values
+	// that are empty or equal to ProjectDir. This is the chokepoint that
+	// enforces the worktree invariant — see the worktree-invariant docs in
+	// internal/git for the architectural rationale.
+	ProjectDir string
+	Stdout     io.Writer
+	Stderr     io.Writer
+	inner      *claude.Runner
 }
 
 // New creates a Runner that delegates to the underlying CLI.
-func New(logger claude.Log) *Runner {
+//
+// projectDir is the repository root. It is stored so every agent spawn can
+// verify cmd.Dir != projectDir before exec — preventing the "worktree leaked
+// into main" failure mode where a misconfigured workDir causes agents to
+// write into the main checkout.
+func New(logger claude.Log, projectDir string) *Runner {
 	r := &Runner{
-		Logger: logger,
+		Logger:     logger,
+		ProjectDir: projectDir,
 	}
 	r.inner = &claude.Runner{
-		Logger: logger,
+		Logger:     logger,
+		ProjectDir: projectDir,
 	}
 	return r
+}
+
+// checkWorkDir enforces the worktree invariant: agents must run in a
+// worktree, never in the project root and never with an empty cwd.
+// Called from Run, Query, and Interactive — every code path that spawns
+// an agent process.
+func (r *Runner) checkWorkDir(workDir string) error {
+	if workDir == "" {
+		return fmt.Errorf("agent spawn refused: workDir is empty (worktree setup must have failed)")
+	}
+	if r.ProjectDir != "" && workDir == r.ProjectDir {
+		return fmt.Errorf("agent spawn refused: workDir == projectDir (%s) — worktree setup must have failed", workDir)
+	}
+	return nil
 }
 
 // Run spawns a non-interactive agent process. This is the single code path
 // for iteration agents, fix agents, and any other long-running invocation
 // that polls for signal files.
 func (r *Runner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	if err := r.checkWorkDir(cfg.WorkDir); err != nil {
+		return claude.Result{}, err
+	}
 	r.inner.OnTaskDetected = r.OnTaskDetected
 	return r.inner.Run(cfg)
 }
@@ -65,6 +95,9 @@ func (r *Runner) InjectMessage(msg string) error {
 // Returns the raw response text. This is the single code path for all
 // prompt-response style invocations (no signal polling, no streaming).
 func (r *Runner) Query(ctx context.Context, workDir, prompt, model string, allowedTools []string) (string, error) {
+	if err := r.checkWorkDir(workDir); err != nil {
+		return "", err
+	}
 	args := []string{"--print"}
 	if model != "" {
 		args = append(args, "--model", model)
@@ -88,6 +121,9 @@ func (r *Runner) Query(ctx context.Context, workDir, prompt, model string, allow
 // stderr. This prevents the caller's subsequent log output from being
 // interleaved with the CLI's exit message (e.g. "Resume this session…").
 func (r *Runner) Interactive(workDir, systemPrompt string, extraArgs ...string) (int, error) {
+	if err := r.checkWorkDir(workDir); err != nil {
+		return 1, err
+	}
 	args := []string{"--permission-mode", "bypassPermissions", "--system-prompt", systemPrompt}
 	if r.Model != "" {
 		args = append(args, "--model", r.Model)
