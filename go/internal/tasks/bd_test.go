@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1703,6 +1704,120 @@ func TestBD_GetFullContext_IncludesDescriptionAndAC(t *testing.T) {
 	}
 	if !strings.Contains(ctx, "Auth passes all tests") {
 		t.Errorf("GetFullContext output must contain acceptance criteria, got: %q", ctx)
+	}
+}
+
+// Proves: ensureDoltPort writes a port in [49152, 65535] when dolt.port is unset.
+func TestBD_EnsureDoltPort_WritesPortWhenUnset(t *testing.T) {
+	var setCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "dolt.port" {
+			return "dolt.port is not set in config.yaml", nil
+		}
+		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "dolt.port" {
+			setCalled = true
+			port, _ := strconv.Atoi(args[3])
+			if port < 49152 || port > 65535 {
+				t.Errorf("port %d out of expected range [49152, 65535]", port)
+			}
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureDoltPort()
+	if !setCalled {
+		t.Error("expected bd config set dolt.port to be called when port is unset")
+	}
+}
+
+// Proves: ensureDoltPort is a no-op when dolt.port is already set.
+func TestBD_EnsureDoltPort_NoOpWhenAlreadySet(t *testing.T) {
+	var setCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "dolt.port" {
+			return "50000", nil
+		}
+		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "dolt.port" {
+			setCalled = true
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureDoltPort()
+	if setCalled {
+		t.Error("expected bd config set dolt.port NOT to be called when port is already set")
+	}
+}
+
+// Proves: ensureDoltPort is deterministic — same ProjectDir always produces the same port.
+func TestBD_EnsureDoltPort_Deterministic(t *testing.T) {
+	var ports []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "dolt.port" {
+			return "not set in config.yaml", nil
+		}
+		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "dolt.port" {
+			ports = append(ports, args[3])
+			return "", nil
+		}
+		return "", nil
+	}
+	b1 := &BD{ProjectDir: "/fixed/project/path", PromptsDir: t.TempDir(), RunBD: runner}
+	b1.ensureDoltPort()
+	b2 := &BD{ProjectDir: "/fixed/project/path", PromptsDir: t.TempDir(), RunBD: runner}
+	b2.ensureDoltPort()
+	if len(ports) != 2 {
+		t.Fatalf("expected 2 port writes, got %d", len(ports))
+	}
+	if ports[0] != ports[1] {
+		t.Errorf("ensureDoltPort is not deterministic: got %q then %q for same ProjectDir", ports[0], ports[1])
+	}
+}
+
+// Proves: ensureTasksExport writes '../beads-tasks.jsonl' when export.path is unset.
+func TestBD_EnsureTasksExport_WritesPathWhenUnset(t *testing.T) {
+	var setCalled bool
+	var setPath string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.path" {
+			return "export.path is not set in config.yaml", nil
+		}
+		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "export.path" {
+			setCalled = true
+			setPath = args[3]
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureTasksExport()
+	if !setCalled {
+		t.Error("expected bd config set export.path to be called when export.path is unset")
+	}
+	if setPath != "../beads-tasks.jsonl" {
+		t.Errorf("export.path = %q, want %q", setPath, "../beads-tasks.jsonl")
+	}
+}
+
+// Proves: ensureTasksExport is a no-op when export.path is already explicitly set.
+func TestBD_EnsureTasksExport_NoOpWhenAlreadySet(t *testing.T) {
+	var setCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.path" {
+			return "custom/path/issues.jsonl", nil
+		}
+		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "export.path" {
+			setCalled = true
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureTasksExport()
+	if setCalled {
+		t.Error("expected bd config set export.path NOT to be called when export.path is already set")
 	}
 }
 
