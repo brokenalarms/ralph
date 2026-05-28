@@ -248,6 +248,9 @@ func (r *repo) SetupWorktree(ctx context.Context) error {
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 	}
+	// Set tracking explicitly so git pull --rebase in post-task hooks works
+	// regardless of branch.autoSetupMerge in the user's environment.
+	_ = r.gitCmdErr(r.projectDir, "branch", "--set-upstream-to", "origin/"+r.resolveBaseBranch(), r.worktreeBranch)
 
 	r.gitCmd(r.workDir, "config", "rebase.updateRefs", "true")
 	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Worktree: %s (branch: %s)", r.workDir, r.worktreeBranch)
@@ -829,6 +832,9 @@ func (r *repo) PrepareForNextTask(nextTaskID, baseRef string) {
 		if r.state != nil {
 			_ = r.state.Write("worktree_branch", newBranch)
 		}
+		// Set tracking explicitly so git pull --rebase in post-task hooks
+		// works regardless of branch.autoSetupMerge in the user's environment.
+		_ = r.gitCmdErr(r.projectDir, "branch", "--set-upstream-to", "origin/"+r.resolveBaseBranch(), newBranch)
 		// Only delete if oldBranch has no commits beyond the default branch —
 		// i.e. all its work is already merged. Otherwise preserve it so
 		// in-progress work from a prior session isn't silently destroyed.
