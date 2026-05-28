@@ -1663,3 +1663,73 @@ func TestDefaultRunBD_LogWriteFailureIsBestEffort(t *testing.T) {
 	}
 }
 
+// Proves: GetFullContext calls bd show --json (not text mode) and excludes labels
+// from the agent's task context, preventing phase:* labels from misleading fresh agents.
+func TestBD_GetFullContext_ExcludesLabels(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"title":"Fix the auth module","description":"Rewrite auth","acceptance_criteria":"Auth passes tests","labels":["observability","phase:implementing"]}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ctx, err := b.GetFullContext("ralph-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ctx, "observability") {
+		t.Errorf("GetFullContext output must not contain labels, but found 'observability' in: %q", ctx)
+	}
+	if strings.Contains(ctx, "phase:implementing") {
+		t.Errorf("GetFullContext output must not contain labels, but found 'phase:implementing' in: %q", ctx)
+	}
+}
+
+// Proves: GetFullContext includes description and acceptance criteria in the agent context.
+func TestBD_GetFullContext_IncludesDescriptionAndAC(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"title":"Fix the auth module","description":"Rewrite auth flow","acceptance_criteria":"Auth passes all tests"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ctx, err := b.GetFullContext("ralph-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ctx, "Rewrite auth flow") {
+		t.Errorf("GetFullContext output must contain description, got: %q", ctx)
+	}
+	if !strings.Contains(ctx, "Auth passes all tests") {
+		t.Errorf("GetFullContext output must contain acceptance criteria, got: %q", ctx)
+	}
+}
+
+// Proves: GetFullContext includes open blocking dependencies and excludes closed ones.
+func TestBD_GetFullContext_OpenDepsIncludedClosedExcluded(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"title":"Fix the auth module","description":"Rewrite auth","acceptance_criteria":"Auth passes","blocked_by":[{"id":"ralph-dep1","title":"Dep open","status":"open"},{"id":"ralph-dep2","title":"Dep closed","status":"closed"}]}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ctx, err := b.GetFullContext("ralph-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ctx, "ralph-dep1") {
+		t.Errorf("GetFullContext output must contain open dependency id, got: %q", ctx)
+	}
+	if !strings.Contains(ctx, "Dep open") {
+		t.Errorf("GetFullContext output must contain open dependency title, got: %q", ctx)
+	}
+	if strings.Contains(ctx, "ralph-dep2") {
+		t.Errorf("GetFullContext output must not contain closed dependency id, got: %q", ctx)
+	}
+	if strings.Contains(ctx, "Dep closed") {
+		t.Errorf("GetFullContext output must not contain closed dependency title, got: %q", ctx)
+	}
+}
+
