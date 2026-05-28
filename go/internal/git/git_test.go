@@ -1711,3 +1711,153 @@ func TestRepoRoot_NonGitDirErrors(t *testing.T) {
 		t.Fatal("expected error for non-git dir, got nil")
 	}
 }
+
+// SetupWorktree sets upstream tracking on ralph/next so git pull --rebase
+// works in post-task hooks without manual git branch --set-upstream-to.
+func TestSetupWorktree_SetsUpstreamTracking(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	remote := strings.TrimSpace(cmdOutput(t, "git", "-C", project, "config", "branch.ralph/next.remote"))
+	if remote != "origin" {
+		t.Errorf("branch.ralph/next.remote = %q, want origin", remote)
+	}
+	merge := strings.TrimSpace(cmdOutput(t, "git", "-C", project, "config", "branch.ralph/next.merge"))
+	if merge != "refs/heads/main" {
+		t.Errorf("branch.ralph/next.merge = %q, want refs/heads/main", merge)
+	}
+}
+
+// SetupWorktree with a custom base branch sets tracking to origin/<base>,
+// not origin/main, so post-task git pull works on non-default base branches.
+func TestSetupWorktree_SetsUpstreamTracking_CustomBase(t *testing.T) {
+	project, _ := initBareRepoWithBranch(t, "develop")
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "develop", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	remote := strings.TrimSpace(cmdOutput(t, "git", "-C", project, "config", "branch.ralph/next.remote"))
+	if remote != "origin" {
+		t.Errorf("branch.ralph/next.remote = %q, want origin", remote)
+	}
+	merge := strings.TrimSpace(cmdOutput(t, "git", "-C", project, "config", "branch.ralph/next.merge"))
+	if merge != "refs/heads/develop" {
+		t.Errorf("branch.ralph/next.merge = %q, want refs/heads/develop", merge)
+	}
+}
+
+// SetupWorktree HEAD-fallback path also sets upstream tracking on ralph/next.
+// Verified via stub runner to confirm the branch --set-upstream-to call
+// happens even when origin/<base> is unavailable.
+func TestSetupWorktree_FallbackPath_SetsUpstreamTracking(t *testing.T) {
+	project := t.TempDir()
+	run(t, "git", "init", "-b", "main", project)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	runner := newStubRunner()
+	runner.On("rev-parse --verify", "", fmt.Errorf("branch not found"))
+	runner.OnSequence("worktree add", []stubResponse{
+		{Err: fmt.Errorf("origin/main not found")},
+		{Err: nil},
+	})
+	runner.On("worktree", "", nil)
+	runner.On("fetch", "", nil)
+	runner.On("config", "", nil)
+	runner.On("rev-parse", "abc123", nil)
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	if !runner.CalledWith("branch", "--set-upstream-to", "origin/main", WipBranchName()) {
+		t.Errorf("expected branch --set-upstream-to origin/main %s after fallback path", WipBranchName())
+	}
+}
+
+// PrepareForNextTask calls branch --set-upstream-to explicitly so tracking is
+// set regardless of branch.autoSetupMerge. Verified via stub runner so the
+// test fails in any environment before the fix.
+func TestPrepareForNextTask_CallsSetUpstreamExplicitly(t *testing.T) {
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("branch -m", "", nil)
+	runner.On("checkout", "", nil)
+	runner.On("clean", "", nil)
+	runner.On("fetch", "", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", fmt.Errorf("not found"))
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
+	runner.On("rev-list --count", "0", nil)
+
+	mgr := newRepoForTest(Config{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner), withWorktreeBranch("ralph/next"))
+
+	mgr.RenameBranchForTask("first task", "ralph-aaa")
+	mgr.PrepareForNextTask("ralph-bbb", "")
+
+	if !runner.CalledWith("branch", "--set-upstream-to", "origin/main", WipBranchName()) {
+		t.Errorf("expected branch --set-upstream-to origin/main %s to be called after PrepareForNextTask", WipBranchName())
+	}
+}
+
+// PrepareForNextTask sets upstream tracking on the new ralph/next branch so
+// git pull --rebase works in post-task hooks after every merge. Uses empty
+// baseRef (the PostMergeUpdateMain path) which does not rely on autoSetupMerge.
+func TestPrepareForNextTask_SetsUpstreamTracking(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("some task", "ralph-abc")
+	// Empty baseRef matches PostMergeUpdateMain: git checkout -B ralph/next (no
+	// start point) does not set tracking — only an explicit set-upstream call will.
+	mgr.PrepareForNextTask("ralph-next", "")
+
+	remote := strings.TrimSpace(cmdOutput(t, "git", "-C", project, "config", "branch.ralph/next.remote"))
+	if remote != "origin" {
+		t.Errorf("branch.ralph/next.remote = %q, want origin", remote)
+	}
+	merge := strings.TrimSpace(cmdOutput(t, "git", "-C", project, "config", "branch.ralph/next.merge"))
+	if merge != "refs/heads/main" {
+		t.Errorf("branch.ralph/next.merge = %q, want refs/heads/main", merge)
+	}
+}
+
+// PrepareForNextTask with a custom base branch sets tracking to origin/<base>,
+// not origin/main, honoring --base-branch override. Uses empty baseRef to
+// reproduce PostMergeUpdateMain which does not pass a start point.
+func TestPrepareForNextTask_SetsUpstreamTracking_CustomBase(t *testing.T) {
+	project, _ := initBareRepoWithBranch(t, "develop")
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "develop", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("some task", "ralph-abc")
+	mgr.PrepareForNextTask("ralph-next", "")
+
+	remote := strings.TrimSpace(cmdOutput(t, "git", "-C", project, "config", "branch.ralph/next.remote"))
+	if remote != "origin" {
+		t.Errorf("branch.ralph/next.remote = %q, want origin", remote)
+	}
+	merge := strings.TrimSpace(cmdOutput(t, "git", "-C", project, "config", "branch.ralph/next.merge"))
+	if merge != "refs/heads/develop" {
+		t.Errorf("branch.ralph/next.merge = %q, want refs/heads/develop", merge)
+	}
+}
