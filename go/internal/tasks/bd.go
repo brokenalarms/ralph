@@ -608,15 +608,44 @@ func (b *BD) GetFullContext(id string) (string, error) {
 	if id == "" {
 		return "", nil
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id)
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
 	if err != nil {
 		return "", err
 	}
-	comments, _ := b.runner()(b.ctx(), b.ProjectDir, "comments", id)
-	if comments != "" {
-		out += "\n\nCOMMENTS\n" + comments
+	var items []struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Acceptance  string `json:"acceptance_criteria"`
+		BlockedBy   []struct {
+			ID     string `json:"id"`
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		} `json:"blocked_by"`
 	}
-	return out, nil
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return "", nil
+	}
+	bead := items[0]
+	var parts []string
+	if bead.Title != "" {
+		parts = append(parts, "TITLE: "+bead.Title)
+	}
+	if bead.Description != "" {
+		parts = append(parts, "DESCRIPTION\n"+bead.Description)
+	}
+	if bead.Acceptance != "" {
+		parts = append(parts, "ACCEPTANCE CRITERIA\n"+bead.Acceptance)
+	}
+	var openDeps []string
+	for _, dep := range bead.BlockedBy {
+		if dep.Status != "closed" && dep.ID != "" {
+			openDeps = append(openDeps, "- "+dep.ID+": "+dep.Title)
+		}
+	}
+	if len(openDeps) > 0 {
+		parts = append(parts, "OPEN DEPENDENCIES\n"+strings.Join(openDeps, "\n"))
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 func (b *BD) ProjectContext() (string, error) {
