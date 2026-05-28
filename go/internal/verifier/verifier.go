@@ -100,17 +100,18 @@ type Verifier struct {
 
 // New creates a Verifier from a pure-data Config, a logger, an explicit
 // fix-agent runner factory, and an explicit LLM querier. When newRunner is
-// nil it defaults to agent.New(logger). When querier is nil it also
-// defaults to agent.New(logger), which satisfies the Querier interface via
-// its Query method. Tests pass their own stubs — these are the ONLY
-// behavioral injection points, and they are explicit constructor
-// parameters, not Config fields.
+// nil it defaults to agent.New(logger, cfg.ProjectDir). When querier is nil
+// it also defaults to agent.New(logger, cfg.ProjectDir), which satisfies
+// the Querier interface via its Query method. Tests pass their own stubs —
+// these are the ONLY behavioral injection points, and they are explicit
+// constructor parameters, not Config fields. cfg.ProjectDir is forwarded
+// so every spawned agent enforces the workDir != projectDir invariant.
 func New(cfg Config, logger *logging.Logger, newRunner RunnerFactory, querier Querier) *Verifier {
 	if newRunner == nil {
-		newRunner = func() Runner { return agent.New(logger) }
+		newRunner = func() Runner { return agent.New(logger, cfg.ProjectDir) }
 	}
 	if querier == nil {
-		querier = agent.New(logger)
+		querier = agent.New(logger, cfg.ProjectDir)
 	}
 	if cfg.TestTimeout == 0 {
 		cfg.TestTimeout = 5 * time.Minute

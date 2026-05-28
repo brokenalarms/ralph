@@ -136,8 +136,13 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	// Phase 3 — construct git module. All data inputs are ready. Git
 	// constructs its own sub-modules (GitHub CLI, state store) internally.
+	//
+	// WorkDir is intentionally NOT set here: it remains empty until
+	// SetupWorktree assigns the real worktree path. This prevents the
+	// recurring "workDir silently falls back to projectDir → agent writes
+	// into main checkout" failure mode.
 	gm := git.New(git.Config{
-		WorkDir:                     cfg.ProjectDir,
+		ProjectDir:                  cfg.ProjectDir,
 		RalphDir:                    ralphDir,
 		BaseBranch:                  cfg.BaseBranch,
 		Resume:                      resume,

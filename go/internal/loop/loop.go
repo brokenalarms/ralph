@@ -309,7 +309,7 @@ func New(cfg Config, mods Modules) *Loop {
 
 	runner := mods.Runner
 	if runner == nil {
-		runner = agent.New(logger)
+		runner = agent.New(logger, cfg.Dirs.ProjectDir)
 	}
 
 	bh := mods.BinaryHasher
