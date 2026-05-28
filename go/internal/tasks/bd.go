@@ -308,6 +308,34 @@ type bdIssue struct {
 	Status   string `json:"status,omitempty"`
 }
 
+// nonExecutableBDTypes lists bd issue types that are containers or metadata
+// rather than agent work. The loop must never select these: an agent has no
+// concrete change to make on an epic, decision, merge-request, molecule, or
+// convoy. Surfacing them causes the orchestrator to "complete" the container
+// without closing it (epics can't close while children are open), after which
+// every subsequent selection re-picks the same container, the in-session
+// dedup triggers, skipTask escalates because the container has open dependents,
+// and the selector spins until it hits maxSelectionAttempts.
+//
+// Kept as a blacklist (not an allowlist of executable types) so that new bd
+// types added in the future default to executable. If a new container type is
+// introduced and reproduces this failure mode, add it here.
+var nonExecutableBDTypes = []string{"epic", "decision", "merge-request", "molecule", "convoy"}
+
+// nonExecutableBDTypesSet is the lookup form of nonExecutableBDTypes, used by
+// resumeTask to reject a resume target whose type is a container.
+var nonExecutableBDTypesSet = func() map[string]bool {
+	m := make(map[string]bool, len(nonExecutableBDTypes))
+	for _, t := range nonExecutableBDTypes {
+		m[t] = true
+	}
+	return m
+}()
+
+// bdReadyExcludeTypeArg is the --exclude-type value passed to every bd ready
+// invocation so container/meta types never reach the selector.
+var bdReadyExcludeTypeArg = "--exclude-type=" + strings.Join(nonExecutableBDTypes, ",")
+
 // getNextIssue returns the highest-priority issue to work on. If a resume
 // task ID is set and that task is still open/in_progress, it is returned
 // directly. Otherwise falls through to bd ready.
@@ -316,7 +344,7 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 		return issue, nil
 	}
 
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json")
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg)
 	if err != nil {
 		return bdIssue{}, nil
 	}
@@ -328,7 +356,10 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 }
 
 // resumeTask checks whether the resumeTaskID points to a task that is
-// still open or in_progress. Returns the issue and true if so.
+// still open or in_progress AND has an executable type. Container/meta
+// types (epic, decision, merge-request, molecule, convoy) are rejected
+// so a stale last_task_id pointing at a container can't bypass the
+// type filter applied to bd ready.
 func (b *BD) resumeTask() (bdIssue, bool) {
 	if b.resumeTaskID == "" || b.skippedIDs[b.resumeTaskID] {
 		return bdIssue{}, false
@@ -342,6 +373,9 @@ func (b *BD) resumeTask() (bdIssue, bool) {
 		return bdIssue{}, false
 	}
 	issue := items[0]
+	if nonExecutableBDTypesSet[issue.Type] {
+		return bdIssue{}, false
+	}
 	if issue.Status == "open" || issue.Status == "in_progress" {
 		return issue, true
 	}

@@ -1571,6 +1571,77 @@ func TestDefaultRunBD_NoLogPathSkipsWrite(t *testing.T) {
 	}
 }
 
+// Proves: getNextIssue invokes bd ready with --exclude-type covering every
+// container/meta type. This prevents the loop-spin failure mode where bd ready
+// surfaces an epic (or other container) that the orchestrator selects, marks
+// completed in-session, then re-selects on the next iteration because the
+// container can't close while children are open — leading to the dedup +
+// strand-protection spin that exhausts task selection attempts.
+func TestBD_GetNextIssue_ExcludesContainerTypes(t *testing.T) {
+	var readyArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		if args[0] == "ready" {
+			readyArgs = append([]string{}, args...)
+			return `[{"id":"t-1","title":"A task","type":"task"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if _, err := b.GetNextTaskInfo(); err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(readyArgs, " ")
+	for _, ty := range []string{"epic", "decision", "merge-request", "molecule", "convoy"} {
+		if !strings.Contains(joined, ty) {
+			t.Errorf("bd ready args missing exclude for type %q; got: %v", ty, readyArgs)
+		}
+	}
+	if !strings.Contains(joined, "--exclude-type=") {
+		t.Errorf("bd ready args missing --exclude-type flag; got: %v", readyArgs)
+	}
+}
+
+// Proves: resumeTask rejects a resume target whose type is a container.
+// Without this defense, a stale last_task_id pointing at an epic would bypass
+// the --exclude-type filter applied to bd ready and reproduce the spin.
+func TestBD_ResumeTask_RejectsContainerTypes(t *testing.T) {
+	containerTypes := []string{"epic", "decision", "merge-request", "molecule", "convoy"}
+	for _, ty := range containerTypes {
+		t.Run(ty, func(t *testing.T) {
+			runner := func(_ context.Context, dir string, args ...string) (string, error) {
+				if len(args) == 0 {
+					return "", errors.New("no args")
+				}
+				switch args[0] {
+				case "show":
+					if len(args) >= 2 && args[1] == "ralph-epic" {
+						return fmt.Sprintf(`[{"id":"ralph-epic","title":"An epic","status":"open","type":%q}]`, ty), nil
+					}
+				case "ready":
+					return `[{"id":"ralph-leaf","title":"Leaf task","type":"task","status":"open"}]`, nil
+				}
+				return "", nil
+			}
+			b := setupBD(t, runner)
+			b.SetResumeTaskID("ralph-epic")
+			info, err := b.GetNextTaskInfo()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.ID == "ralph-epic" {
+				t.Errorf("resumeTask returned container type %q — should have fallen through", ty)
+			}
+			if info.ID != "ralph-leaf" {
+				t.Errorf("expected fallthrough to ralph-leaf, got %q", info.ID)
+			}
+		})
+	}
+}
+
 // Proves: a failed log write (e.g. read-only RalphDir) does not affect the
 // bd call's return value or error.
 func TestDefaultRunBD_LogWriteFailureIsBestEffort(t *testing.T) {
