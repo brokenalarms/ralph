@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -196,6 +198,14 @@ func (b *BD) Init() error {
 		_ = err
 	}
 
+	// Pin dolt.port and export.path so they survive reboots and export tasks.
+	if err := b.ensureDoltPort(); err != nil {
+		log.Printf("bd: ensureDoltPort: %v", err)
+	}
+	if err := b.ensureTasksExport(); err != nil {
+		log.Printf("bd: ensureTasksExport: %v", err)
+	}
+
 	return nil
 }
 
@@ -238,6 +248,37 @@ func (b *BD) ensureGitignore() error {
 	}
 
 	return nil
+}
+
+func (b *BD) ensureDoltPort() error {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "config", "get", "dolt.port")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(out, "not set in config.yaml") {
+		return nil
+	}
+	absDir, err := filepath.Abs(b.ProjectDir)
+	if err != nil {
+		return err
+	}
+	h := fnv.New32a()
+	h.Write([]byte(absDir))
+	port := 49152 + int(h.Sum32()%16384)
+	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "dolt.port", strconv.Itoa(port))
+	return err
+}
+
+func (b *BD) ensureTasksExport() error {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "config", "get", "export.path")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(out, "not set in config.yaml") {
+		return nil
+	}
+	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "export.path", "../beads-tasks.jsonl")
+	return err
 }
 
 // gitignoreContains checks whether an entry already appears as its own
