@@ -160,10 +160,41 @@ Then **wait for the user's response** before moving on:
   priority, labels, type), echo the updated summary, and confirm again
 - **"expand"** → show the full untruncated description
 
-Use `bd create --deps` for dependency chains — not notes. When creating
-related beads, always check if one depends on or blocks another and link
-them with `bd dep add <issue> <depends-on>`. Missing dependencies cause
-tasks to be worked out of order.
+### Dependencies must be set at `bd create` time — never trailed afterward
+
+When creating a chain or graph of related beads, dependencies MUST be passed
+via `--deps` on the `bd create` call itself. **Never** create the beads first
+and then add dependencies with `bd dep add` afterward — this opens a race
+window where every bead is briefly visible to `bd ready` as unblocked, and
+the loop polls continuously. If `bd ready` snapshots the chain during that
+window, it will pick a downstream bead and start working it before the
+upstream work exists.
+
+The rules:
+
+1. **Create in canonical execution order.** The first bead to be worked is
+   created first, then each subsequent bead with `--deps <previous-id>` on
+   its own `bd create` call. Never create the whole chain unblocked and then
+   thread deps in afterward.
+2. **Every non-root bead in a chain MUST have `--deps` on its create call.**
+   If a bead in a multi-bead plan has no `--deps` flag, that is a bug — the
+   bead is born ready and the loop may start it out of order.
+3. **`bd dep add` is for retrofitting deps onto pre-existing open beads only**
+   (e.g. when a new bead is discovered that should block an existing one).
+   It is NOT a substitute for `--deps` during chain creation. Using it for
+   chain creation is the race-window failure mode described above.
+4. **Graphs with multiple parents:** `--deps` accepts a comma-separated list
+   (`--deps=ralph-aaa,ralph-bbb`) — use that for fan-in. Still no trailing
+   `bd dep add`.
+
+When the user approves a multi-bead plan, before issuing any `bd create`,
+write out the execution order and the dep edges explicitly so it is obvious
+which `--deps` flag goes on which create. Then execute the creates strictly
+in that order, each with its `--deps` baked in.
+
+The architecture-echo confirmation step (see above) must include this
+ordering and the `--deps` edges for any multi-bead plan, so the user signs
+off on the chain shape before any race window can open.
 
 Reference functions and behaviors in bead descriptions, not line numbers.
 Lines shift between bead creation and agent execution — a reference like
@@ -337,8 +368,9 @@ Specifically, do NOT include these as text in the description:
 
 - **Labels** — pass via `--labels` on `bd create`; never write `Labels: …`
   or `LABELS: …` lines in the description
-- **Dependencies** — link via `bd dep add <issue> <depends-on>`; never write
-  `Dependencies: none` or `Dependencies: foo, bar` lines
+- **Dependencies** — pass via `--deps` on `bd create` (or `bd dep add` only
+  when retrofitting onto a pre-existing bead); never write `Dependencies:
+  none` or `Dependencies: foo, bar` lines in the description
 - **Supersedes / superseded-by / closes-on-land** — use a `bd dep` relation,
   and when closing the predecessor pass the reason via `bd close --reason
   "superseded by ralph-xyz"`. Never write `Supersedes: ralph-xyz — close it
