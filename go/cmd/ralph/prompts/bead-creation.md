@@ -324,6 +324,37 @@ actual instructions buried lower down. Structure every bead description as:
 If the agent can satisfy paragraph one and stop, it will. Make paragraph one
 the complete instruction — everything below it is supporting evidence.
 
+### Project-management metadata does NOT belong in the description
+
+The description is the executing agent's primary prompt. Everything in it
+becomes part of the iteration's context window and is treated as instruction.
+Project-tracking facts that live in bd's structured fields must NOT also be
+written as free text into the description — the duplication bloats the prompt,
+drifts from the structured field over time, and (worse) can be acted on
+literally by the agent.
+
+Specifically, do NOT include these as text in the description:
+
+- **Labels** — pass via `--labels` on `bd create`; never write `Labels: …`
+  or `LABELS: …` lines in the description
+- **Dependencies** — link via `bd dep add <issue> <depends-on>`; never write
+  `Dependencies: none` or `Dependencies: foo, bar` lines
+- **Supersedes / superseded-by / closes-on-land** — use a `bd dep` relation,
+  and when closing the predecessor pass the reason via `bd close --reason
+  "superseded by ralph-xyz"`. Never write `Supersedes: ralph-xyz — close it
+  once this lands` instructions in the description: the agent will try to act
+  on them and the orchestrator owns close decisions, not the agent.
+- **Priority / type** — already structured fields; never restated in prose
+- **Parent epic ID** — link via `bd dep add` or `--parent`; do not write
+  `Parent: ralph-abc (EPIC)` lines
+- **Project status commentary** — "blocked by X", "waiting on Y", "next up
+  after Z" all belong in the dep graph, not the description
+
+Out-of-scope guidance is the one exception: a short "Out of scope:" section
+that names files/behaviors the agent should NOT change IS useful as agent
+guardrail. Keep it to 1–3 lines and concrete (file or function names). If it
+balloons past that, those items are separate beads.
+
 ### Detail principle — higher reasoning instructs lower reasoning
 
 The task manager creates beads that a loop agent executes. The agent is
