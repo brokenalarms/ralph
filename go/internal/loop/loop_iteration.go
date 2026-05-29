@@ -645,7 +645,7 @@ func (l *Loop) RunIteration(ctx context.Context, task taskContext, runIteration 
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "IsReady(%s): %v — proceeding", task.id, err)
 		} else if !ready {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s no longer ready (deps changed since selection) — skipping iteration", task.id)
-			return agentRunResult{action: actionRetry}
+			return agentRunResult{action: actionRetry, agentInvoked: false}
 		}
 	}
 	return l.runAgent(ctx, task, runIteration)

@@ -253,9 +253,10 @@ type Loop struct {
 	runner            claudeRunner
 	verifier          *verifier.Verifier
 	analyzer          *analyzer.Analyzer
-	taskAttempts      []AttemptEvent // in-memory attempt events for the current task, reset per task
-	taskIdleTimeouts  int            // consecutive idle timeout count for the current task
-	currentTaskID     string         // tracks which task's attempts are in taskAttempts
+	taskAttempts             []AttemptEvent // in-memory attempt events for the current task, reset per task
+	taskIdleTimeouts         int            // consecutive idle timeout count for the current task
+	currentTaskID            string         // tracks which task's attempts are in taskAttempts
+	consecutiveNoAgentIters  int            // incremented when an iteration ends without invoking the agent; reset on agent invocation
 	logger            *logging.Logger
 	signals           claude.SignalPaths
 	connectivity      Connectivity
@@ -399,11 +400,12 @@ func (l *Loop) ensureActiveReviewers() {
 
 // agentRunResult carries the outcome of a single agent invocation.
 type agentRunResult struct {
-	prep       iterationPrompt
-	result     claude.Result
-	iterAction analyzer.Action
-	diffStat   string
-	action     loopAction // actionDone or actionRetry if short-circuited; actionProceed otherwise
+	prep         iterationPrompt
+	result       claude.Result
+	iterAction   analyzer.Action
+	diffStat     string
+	action       loopAction // actionDone or actionRetry if short-circuited; actionProceed otherwise
+	agentInvoked bool       // true when runner.Run was actually called this iteration
 }
 
 // runAgent prepares the prompt, invokes Claude, handles run errors, and analyzes
@@ -486,7 +488,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 
 	runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, runIteration)
 	if runAction != actionProceed {
-		return agentRunResult{action: runAction}
+		return agentRunResult{action: runAction, agentInvoked: true}
 	}
 	elapsed := time.Since(taskStart)
 	l.limiter.Increment()
@@ -501,18 +503,19 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 
 	diffStat, halt, iterAction := l.processRunOutcome(result, elapsed, runIteration, prep, task.id, task.title, analysisResult, headAfter)
 	if halt {
-		return agentRunResult{action: actionDone, iterAction: iterAction}
+		return agentRunResult{action: actionDone, iterAction: iterAction, agentInvoked: true}
 	}
 	if iterAction == analyzer.Skip {
-		return agentRunResult{action: actionSkip, iterAction: iterAction}
+		return agentRunResult{action: actionSkip, iterAction: iterAction, agentInvoked: true}
 	}
 
 	return agentRunResult{
-		prep:       prep,
-		result:     result,
-		iterAction: iterAction,
-		diffStat:   diffStat,
-		action:     actionProceed,
+		prep:         prep,
+		result:       result,
+		iterAction:   iterAction,
+		diffStat:     diffStat,
+		action:       actionProceed,
+		agentInvoked: true,
 	}
 }
 
@@ -613,6 +616,7 @@ iterLoop:
 					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 						"Branch setup failed (transient transport error) — skipping task %s: %v", task.id, err)
 					l.skipTask(task.id, skipReason)
+					l.consecutiveNoAgentIters++
 					continue iterLoop
 				}
 				l.state.Write("status", "error")
@@ -670,12 +674,18 @@ iterLoop:
 			l.onResumeDone(ctx, task.id, task.title, resumeResult)
 			l.git.TagTaskEnd(task.id)
 			l.state.WriteRunBranch("")
+			l.consecutiveNoAgentIters++
 			continue
 		}
 
 		// ── Run agent ──
 		agentRun := l.RunIteration(ctx, task, runIteration)
 		lastAction = agentRun.iterAction
+		if agentRun.agentInvoked {
+			l.consecutiveNoAgentIters = 0
+		} else {
+			l.consecutiveNoAgentIters++
+		}
 		if agentRun.action != actionProceed {
 			if agentRun.action == actionRetry {
 				continue
