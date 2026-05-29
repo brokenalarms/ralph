@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -100,6 +101,51 @@ func TestLoop_BuildTaskPrompt_NoScreenshots(t *testing.T) {
 
 	if strings.Contains(got, "## Screenshots") {
 		t.Error("task prompt should not include screenshots section when none exist")
+	}
+}
+
+// TestBuildPrompt_LogsComponentSizes verifies that buildPrompt emits a log entry
+// with byte sizes for taskPrompt, attemptHistory, testStatus, tasksContext, total,
+// and template overhead — needed to diagnose compaction regressions.
+func TestBuildPrompt_LogsComponentSizes(t *testing.T) {
+	dir := t.TempDir()
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+
+	_, st := setupTestDir(t)
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
+	l.runner = &stubRunner{}
+
+	_, err := l.buildPrompt("task prompt content", "attempt history text", "tests passing")
+	if err != nil {
+		t.Fatalf("buildPrompt failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Prompt sizes") {
+		t.Errorf("expected 'Prompt sizes' log entry, got: %s", output)
+	}
+	for _, field := range []string{"taskPrompt:", "attemptHistory:", "testStatus:", "tasksContext:", "total:", "template overhead:"} {
+		if !strings.Contains(output, field) {
+			t.Errorf("expected log to contain %q, got: %s", field, output)
+		}
 	}
 }
 
