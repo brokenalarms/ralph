@@ -1821,6 +1821,78 @@ func TestBD_EnsureTasksExport_NoOpWhenAlreadySet(t *testing.T) {
 	}
 }
 
+// Proves: IsReady returns true when all deps are closed.
+func TestBD_IsReady_AllDepsClosed(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"id":"ralph-abc","title":"Do thing","blocked_by":[{"id":"ralph-dep1","status":"closed"},{"id":"ralph-dep2","status":"closed"}]}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ready, err := b.IsReady("ralph-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready {
+		t.Error("expected IsReady=true when all deps are closed")
+	}
+}
+
+// Proves: IsReady returns false when any dep is open.
+func TestBD_IsReady_OpenDep(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"id":"ralph-abc","title":"Do thing","blocked_by":[{"id":"ralph-dep1","status":"closed"},{"id":"ralph-dep2","status":"open"}]}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ready, err := b.IsReady("ralph-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Error("expected IsReady=false when any dep is open")
+	}
+}
+
+// Proves: IsReady returns false when any dep is in_progress.
+func TestBD_IsReady_InProgressDep(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"id":"ralph-abc","title":"Do thing","blocked_by":[{"id":"ralph-dep1","status":"in_progress"}]}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ready, err := b.IsReady("ralph-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Error("expected IsReady=false when any dep is in_progress")
+	}
+}
+
+// Proves: IsReady returns true when deps array is empty.
+func TestBD_IsReady_NoDeps(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"id":"ralph-abc","title":"Do thing","blocked_by":[]}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ready, err := b.IsReady("ralph-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready {
+		t.Error("expected IsReady=true when deps array is empty")
+	}
+}
+
 // Proves: GetFullContext includes open blocking dependencies and excludes closed ones.
 func TestBD_GetFullContext_OpenDepsIncludedClosedExcluded(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {

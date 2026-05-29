@@ -69,6 +69,8 @@ func (s *StubBackend) GetOpenDependents(_ string) ([]string, error) {
 	return s.OpenDependents, nil
 }
 
+func (s *StubBackend) IsReady(_ string) (bool, error) { return true, nil }
+
 func (s *StubBackend) Label() string {
 	if s.BackendLabel != "" {
 		return s.BackendLabel

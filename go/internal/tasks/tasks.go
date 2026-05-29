@@ -105,6 +105,12 @@ type Backend interface {
 	// Returns nil when there are no open dependents or when the query fails.
 	GetOpenDependents(id string) ([]string, error)
 
+	// IsReady reports whether a task is ready to work on: its dependencies array
+	// is empty OR every entry has status=closed. Returns false (no error) for any
+	// non-closed dep. Use immediately before agent invocation to detect dep-graph
+	// mutations that occurred between selection and start.
+	IsReady(id string) (bool, error)
+
 	// Label returns a human-readable name for the backend.
 	Label() string
 }

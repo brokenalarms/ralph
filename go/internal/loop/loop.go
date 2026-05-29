@@ -674,7 +674,7 @@ iterLoop:
 		}
 
 		// ── Run agent ──
-		agentRun := l.runAgent(ctx, task, runIteration)
+		agentRun := l.RunIteration(ctx, task, runIteration)
 		lastAction = agentRun.iterAction
 		if agentRun.action != actionProceed {
 			if agentRun.action == actionRetry {
