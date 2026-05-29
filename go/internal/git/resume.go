@@ -50,6 +50,15 @@ type ResumeTaskResult struct {
 	// NewBranch is the branch name after rename (only set when ClearMetadata=true).
 	// The loop should store this in branch metadata after clearing the external-ref.
 	NewBranch string
+
+	// ShipFailedAfterPush is true when the branch had pushed commits with no
+	// existing PR, Ship was called to create one, and Ship returned an error or
+	// PRNumber==0. The loop must halt rather than re-invoke the agent, to avoid
+	// running new work on top of already-pushed (potentially partially reviewed) commits.
+	ShipFailedAfterPush bool
+
+	// ShipErr is the error returned by Ship when ShipFailedAfterPush is true.
+	ShipErr error
 }
 
 // parsePRNumber extracts a PR number from a URL
@@ -146,7 +155,7 @@ func (r *repo) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeT
 	shipResult, err := r.Ship(ctx, ShipOpts{TaskID: meta.TaskID, TaskTitle: meta.TaskTitle})
 	prNum := shipResult.PRNumber
 	if err != nil || prNum == 0 {
-		return ResumeTaskResult{}, nil
+		return ResumeTaskResult{ShipFailedAfterPush: true, ShipErr: err}, nil
 	}
 	prURLToStore = r.buildPRURL(prNum)
 	r.logger.Emit(logging.Opts{Domain: "git", Link: r.buildPRLink(prNum)}, "Created for %s (task %s)", meta.Branch, meta.TaskID)
