@@ -792,6 +792,29 @@ func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
 	}
 }
 
+// Verifies that a Compacted result causes the task to be skipped with reason
+// 'compaction_detected' and returns actionSkip — compaction means the agent
+// hit a context leak and continuing would waste iterations.
+func TestHandleRunResult_CompactedSkipsTask(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+
+	backend := &testutil.StubBackend{}
+	l.taskBackend = backend
+
+	action := handleRunResultCall(l, context.Background(), claude.Result{Compacted: true}, nil,
+		"task-cmp", "Compacting task", "abc123", 1)
+
+	if action != actionSkip {
+		t.Fatalf("expected actionSkip, got %d", action)
+	}
+	if backend.SkippedTask != "task-cmp" {
+		t.Errorf("expected task skipped in backend, got %q", backend.SkippedTask)
+	}
+	if backend.SkipReason != "compaction_detected" {
+		t.Errorf("expected skip reason 'compaction_detected', got %q", backend.SkipReason)
+	}
+}
+
 // onResumeDone sends only TaskMerged (not TaskCompleted+TaskMerged pair) when PR is already
 // merged and Notify is enabled — one notification per task, never two.
 func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {

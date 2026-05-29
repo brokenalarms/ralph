@@ -95,6 +95,7 @@ type Result struct {
 	SignalDetected     bool      // true if a completion signal was found
 	AllComplete        bool      // true if the all-complete signal was found
 	NoCodeNeeded       bool      // true if agent confirmed no code changes required (already fixed / not a bug)
+	Compacted          bool      // true if the agent was killed because it triggered context compaction
 	IdleTimeout        bool      // true if the session was killed due to idle timeout
 	WallClockTimeout   bool      // true if the session was killed due to wall-clock max-run-duration
 	FeedbackKill       bool      // true if killed because user feedback arrived
@@ -519,6 +520,7 @@ func parseSystemStatusEvent(line string) string {
 // newLinesScan holds results from scanning newly appended raw log lines.
 type newLinesScan struct {
 	hasActivity             bool
+	isCompacting            bool
 	rlThrottled             bool
 	rlResetAt               time.Time
 	rlWarning               bool
@@ -605,6 +607,9 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 		}
 		if status := parseSystemStatusEvent(line); status != "" {
 			result.statusEvents = append(result.statusEvents, status)
+			if status == "compacting" {
+				result.isCompacting = true
+			}
 		}
 	}
 	// Scanner errored on oversized line — skip to EOF so we don't re-scan
@@ -691,6 +696,12 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				for _, status := range scan.statusEvents {
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model},
 						"Claude system status: %s at %s", status, time.Since(runStart).Round(time.Millisecond))
+				}
+				if scan.isCompacting {
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model},
+						"Compaction detected — killing agent (context leak)")
+					gracefulKill(cmd, processDone)
+					return Result{Compacted: true}
 				}
 				if scan.rlThrottled {
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model},
