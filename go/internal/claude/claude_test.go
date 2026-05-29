@@ -1064,7 +1064,7 @@ func TestPoll_OversizedRawLogLineDoesNotBreakIdleDetection(t *testing.T) {
 
 // TestRun_LogsSystemStatusEvents verifies that when a system event with
 // subtype=status appears in the raw log, poll emits a 'Claude system status'
-// log entry — needed to capture compaction and other SDK status signals.
+// log entry — needed to capture SDK status signals in the loop log.
 func TestRun_LogsSystemStatusEvents(t *testing.T) {
 	dir := t.TempDir()
 	rawLog := filepath.Join(dir, "raw.log")
@@ -1076,7 +1076,7 @@ func TestRun_LogsSystemStatusEvents(t *testing.T) {
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		fmt.Fprintln(f, `{"type":"system","subtype":"status","status":"compacting"}`)
+		fmt.Fprintln(f, `{"type":"system","subtype":"status","status":"connected"}`)
 		f.Close()
 
 		time.Sleep(200 * time.Millisecond)
@@ -1099,13 +1099,57 @@ func TestRun_LogsSystemStatusEvents(t *testing.T) {
 
 	found := false
 	for _, msg := range log.logs {
-		if strings.Contains(msg, "Claude system status") && strings.Contains(msg, "compacting") {
+		if strings.Contains(msg, "Claude system status") && strings.Contains(msg, "connected") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected 'Claude system status: compacting' log entry, got: %v", log.logs)
+		t.Errorf("expected 'Claude system status: connected' log entry, got: %v", log.logs)
+	}
+}
+
+// TestRun_CompactingEventKillsAgent verifies that when a system event with
+// status=compacting appears in the raw log, the agent is killed immediately
+// and Result{Compacted: true} is returned — compaction indicates a context
+// leak and continuing the run would be wasteful.
+func TestRun_CompactingEventKillsAgent(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintln(f, `{"type":"system","subtype":"status","status":"compacting"}`)
+		f.Close()
+	}()
+
+	const pollInterval = 50 * time.Millisecond
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: pollInterval,
+	}
+
+	start := time.Now()
+	result := runWithCommand(t, &runner, cfg, "sleep", "5")
+	elapsed := time.Since(start)
+
+	if !result.Compacted {
+		t.Errorf("expected Compacted=true, got result=%+v", result)
+	}
+	if result.SignalDetected {
+		t.Error("expected SignalDetected=false when killed by compaction")
+	}
+	if elapsed > 2*pollInterval+200*time.Millisecond {
+		t.Errorf("expected kill within 2 poll intervals, took %s", elapsed)
 	}
 }
 

@@ -669,6 +669,11 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		}
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed on iteration %d, continuing...", runIteration)
 	}
+	if result.Compacted {
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.Model}, "Agent triggered compaction — this indicates a context leak. Skipping task.")
+		l.skipTask(taskID, "compaction_detected")
+		return actionSkip
+	}
 	if result.FeedbackKill {
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d — user feedback received", runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
