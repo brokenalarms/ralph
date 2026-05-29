@@ -930,7 +930,7 @@ func TestHandleLoop_RefusesDuplicateLoop(t *testing.T) {
 	defer pidfile.Remove(pidPath)
 
 	log := logging.New(io.Discard)
-	sub := config.Subcommand{Name: "loop", Dir: dir, Args: nil}
+	sub := config.Subcommand{Name: "loop", Dir: dir, Args: []string{"--base-branch", "main"}}
 	code := handleLoop(sub, log)
 	if code != 1 {
 		t.Errorf("handleLoop should exit 1 when PID file exists for alive process, got %d", code)
@@ -1025,7 +1025,7 @@ func TestHandleLoop_CleansUpStalePID(t *testing.T) {
 	os.WriteFile(pidPath, []byte("99999999"), 0o644)
 
 	log := logging.New(io.Discard)
-	sub := config.Subcommand{Name: "loop", Dir: dir, Args: nil}
+	sub := config.Subcommand{Name: "loop", Dir: dir, Args: []string{"--base-branch", "main"}}
 	// This will proceed past PID check but fail later (no bd, etc.) — that's fine.
 	// The point is it does NOT exit 1 with "already running".
 	code := handleLoop(sub, log)

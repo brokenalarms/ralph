@@ -819,17 +819,17 @@ func TestEvolveFlag(t *testing.T) {
 // Verifies that --evolve validation rejects missing --auto-merge
 // and incompatible --tmux.
 func TestEvolveValidation(t *testing.T) {
-	cfg, _ := Parse([]string{"--evolve"})
+	cfg, _ := Parse([]string{"--evolve", "--base-branch", "main"})
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error: --evolve without --auto-merge")
 	}
 
-	cfg, _ = Parse([]string{"--evolve", "--auto-merge", "--tmux"})
+	cfg, _ = Parse([]string{"--evolve", "--auto-merge", "--tmux", "--base-branch", "main"})
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error: --evolve with --tmux")
 	}
 
-	cfg, _ = Parse([]string{"--evolve", "--auto-merge"})
+	cfg, _ = Parse([]string{"--evolve", "--auto-merge", "--base-branch", "main"})
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid --evolve combo should pass: %v", err)
 	}
@@ -837,12 +837,12 @@ func TestEvolveValidation(t *testing.T) {
 
 // Verifies that --admin-merge-on-ci-infra-failure validation rejects missing --auto-merge.
 func TestAdminMergeOnCIInfraFailureValidation(t *testing.T) {
-	cfg, _ := Parse([]string{"--admin-merge-on-ci-infra-failure"})
+	cfg, _ := Parse([]string{"--admin-merge-on-ci-infra-failure", "--base-branch", "main"})
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error: --admin-merge-on-ci-infra-failure without --auto-merge")
 	}
 
-	cfg, _ = Parse([]string{"--admin-merge-on-ci-infra-failure", "--auto-merge"})
+	cfg, _ = Parse([]string{"--admin-merge-on-ci-infra-failure", "--auto-merge", "--base-branch", "main"})
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid --admin-merge-on-ci-infra-failure combo should pass: %v", err)
 	}
@@ -874,14 +874,14 @@ func TestBranchStrategyConfigFile_SilentlyIgnored(t *testing.T) {
 	_ = cfg
 }
 
-// Verifies base_branch defaults to "develop", can be set via --base-branch CLI
-// flag, via config.toml, and that CLI takes precedence over config file.
+// Verifies base_branch has no default, can be set via --base-branch CLI flag,
+// via config.toml, and that CLI takes precedence over config file.
 func TestBaseBranch(t *testing.T) {
 	t.Setenv("RALPH_BASE_BRANCH", "")
 
 	cfg, _ := Parse(nil)
-	if cfg.BaseBranch != "develop" {
-		t.Errorf("BaseBranch = %q, want \"develop\" as default", cfg.BaseBranch)
+	if cfg.BaseBranch != "" {
+		t.Errorf("BaseBranch = %q, want \"\" (no default)", cfg.BaseBranch)
 	}
 
 	cfg, _ = Parse([]string{"--base-branch", "main"})
@@ -1101,6 +1101,30 @@ func TestModelCeilingLoadedFromTOML(t *testing.T) {
 	}
 	if cfg.Model != ModelHaiku {
 		t.Errorf("cfg.Model = %q, want %q", cfg.Model, ModelHaiku)
+	}
+}
+
+// Verifies Validate() fails when BaseBranch is empty and succeeds when set,
+// proving ralph loop exits before the first iteration when no base branch is configured.
+func TestBaseBranchMandatoryValidation(t *testing.T) {
+	t.Setenv("RALPH_BASE_BRANCH", "")
+
+	// No flag, env, or config: BaseBranch is "" → Validate must error
+	cfg, _ := Parse(nil)
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() should error when BaseBranch is not set")
+	}
+	for _, want := range []string{"--base-branch", "RALPH_BASE_BRANCH", "base_branch"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error message missing %q: %v", want, err)
+		}
+	}
+
+	// Set via --base-branch flag: should pass
+	cfg, _ = Parse([]string{"--base-branch", "main"})
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() should not error when --base-branch is set: %v", err)
 	}
 }
 
