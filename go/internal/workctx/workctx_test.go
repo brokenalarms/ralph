@@ -1,7 +1,9 @@
 package workctx
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +38,30 @@ func TestWorkContext_WorkDirDivergesFromProjectDir(t *testing.T) {
 	}
 	if wctx.RalphDir != filepath.Join("/home/user/project", ".ralph") {
 		t.Error("RalphDir must stay anchored to ProjectDir, not follow WorkDir")
+	}
+}
+
+// Proves: LogDir is a stable per-project directory outside the project tree,
+// surviving .ralph recreation between loop restarts.
+func TestNew_LogDirIsStableAndOutsideProject(t *testing.T) {
+	home, _ := os.UserHomeDir()
+
+	wctx1 := New("/home/user/proj-a", "/tmp/prompts")
+	wctx2 := New("/home/user/proj-b", "/tmp/prompts")
+
+	if strings.HasPrefix(wctx1.LogDir, "/home/user/proj-a") {
+		t.Errorf("LogDir must be outside the project tree, got %q", wctx1.LogDir)
+	}
+	if !strings.HasPrefix(wctx1.LogDir, filepath.Join(home, ".ralph", "logs")) {
+		t.Errorf("LogDir should be under ~/.ralph/logs/, got %q", wctx1.LogDir)
+	}
+	if wctx1.LogDir == wctx2.LogDir {
+		t.Errorf("different projects should have different LogDirs: %q", wctx1.LogDir)
+	}
+	// Same project always returns the same LogDir.
+	wctxSame := New("/home/user/proj-a", "/tmp/prompts")
+	if wctx1.LogDir != wctxSame.LogDir {
+		t.Errorf("LogDir must be deterministic: %q vs %q", wctx1.LogDir, wctxSame.LogDir)
 	}
 }
 

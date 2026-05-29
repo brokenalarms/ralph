@@ -84,12 +84,23 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		cancel()
 	}()
 
+	logDir := dirs.LogDir
 	stateFile := filepath.Join(ralphDir, "state.json")
-	logFile := filepath.Join(ralphDir, "loop.log")
+	logFile := filepath.Join(logDir, "loop.log")
+
+	// Ensure stable log directory exists and prune old logs before opening.
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to create log dir %s: %v", logDir, err)
+	}
+	if err := logging.PruneLogs(logDir, cfg.LogRetentionDays); err != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Log pruning failed: %v", err)
+	}
+	touchFile(logFile)
+	touchFile(filepath.Join(logDir, "raw.log"))
 
 	// Phase 1 — initialize the .ralph state directory and detect resume
 	// status. Pure local-state setup; no git operations.
-	resume, exitCode := initRalphDir(ctx, &cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(ctx, &cfg, ralphDir, stateFile, log)
 	if exitCode >= 0 {
 		return exitCode
 	}
@@ -271,16 +282,14 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		}
 	}
 
-	cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, sessionTasks, interrupted, log)
+	cleanup(cfg, gm, st, backend, ralphDir, logDir, planFile, scriptPath, args, sessionTasks, interrupted, log)
 	return 0
 }
 
-// initRalphDir creates .ralph, checks for dirty working tree, handles resume
-// detection. Returns (resume, exitCode). exitCode < 0 means continue.
-// initRalphDir creates the .ralph state directory (mkdir + touched log
-// files + reflections subdirectory) and detects resume status from
-// state.json. When the previous run completed, it prompts the user to
-// run fresh (or auto-resets under --wait).
+// initRalphDir creates the .ralph state directory and reflections
+// subdirectory, initialises config.toml, and detects resume status from
+// state.json. Log files are managed by the caller (runMain) in the stable
+// per-project LogDir so they survive .ralph recreation.
 //
 // This is pure local-state setup — it does not touch git, GitHub, or
 // the task backend. The git pre-flight checks (uncommitted changes,
@@ -291,7 +300,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 //   - resume=false, exitCode=-1: fresh run
 //   - exitCode=0: clean exit (user declined to rerun completed task)
 //   - exitCode=1: hard error
-func initRalphDir(ctx context.Context, cfg *config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
+func initRalphDir(ctx context.Context, cfg *config.Config, ralphDir, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to create .ralph dir: %v", err)
 		return false, 1
@@ -307,8 +316,6 @@ func initRalphDir(ctx context.Context, cfg *config.Config, ralphDir, logFile, st
 		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to load config.toml: %v", loadErr)
 	}
 
-	touchFile(logFile)
-	touchFile(filepath.Join(ralphDir, "raw.log"))
 	os.MkdirAll(filepath.Join(ralphDir, "reflections"), 0o755)
 
 	// Resume detection — pure state-file check, no git involved.
@@ -332,8 +339,6 @@ func initRalphDir(ctx context.Context, cfg *config.Config, ralphDir, logFile, st
 			if runFresh {
 				os.RemoveAll(ralphDir)
 				os.MkdirAll(ralphDir, 0o755)
-				touchFile(logFile)
-				touchFile(filepath.Join(ralphDir, "raw.log"))
 				return false, -1
 			}
 			return false, 0
@@ -378,7 +383,7 @@ func initTaskBackend(cfg config.Config, promptsDir, ralphDir string, log *loggin
 }
 
 // cleanup generates resume script, prints summary, and removes unused worktrees.
-func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
+func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, logDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
 
 	// Clear cli_config so stale flags don't persist across manual restarts.
@@ -404,7 +409,7 @@ func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backe
 
 	generateResumeScript(cfg, ralphDir, scriptPath, args, log)
 	printSessionSummary(sessionTasks, log)
-	printSummary(cfg, gm, st, backend, ralphDir, planFile, log)
+	printSummary(cfg, gm, st, backend, ralphDir, logDir, planFile, log)
 }
 
 // generateResumeScript writes a shell script that re-runs ralph with the same
@@ -472,7 +477,7 @@ func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
 }
 
 // printSummary displays the end-of-run summary.
-func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, planFile string, log *logging.Logger) {
+func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, logDir, planFile string, log *logging.Logger) {
 	fmt.Println()
 	log.Phase("=== SUMMARY ===")
 
@@ -486,7 +491,7 @@ func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.
 	total, _ := backend.CountTotal()
 	log.Emit(logging.Opts{}, "Tasks: %d/%d completed, %d remaining", completed, total, remaining)
 
-	log.Emit(logging.Opts{}, "Log:        %s", filepath.Join(ralphDir, "loop.log"))
+	log.Emit(logging.Opts{}, "Log:        %s", filepath.Join(logDir, "loop.log"))
 
 	if gm.GetWorktreeBranch() != "" && gm.GetProjectDir() != "" {
 		log.Emit(logging.Opts{}, "Worktree:   %s", gm.GetWorkDir())
@@ -513,7 +518,7 @@ func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.
 // If the loop was started with --tmux the session already exists; attach to it
 // directly without creating a new one. Otherwise create a new session whose
 // loop pane tails the log.
-func handleTmuxAttach(cfg config.Config, scriptPath string, ralphDir string, existingPID int, log *logging.Logger) int {
+func handleTmuxAttach(cfg config.Config, scriptPath string, ralphDir, logDir string, existingPID int, log *logging.Logger) int {
 	if tmux.InsideTmux() {
 		log.Emit(logging.Opts{Level: logging.Error}, "ralph attach must be run from outside tmux (you are inside session %s). Detach (Ctrl-b d) and run ralph attach from your shell.", os.Getenv("TMUX"))
 		return 1
@@ -528,7 +533,7 @@ func handleTmuxAttach(cfg config.Config, scriptPath string, ralphDir string, exi
 		Name:       tmux.BaseSessionName(cfg.ProjectDir),
 		ProjectDir: cfg.ProjectDir,
 		RalphDir:   ralphDir,
-		RawLogPath: filepath.Join(ralphDir, "raw.log"),
+		RawLogPath: filepath.Join(logDir, "raw.log"),
 		ScriptPath: scriptPath,
 	}
 
@@ -542,7 +547,7 @@ func handleTmuxAttach(cfg config.Config, scriptPath string, ralphDir string, exi
 
 	// Loop is running without --tmux; create a new session that tails the log.
 	sess.RalphCmd = fmt.Sprintf("echo 'Attached to ralph loop (PID %d)'; tail -f '%s'",
-		existingPID, filepath.Join(ralphDir, "loop.log"))
+		existingPID, filepath.Join(logDir, "loop.log"))
 
 	if err := sess.Setup(); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Tmux setup failed: %v", err)
@@ -570,7 +575,7 @@ func handleTmuxAttach(cfg config.Config, scriptPath string, ralphDir string, exi
 	return 0
 }
 
-func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
+func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir, logDir string, log *logging.Logger) int {
 	if !tmux.Available() {
 		log.Emit(logging.Opts{Level: logging.Error}, "tmux not found on PATH")
 		return 1
@@ -580,7 +585,7 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 		Name:       tmux.SessionName(cfg.ProjectDir),
 		ProjectDir: cfg.ProjectDir,
 		RalphDir:   ralphDir,
-		RawLogPath: filepath.Join(ralphDir, "raw.log"),
+		RawLogPath: filepath.Join(logDir, "raw.log"),
 		ScriptPath: scriptPath,
 		RalphCmd:   tmux.BuildRalphCmd(scriptPath, args),
 	}
