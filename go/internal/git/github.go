@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // PRState is the lifecycle state of a GitHub pull request.
@@ -176,9 +178,91 @@ type gitHub interface {
 
 // ghCLI implements GitHub using the gh CLI tool.
 type ghCLI struct {
+	logger                      Log
 	CopilotGatedTimeout         time.Duration
 	CopilotOpportunisticTimeout time.Duration
 	CodeRabbitTimeout           time.Duration
+}
+
+// firstErr returns the context error if present, otherwise the command error.
+// Context cancellation ("context deadline exceeded") is more informative than
+// the raw OS signal that gh reports when killed.
+func firstErr(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
+// shellSafeArgs joins gh args into a single string suitable for the log entry.
+// Args containing shell metacharacters are quoted with %q.
+func shellSafeArgs(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		if strings.ContainsAny(a, " \t\n\"'\\") {
+			quoted[i] = fmt.Sprintf("%q", a)
+		} else {
+			quoted[i] = a
+		}
+	}
+	return strings.Join(quoted, " ")
+}
+
+// logGHFailure emits exactly one Warn entry for a failed gh invocation.
+// stderrOut and stdoutOut are the raw buffer bytes; if empty, "(empty)" is
+// substituted. stdoutOut is capped at 500 bytes to keep the log scannable.
+func (g *ghCLI) logGHFailure(args []string, stderrOut, stdoutOut []byte, elapsed time.Duration, err error) {
+	if g.logger == nil {
+		return
+	}
+	stderrStr := "(empty)"
+	if len(stderrOut) > 0 {
+		stderrStr = string(stderrOut)
+	}
+	stdoutStr := "(empty)"
+	if len(stdoutOut) > 0 {
+		b := stdoutOut
+		if len(b) > 500 {
+			b = b[:500]
+		}
+		stdoutStr = string(b)
+	}
+	g.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+		`[gh] command "%s" failed after %s — stderr: %s — stdout: %s — err: %v`,
+		shellSafeArgs(args), elapsed.Round(time.Millisecond), stderrStr, stdoutStr, err)
+}
+
+// runGHCmd runs gh with the given args, capturing stderr to a buffer.
+// On err != nil or ctx.Err() != nil, emits one Warn log entry.
+// Returns stdout output and the error.
+func (g *ghCLI) runGHCmd(ctx context.Context, args []string) ([]byte, error) {
+	start := time.Now()
+	var stderrBuf bytes.Buffer
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Stderr = &stderrBuf
+	out, err := cmd.Output()
+	if err != nil || ctx.Err() != nil {
+		g.logGHFailure(args, stderrBuf.Bytes(), out, time.Since(start), firstErr(ctx, err))
+	}
+	return out, err
+}
+
+// runGHCombined runs gh with the given args, capturing stdout and stderr into
+// separate buffers. On err != nil or ctx.Err() != nil, emits one Warn log entry.
+// Returns stdout, stderr, and the error.
+func (g *ghCLI) runGHCombined(ctx context.Context, args []string) (stdout, stderr []byte, err error) {
+	start := time.Now()
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	err = cmd.Run()
+	stdout = stdoutBuf.Bytes()
+	stderr = stderrBuf.Bytes()
+	if err != nil || ctx.Err() != nil {
+		g.logGHFailure(args, stderr, stdout, time.Since(start), firstErr(ctx, err))
+	}
+	return
 }
 
 func (g *ghCLI) Available() bool {
@@ -191,13 +275,13 @@ func (g *ghCLI) FindOpenPR(ctx context.Context, branch, repoURL string) (int, er
 	if nwo == "" {
 		return 0, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
+	args := []string{"pr", "list",
 		"--head", branch,
 		"--repo", nwo,
 		"--state", "open",
 		"--json", "number",
-		"--jq", ".[0].number // empty")
-	out, err := cmd.Output()
+		"--jq", ".[0].number // empty"}
+	out, err := g.runGHCmd(ctx, args)
 	if err != nil {
 		return 0, fmt.Errorf("gh pr list failed: %w", err)
 	}
@@ -214,8 +298,7 @@ func (g *ghCLI) ListOpenPRBranches(ctx context.Context, repoURL string) ([]strin
 		return nil, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls?state=open", nwo)
-	cmd := exec.CommandContext(ctx, "gh", "api", "--paginate", endpoint, "--jq", ".[].head.ref")
-	out, err := cmd.Output()
+	out, err := g.runGHCmd(ctx, []string{"api", "--paginate", endpoint, "--jq", ".[].head.ref"})
 	if err != nil {
 		return nil, fmt.Errorf("gh api pulls failed: %w", err)
 	}
@@ -244,9 +327,13 @@ func (g *ghCLI) EditPR(ctx context.Context, prNumber int, repoURL, title, body s
 	if body != "" {
 		args = append(args, "-f", "body="+body)
 	}
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("PR edit failed: %s", strings.TrimSpace(string(out)))
+	stdout, stderr, err := g.runGHCombined(ctx, args)
+	if err != nil {
+		msg := strings.TrimSpace(string(append(stderr, stdout...)))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("PR edit failed: %s", msg)
 	}
 	return nil
 }
@@ -257,9 +344,14 @@ func (g *ghCLI) EditPRBase(ctx context.Context, prNumber int, repoURL, base stri
 		return fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
-	cmd := exec.CommandContext(ctx, "gh", "api", "-X", "PATCH", endpoint, "-f", "base="+base)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("PR base retarget failed: %s", strings.TrimSpace(string(out)))
+	args := []string{"api", "-X", "PATCH", endpoint, "-f", "base=" + base}
+	stdout, stderr, err := g.runGHCombined(ctx, args)
+	if err != nil {
+		msg := strings.TrimSpace(string(append(stderr, stdout...)))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("PR base retarget failed: %s", msg)
 	}
 	return nil
 }
@@ -279,10 +371,9 @@ func (g *ghCLI) MergePR(ctx context.Context, prNumber int, repoURL string, opts 
 	if opts.Admin {
 		args = append(args, "-F", "bypass_restrictions=true")
 	}
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	out, err := cmd.CombinedOutput()
+	stdout, _, err := g.runGHCombined(ctx, args)
 
-	result := classifyMergeStatus(string(out), err)
+	result := classifyMergeStatus(string(stdout), err)
 	if result.Merged {
 		if opts.DeleteBranch {
 			g.deleteBranch(ctx, nwo, pr)
@@ -351,8 +442,7 @@ func parseAPIMessage(output string) string {
 // deleteBranch deletes the PR's head branch after a successful merge.
 func (g *ghCLI) deleteBranch(ctx context.Context, nwo, prNumber string) {
 	// Look up the head branch name from the PR.
-	cmd := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/pulls/%s", nwo, prNumber), "--jq", ".head.ref")
-	out, err := cmd.Output()
+	out, err := g.runGHCmd(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%s", nwo, prNumber), "--jq", ".head.ref"})
 	if err != nil {
 		return
 	}
@@ -360,10 +450,8 @@ func (g *ghCLI) deleteBranch(ctx context.Context, nwo, prNumber string) {
 	if branch == "" {
 		return
 	}
-	delCmd := exec.CommandContext(ctx, "gh", "api",
-		fmt.Sprintf("repos/%s/git/refs/heads/%s", nwo, branch),
-		"--method", "DELETE")
-	delCmd.CombinedOutput() // best-effort
+	// best-effort delete — log on failure but don't propagate
+	g.runGHCmd(ctx, []string{"api", fmt.Sprintf("repos/%s/git/refs/heads/%s", nwo, branch), "--method", "DELETE"}) //nolint:errcheck
 }
 
 func (g *ghCLI) ListChecks(ctx context.Context, prNumber int, repoURL string) ([]CICheckResult, error) {
@@ -376,8 +464,7 @@ func (g *ghCLI) ListChecks(ctx context.Context, prNumber int, repoURL string) ([
 		return nil, fmt.Errorf("getting PR head SHA: %w", err)
 	}
 	endpoint := fmt.Sprintf("repos/%s/commits/%s/check-runs", nwo, detail.HeadSHA)
-	cmd := exec.CommandContext(ctx, "gh", "api", endpoint, "--jq", ".check_runs")
-	out, err := cmd.Output()
+	out, err := g.runGHCmd(ctx, []string{"api", endpoint, "--jq", ".check_runs"})
 	if err != nil {
 		return nil, fmt.Errorf("gh api check-runs failed: %w", err)
 	}
@@ -425,10 +512,10 @@ func mapCheckRun(name, status string, conclusion *string, startedAt *time.Time) 
 	}
 	return CICheckResult{Name: name, State: state, Bucket: bucket, StartedAt: t}
 }
+
 func (g *ghCLI) GetRequiredChecks(ctx context.Context, nwo, branch string) ([]string, error) {
 	endpoint := fmt.Sprintf("repos/%s/rules/branches/%s", nwo, branch)
-	cmd := exec.CommandContext(ctx, "gh", "api", endpoint)
-	out, err := cmd.Output()
+	out, err := g.runGHCmd(ctx, []string{"api", endpoint})
 	if err != nil {
 		return nil, fmt.Errorf("gh api rules/branches failed: %w", err)
 	}
@@ -462,10 +549,16 @@ func (g *ghCLI) ReplyToReviewComment(ctx context.Context, nwo string, prNumber, 
 	if err != nil {
 		return fmt.Errorf("marshaling reply body: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "gh", "api", "--method", "POST", endpoint, "--input", "-")
+	start := time.Now()
+	args := []string{"api", "--method", "POST", endpoint, "--input", "-"}
+	var stderrBuf bytes.Buffer
+	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Stdin = bytes.NewReader(input)
-	if _, err := cmd.Output(); err != nil {
-		return fmt.Errorf("gh api reply to review comment: %w", err)
+	cmd.Stderr = &stderrBuf
+	out, err := cmd.Output()
+	if err != nil || ctx.Err() != nil {
+		g.logGHFailure(args, stderrBuf.Bytes(), out, time.Since(start), firstErr(ctx, err))
+		return fmt.Errorf("gh api reply to review comment: %w", firstErr(ctx, err))
 	}
 	return nil
 }
@@ -491,13 +584,13 @@ func (g *ghCLI) FetchReviewThreadIDs(ctx context.Context, nwo string, prNumber i
     }
   }
 }`
-	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
-		"-f", "query="+q,
-		"-f", "owner="+parts[0],
-		"-f", "repo="+parts[1],
+	args := []string{"api", "graphql",
+		"-f", "query=" + q,
+		"-f", "owner=" + parts[0],
+		"-f", "repo=" + parts[1],
 		"-F", fmt.Sprintf("prNumber=%d", prNumber),
-	)
-	out, err := cmd.Output()
+	}
+	out, err := g.runGHCmd(ctx, args)
 	if err != nil {
 		return nil, fmt.Errorf("gh api graphql review threads: %w", err)
 	}
@@ -543,11 +636,11 @@ func (g *ghCLI) ResolveReviewThread(ctx context.Context, threadID string) error 
     thread { id }
   }
 }`
-	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
-		"-f", "query="+q,
-		"-f", "threadId="+threadID,
-	)
-	if _, err := cmd.Output(); err != nil {
+	args := []string{"api", "graphql",
+		"-f", "query=" + q,
+		"-f", "threadId=" + threadID,
+	}
+	if _, err := g.runGHCmd(ctx, args); err != nil {
 		return fmt.Errorf("gh api graphql resolve thread: %w", err)
 	}
 	return nil
@@ -555,11 +648,19 @@ func (g *ghCLI) ResolveReviewThread(ctx context.Context, threadID string) error 
 
 func (g *ghCLI) GetRunLog(ctx context.Context, prNumber int, workDir string) string {
 	pr := strconv.Itoa(prNumber)
-	cmd := exec.CommandContext(ctx, "gh", "pr", "checks", pr, "--json", "name,state,link", "--jq",
-		`.[] | select(.state == "FAILURE") | .link`)
+	start1 := time.Now()
+	args1 := []string{"pr", "checks", pr, "--json", "name,state,link", "--jq",
+		`.[] | select(.state == "FAILURE") | .link`}
+	var stderrBuf1 bytes.Buffer
+	cmd := exec.CommandContext(ctx, "gh", args1...)
 	cmd.Dir = workDir
+	cmd.Stderr = &stderrBuf1
 	out, err := cmd.Output()
-	if err != nil || len(out) == 0 {
+	if err != nil || ctx.Err() != nil {
+		g.logGHFailure(args1, stderrBuf1.Bytes(), out, time.Since(start1), firstErr(ctx, err))
+		return ""
+	}
+	if len(out) == 0 {
 		return ""
 	}
 
@@ -577,10 +678,15 @@ func (g *ghCLI) GetRunLog(ctx context.Context, prNumber int, workDir string) str
 		return ""
 	}
 
-	logCmd := exec.CommandContext(ctx, "gh", "run", "view", runID, "--log-failed")
+	start2 := time.Now()
+	args2 := []string{"run", "view", runID, "--log-failed"}
+	var stderrBuf2 bytes.Buffer
+	logCmd := exec.CommandContext(ctx, "gh", args2...)
 	logCmd.Dir = workDir
+	logCmd.Stderr = &stderrBuf2
 	logOut, err := logCmd.Output()
 	if err != nil {
+		g.logGHFailure(args2, stderrBuf2.Bytes(), logOut, time.Since(start2), firstErr(ctx, err))
 		return ""
 	}
 
@@ -596,13 +702,13 @@ func (g *ghCLI) FindPR(ctx context.Context, branch, repoURL string) (int, string
 	if nwo == "" {
 		return 0, "", "", fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
+	args := []string{"pr", "list",
 		"--head", branch,
 		"--repo", nwo,
 		"--state", "all",
 		"--json", "number,title,url",
-		"--jq", `.[0] // empty | "\(.number)\t\(.title)\t\(.url)"`)
-	out, err := cmd.Output()
+		"--jq", `.[0] // empty | "\(.number)\t\(.title)\t\(.url)"`}
+	out, err := g.runGHCmd(ctx, args)
 	if err != nil {
 		return 0, "", "", fmt.Errorf("gh pr list failed: %w", err)
 	}
@@ -636,7 +742,7 @@ func (g *ghCLI) SearchPR(ctx context.Context, workDir, query string) (int, error
 		return 0, fmt.Errorf("cannot determine owner/repo from remote URL")
 	}
 	q := fmt.Sprintf("%s+repo:%s+type:pr", query, nwo)
-	out, err := exec.CommandContext(ctx, "gh", "api", "search/issues", "-f", "q="+q, "--jq", ".items[0].number // empty").Output()
+	out, err := g.runGHCmd(ctx, []string{"api", "search/issues", "-f", "q=" + q, "--jq", ".items[0].number // empty"})
 	if err != nil {
 		return 0, fmt.Errorf("gh api search failed: %w", err)
 	}
@@ -652,10 +758,10 @@ func (g *ghCLI) PRDiff(ctx context.Context, repoURL string, prNumber int) (strin
 	if nwo == "" {
 		return "", fmt.Errorf("could not determine repo NWO from %q", repoURL)
 	}
-	cmd := exec.CommandContext(ctx, "gh", "api",
+	args := []string{"api",
 		fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber),
-		"-H", "Accept: application/vnd.github.diff")
-	out, err := cmd.Output()
+		"-H", "Accept: application/vnd.github.diff"}
+	out, err := g.runGHCmd(ctx, args)
 	if err != nil {
 		return "", fmt.Errorf("gh api pull diff failed: %w", err)
 	}
@@ -668,9 +774,14 @@ func (g *ghCLI) ReopenPR(ctx context.Context, prNumber int, repoURL string) erro
 		return fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
-	cmd := exec.CommandContext(ctx, "gh", "api", "-X", "PATCH", endpoint, "-f", "state=open")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("gh api PATCH %s failed: %s", endpoint, strings.TrimSpace(string(out)))
+	args := []string{"api", "-X", "PATCH", endpoint, "-f", "state=open"}
+	stdout, stderr, err := g.runGHCombined(ctx, args)
+	if err != nil {
+		msg := strings.TrimSpace(string(append(stderr, stdout...)))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("gh api PATCH %s failed: %s", endpoint, msg)
 	}
 	return nil
 }
@@ -687,9 +798,18 @@ func (g *ghCLI) CreatePRViaAPI(ctx context.Context, nwo string, opts CreatePROpt
 		return 0, fmt.Errorf("marshaling PR request: %w", err)
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
-	cmd := exec.CommandContext(ctx, "gh", "api", endpoint, "--method", "POST", "--input", "-")
+	start := time.Now()
+	args := []string{"api", endpoint, "--method", "POST", "--input", "-"}
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Stdin = bytes.NewReader(bodyBytes)
-	out, err := cmd.CombinedOutput()
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	err = cmd.Run()
+	out := stdoutBuf.Bytes()
+	if err != nil || ctx.Err() != nil {
+		g.logGHFailure(args, stderrBuf.Bytes(), out, time.Since(start), firstErr(ctx, err))
+	}
 	if err != nil {
 		if strings.Contains(string(out), "already exists") {
 			if existing, findErr := g.FindOpenPR(ctx, opts.Head, opts.repo); findErr == nil && existing != 0 {
@@ -711,10 +831,9 @@ func (g *ghCLI) CreatePRViaAPI(ctx context.Context, nwo string, opts CreatePROpt
 }
 
 func (g *ghCLI) GetJobStepCount(ctx context.Context, nwo string, prNumber int) (int, error) {
-	cmd := exec.CommandContext(ctx, "gh", "api",
+	out, err := g.runGHCmd(ctx, []string{"api",
 		fmt.Sprintf("repos/%s/actions/runs?event=pull_request&per_page=1", nwo),
-		"--jq", ".workflow_runs[0].id")
-	out, err := cmd.Output()
+		"--jq", ".workflow_runs[0].id"})
 	if err != nil {
 		return -1, fmt.Errorf("failed to get runs: %w", err)
 	}
@@ -722,10 +841,9 @@ func (g *ghCLI) GetJobStepCount(ctx context.Context, nwo string, prNumber int) (
 	if runID == "" {
 		return -1, fmt.Errorf("no runs found")
 	}
-	jobsCmd := exec.CommandContext(ctx, "gh", "api",
+	jobsOut, err := g.runGHCmd(ctx, []string{"api",
 		fmt.Sprintf("repos/%s/actions/runs/%s/jobs", nwo, runID),
-		"--jq", "[.jobs[].steps | length] | add // 0")
-	jobsOut, err := jobsCmd.Output()
+		"--jq", "[.jobs[].steps | length] | add // 0"})
 	if err != nil {
 		return -1, fmt.Errorf("failed to get jobs: %w", err)
 	}
@@ -736,9 +854,9 @@ func (g *ghCLI) GetJobStepCount(ctx context.Context, nwo string, prNumber int) (
 
 func (g *ghCLI) GetPR(ctx context.Context, nwo string, prNumber int) (*PRDetail, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
-	cmd := exec.CommandContext(ctx, "gh", "api", endpoint,
-		"--jq", `(if .merged_at != null then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end)+"\t"+.base.ref+"\t"+.head.ref+"\t"+.head.sha`)
-	out, err := cmd.Output()
+	args := []string{"api", endpoint,
+		"--jq", `(if .merged_at != null then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end)+"\t"+.base.ref+"\t"+.head.ref+"\t"+.head.sha`}
+	out, err := g.runGHCmd(ctx, args)
 	if err != nil {
 		return nil, fmt.Errorf("gh api PR failed: %w", err)
 	}
@@ -782,8 +900,7 @@ func (g *ghCLI) DetectActiveReviewers(ctx context.Context, nwo string) ([]Review
 // checkCopilotRulesets fetches each ruleset detail to find a copilot_code_review
 // rule. Returns (enabled, reviewOnPush, error).
 func (g *ghCLI) checkCopilotRulesets(ctx context.Context, nwo string) (bool, bool, error) {
-	listCmd := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/rulesets", nwo))
-	listOut, err := listCmd.Output()
+	listOut, err := g.runGHCmd(ctx, []string{"api", fmt.Sprintf("repos/%s/rulesets", nwo)})
 	if err != nil {
 		return false, false, fmt.Errorf("gh api rulesets failed: %w", err)
 	}
@@ -794,8 +911,7 @@ func (g *ghCLI) checkCopilotRulesets(ctx context.Context, nwo string) (bool, boo
 		return false, false, fmt.Errorf("parsing rulesets list: %w", err)
 	}
 	for _, entry := range listing {
-		detailCmd := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/rulesets/%d", nwo, entry.ID))
-		detailOut, err := detailCmd.Output()
+		detailOut, err := g.runGHCmd(ctx, []string{"api", fmt.Sprintf("repos/%s/rulesets/%d", nwo, entry.ID)})
 		if err != nil {
 			return false, false, fmt.Errorf("gh api rulesets/%d failed: %w", entry.ID, err)
 		}
@@ -867,8 +983,7 @@ func (g *ghCLI) PollReview(ctx context.Context, nwo string, botUsername string, 
 // isRequestedReviewer reports whether botUsername is listed as a requested reviewer on the PR.
 func (g *ghCLI) isRequestedReviewer(ctx context.Context, nwo, botUsername string, prNumber int) (bool, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/requested_reviewers", nwo, prNumber)
-	cmd := exec.CommandContext(ctx, "gh", "api", endpoint)
-	out, err := cmd.Output()
+	out, err := g.runGHCmd(ctx, []string{"api", endpoint})
 	if err != nil {
 		return false, fmt.Errorf("gh api requested_reviewers: %w", err)
 	}
@@ -891,16 +1006,15 @@ func (g *ghCLI) isRequestedReviewer(ctx context.Context, nwo, botUsername string
 // terminalReviewStates are GitHub review states that mean the review is complete.
 // PENDING means Copilot is still composing the review — keep polling.
 var terminalReviewStates = map[string]bool{
-	"APPROVED":           true,
-	"COMMENTED":          true,
-	"CHANGES_REQUESTED":  true,
-	"DISMISSED":          true,
+	"APPROVED":          true,
+	"COMMENTED":         true,
+	"CHANGES_REQUESTED": true,
+	"DISMISSED":         true,
 }
 
 func (g *ghCLI) fetchReview(ctx context.Context, nwo, botUsername string, prNumber int) (*AutoReview, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/reviews", nwo, prNumber)
-	cmd := exec.CommandContext(ctx, "gh", "api", endpoint)
-	out, err := cmd.Output()
+	out, err := g.runGHCmd(ctx, []string{"api", endpoint})
 	if err != nil {
 		return nil, fmt.Errorf("gh api reviews: %w", err)
 	}
@@ -930,8 +1044,7 @@ func (g *ghCLI) fetchReview(ctx context.Context, nwo, botUsername string, prNumb
 func (g *ghCLI) fetchReviewComments(ctx context.Context, nwo string, prNumber, reviewID int) ([]ReviewComment, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/comments", nwo, prNumber)
 	jqFilter := fmt.Sprintf("[.[] | select(.pull_request_review_id == %d) | {id: .id, path: .path, line: (.line // .original_line // 0), body: .body}]", reviewID)
-	cmd := exec.CommandContext(ctx, "gh", "api", endpoint, "--jq", jqFilter)
-	out, err := cmd.Output()
+	out, err := g.runGHCmd(ctx, []string{"api", endpoint, "--jq", jqFilter})
 	if err != nil {
 		return nil, fmt.Errorf("gh api pr comments: %w", err)
 	}
@@ -961,7 +1074,7 @@ func (g *ghCLI) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error
 		return nil, fmt.Errorf("cannot determine owner/repo from remote URL")
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls?state=all", nwo)
-	out, err := exec.CommandContext(ctx, "gh", "api", "--paginate", "--jq", ".[]", endpoint).Output()
+	out, err := g.runGHCmd(ctx, []string{"api", "--paginate", "--jq", ".[]", endpoint})
 	if err != nil {
 		return nil, fmt.Errorf("gh api pulls: %w", err)
 	}
