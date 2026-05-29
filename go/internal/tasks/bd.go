@@ -806,4 +806,32 @@ func (b *BD) GetOpenDependents(id string) ([]string, error) {
 	return openIDs, nil
 }
 
+// IsReady reports whether task id is ready to work on. It calls bd show <id>
+// --json and checks the blocked_by array: returns true iff every entry has
+// status=closed (or the array is empty). Returns false (no error) for any
+// non-closed dep; returns an error only when the bd call itself fails.
+func (b *BD) IsReady(id string) (bool, error) {
+	if id == "" {
+		return true, nil
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return false, err
+	}
+	var items []struct {
+		BlockedBy []struct {
+			Status string `json:"status"`
+		} `json:"blocked_by"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return true, nil
+	}
+	for _, dep := range items[0].BlockedBy {
+		if dep.Status != "closed" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (b *BD) Label() string { return "beads" }

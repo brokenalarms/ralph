@@ -634,6 +634,23 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}, true
 }
 
+// RunIteration re-verifies that the selected task is still ready immediately
+// before invoking the agent, then delegates to runAgent. This closes the race
+// between task selection (bd ready snapshot) and agent invocation during which
+// a dep may be added via bd dep add.
+func (l *Loop) RunIteration(ctx context.Context, task taskContext, runIteration int) agentRunResult {
+	if task.id != "" && l.taskBackend != nil {
+		ready, err := l.taskBackend.IsReady(task.id)
+		if err != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "IsReady(%s): %v — proceeding", task.id, err)
+		} else if !ready {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s no longer ready (deps changed since selection) — skipping iteration", task.id)
+			return agentRunResult{action: actionRetry}
+		}
+	}
+	return l.runAgent(ctx, task, runIteration)
+}
+
 // handleRunResult processes errors and retryable conditions from a Claude
 // run (offline, feedback kill, idle timeout, rate limit). Returns the
 // loopAction Run() should take. When actionRetry is returned, the caller
