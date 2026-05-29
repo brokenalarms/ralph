@@ -245,9 +245,9 @@ type listChecksCounter struct {
 	n int
 }
 
-func (c *listChecksCounter) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
+func (c *listChecksCounter) ListChecks(ctx context.Context, prNumber int, repoURL string) ([]CICheckResult, error) {
 	c.n++
-	return c.gitHub.ListChecks(prNumber, repoURL)
+	return c.gitHub.ListChecks(ctx, prNumber, repoURL)
 }
 
 // sequencedJobStepGH wraps a gitHub stub and returns different JobStepCount
@@ -264,12 +264,12 @@ type sequencedJobStepGH struct {
 	call int
 }
 
-func (s *sequencedJobStepGH) GetJobStepCount(nwo string, prNumber int) (int, error) {
+func (s *sequencedJobStepGH) GetJobStepCount(ctx context.Context, nwo string, prNumber int) (int, error) {
 	if s.call < len(s.responses) {
 		r := s.responses[s.call]
 		s.call++
 		return r.count, r.err
 	}
-	return s.gitHub.GetJobStepCount(nwo, prNumber)
+	return s.gitHub.GetJobStepCount(ctx, nwo, prNumber)
 }
 

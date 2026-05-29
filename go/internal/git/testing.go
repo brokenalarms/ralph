@@ -142,7 +142,7 @@ func normalizeStubPR(pr *StubPR) {
 
 func (s *stubGitHub) Available() bool { return s.cfg.Available }
 
-func (s *stubGitHub) FindOpenPR(branch, repoURL string) (int, error) {
+func (s *stubGitHub) FindOpenPR(_ context.Context, branch, repoURL string) (int, error) {
 	if s.cfg.FindOpenPRErr != nil {
 		return 0, s.cfg.FindOpenPRErr
 	}
@@ -154,7 +154,7 @@ func (s *stubGitHub) FindOpenPR(branch, repoURL string) (int, error) {
 	return 0, nil
 }
 
-func (s *stubGitHub) CreatePR(opts CreatePROpts) (int, error) {
+func (s *stubGitHub) CreatePR(_ context.Context, opts CreatePROpts) (int, error) {
 	if s.cfg.CreatePRErr != nil {
 		return 0, s.cfg.CreatePRErr
 	}
@@ -172,7 +172,7 @@ func (s *stubGitHub) CreatePR(opts CreatePROpts) (int, error) {
 	return num, nil
 }
 
-func (s *stubGitHub) MergePR(prNumber int, _ string, opts MergeOpts) MergeResult {
+func (s *stubGitHub) MergePR(_ context.Context, prNumber int, _ string, opts MergeOpts) MergeResult {
 	pr, ok := s.prs[prNumber]
 	if !ok {
 		return MergeResult{Merged: false, Message: fmt.Sprintf("PR %d not found", prNumber)}
@@ -190,11 +190,11 @@ func (s *stubGitHub) MergePR(prNumber int, _ string, opts MergeOpts) MergeResult
 	return MergeResult{Merged: true}
 }
 
-func (s *stubGitHub) ListChecks(prNumber int, _ string) ([]CICheckResult, error) {
+func (s *stubGitHub) ListChecks(_ context.Context, prNumber int, _ string) ([]CICheckResult, error) {
 	return s.cfg.Checks[prNumber], s.cfg.ListChecksErr
 }
 
-func (s *stubGitHub) EditPR(prNumber int, _, title, _ string) error {
+func (s *stubGitHub) EditPR(_ context.Context, prNumber int, _, title, _ string) error {
 	if s.cfg.EditPRErr != nil {
 		return s.cfg.EditPRErr
 	}
@@ -204,7 +204,7 @@ func (s *stubGitHub) EditPR(prNumber int, _, title, _ string) error {
 	return nil
 }
 
-func (s *stubGitHub) EditPRBase(prNumber int, _, base string) error {
+func (s *stubGitHub) EditPRBase(_ context.Context, prNumber int, _, base string) error {
 	if s.cfg.EditPRBaseErr != nil {
 		return s.cfg.EditPRBaseErr
 	}
@@ -214,11 +214,11 @@ func (s *stubGitHub) EditPRBase(prNumber int, _, base string) error {
 	return nil
 }
 
-func (s *stubGitHub) GetRunLog(_ int, _ string) string {
+func (s *stubGitHub) GetRunLog(_ context.Context, _ int, _ string) string {
 	return s.cfg.RunLog
 }
 
-func (s *stubGitHub) FindPR(branch, _ string) (int, string, string, error) {
+func (s *stubGitHub) FindPR(_ context.Context, branch, _ string) (int, string, string, error) {
 	if s.cfg.FindPRErr != nil {
 		return 0, "", "", s.cfg.FindPRErr
 	}
@@ -230,15 +230,15 @@ func (s *stubGitHub) FindPR(branch, _ string) (int, string, string, error) {
 	return 0, "", "", nil
 }
 
-func (s *stubGitHub) SearchPR(_, _ string) (int, error) {
+func (s *stubGitHub) SearchPR(_ context.Context, _, _ string) (int, error) {
 	return s.cfg.SearchPRResult, s.cfg.SearchPRErr
 }
 
-func (s *stubGitHub) PRDiff(_ string, _ int) (string, error) {
+func (s *stubGitHub) PRDiff(_ context.Context, _ string, _ int) (string, error) {
 	return s.cfg.PRDiffOutput, s.cfg.PRDiffErr
 }
 
-func (s *stubGitHub) GetPR(_ string, prNumber int) (*PRDetail, error) {
+func (s *stubGitHub) GetPR(_ context.Context, _ string, prNumber int) (*PRDetail, error) {
 	if s.cfg.GetPRErr != nil {
 		return nil, s.cfg.GetPRErr
 	}
@@ -254,7 +254,7 @@ func (s *stubGitHub) GetPR(_ string, prNumber int) (*PRDetail, error) {
 	}, nil
 }
 
-func (s *stubGitHub) ListOpenPRBranches(_ string) ([]string, error) {
+func (s *stubGitHub) ListOpenPRBranches(_ context.Context, _ string) ([]string, error) {
 	if s.cfg.ListOpenPRBranchesErr != nil {
 		return nil, s.cfg.ListOpenPRBranchesErr
 	}
@@ -274,7 +274,7 @@ func (s *stubGitHub) ListOpenPRBranches(_ string) ([]string, error) {
 	return branches, nil
 }
 
-func (s *stubGitHub) ReopenPR(prNumber int, _ string) error {
+func (s *stubGitHub) ReopenPR(_ context.Context, prNumber int, _ string) error {
 	if s.cfg.ReopenPRErr != nil {
 		return s.cfg.ReopenPRErr
 	}
@@ -284,18 +284,18 @@ func (s *stubGitHub) ReopenPR(prNumber int, _ string) error {
 	return nil
 }
 
-func (s *stubGitHub) CreatePRViaAPI(_ string, opts CreatePROpts) (int, error) {
+func (s *stubGitHub) CreatePRViaAPI(_ context.Context, _ string, opts CreatePROpts) (int, error) {
 	if s.cfg.CreatePRViaAPIErr != nil {
 		return 0, s.cfg.CreatePRViaAPIErr
 	}
-	return s.CreatePR(opts)
+	return s.CreatePR(context.Background(), opts)
 }
 
-func (s *stubGitHub) GetJobStepCount(_ string, _ int) (int, error) {
+func (s *stubGitHub) GetJobStepCount(_ context.Context, _ string, _ int) (int, error) {
 	return s.cfg.JobStepCount, s.cfg.GetJobStepCountErr
 }
 
-func (s *stubGitHub) ListAllPRs(_ string) ([]PRInfo, error) {
+func (s *stubGitHub) ListAllPRs(_ context.Context, _ string) ([]PRInfo, error) {
 	if s.cfg.ListAllPRsErr != nil {
 		return nil, s.cfg.ListAllPRsErr
 	}
@@ -312,27 +312,27 @@ func (s *stubGitHub) ListAllPRs(_ string) ([]PRInfo, error) {
 	return out, nil
 }
 
-func (s *stubGitHub) DetectActiveReviewers(_ string) ([]Reviewer, error) {
+func (s *stubGitHub) DetectActiveReviewers(_ context.Context, _ string) ([]Reviewer, error) {
 	return s.cfg.Reviewers, s.cfg.DetectReviewersErr
 }
 
-func (s *stubGitHub) PollReview(_, _ string, _ int, _ time.Duration) (*AutoReview, error) {
+func (s *stubGitHub) PollReview(_ context.Context, _, _ string, _ int, _ time.Duration) (*AutoReview, error) {
 	return s.cfg.PollReviewResult, s.cfg.PollReviewErr
 }
 
-func (s *stubGitHub) GetRequiredChecks(_, _ string) ([]string, error) {
+func (s *stubGitHub) GetRequiredChecks(_ context.Context, _, _ string) ([]string, error) {
 	return s.cfg.RequiredChecks, s.cfg.RequiredChecksErr
 }
 
-func (s *stubGitHub) ReplyToReviewComment(_ string, _, _ int, _ string) error {
+func (s *stubGitHub) ReplyToReviewComment(_ context.Context, _ string, _, _ int, _ string) error {
 	return s.cfg.ReplyToReviewErr
 }
 
-func (s *stubGitHub) FetchReviewThreadIDs(_ string, _ int, _ []int) (map[int]string, error) {
+func (s *stubGitHub) FetchReviewThreadIDs(_ context.Context, _ string, _ int, _ []int) (map[int]string, error) {
 	return s.cfg.FetchThreadIDs, s.cfg.FetchThreadIDsErr
 }
 
-func (s *stubGitHub) ResolveReviewThread(_ string) error {
+func (s *stubGitHub) ResolveReviewThread(_ context.Context, _ string) error {
 	return s.cfg.ResolveThreadErr
 }
 
@@ -532,18 +532,18 @@ func (s *stubRepo) SetKnownPRNumber(n int)   { s.knownPRNumber = n }
 
 // --- PR operations: delegate to inner gh, mirroring *repo's delegation ---
 
-func (s *stubRepo) FindOpenPRForBranch(branch string) (int, error) {
+func (s *stubRepo) FindOpenPRForBranch(ctx context.Context, branch string) (int, error) {
 	if !s.gh.Available() {
 		return 0, nil
 	}
-	return s.gh.FindOpenPR(branch, s.cfg.RemoteURL)
+	return s.gh.FindOpenPR(ctx, branch, s.cfg.RemoteURL)
 }
 
-func (s *stubRepo) GetPRState(prNumber int) (PRState, error) {
+func (s *stubRepo) GetPRState(ctx context.Context, prNumber int) (PRState, error) {
 	if !s.gh.Available() {
 		return "", nil
 	}
-	pr, err := s.gh.GetPR(NWOFromRemote(s.cfg.RemoteURL), prNumber)
+	pr, err := s.gh.GetPR(ctx, NWOFromRemote(s.cfg.RemoteURL), prNumber)
 	if err != nil {
 		return "", err
 	}
@@ -553,39 +553,39 @@ func (s *stubRepo) GetPRState(prNumber int) (PRState, error) {
 	return pr.State, nil
 }
 
-func (s *stubRepo) ListOpenPRBranches() ([]string, error) {
+func (s *stubRepo) ListOpenPRBranches(ctx context.Context) ([]string, error) {
 	if s.cfg.RemoteURL == "" || !s.gh.Available() {
 		return nil, nil
 	}
-	return s.gh.ListOpenPRBranches(s.cfg.RemoteURL)
+	return s.gh.ListOpenPRBranches(ctx, s.cfg.RemoteURL)
 }
 
-func (s *stubRepo) GetPRBase(prNumber int) string {
+func (s *stubRepo) GetPRBase(ctx context.Context, prNumber int) string {
 	if !s.gh.Available() {
 		return ""
 	}
-	pr, err := s.gh.GetPR(NWOFromRemote(s.cfg.RemoteURL), prNumber)
+	pr, err := s.gh.GetPR(ctx, NWOFromRemote(s.cfg.RemoteURL), prNumber)
 	if err != nil || pr == nil {
 		return ""
 	}
 	return pr.BaseRef
 }
 
-func (s *stubRepo) FindPRForBranch(branch string) (int, string, string, error) {
+func (s *stubRepo) FindPRForBranch(ctx context.Context, branch string) (int, string, string, error) {
 	if !s.gh.Available() {
 		return 0, "", "", nil
 	}
-	return s.gh.FindPR(branch, s.cfg.RemoteURL)
+	return s.gh.FindPR(ctx, branch, s.cfg.RemoteURL)
 }
 
-func (s *stubRepo) PRChainIsHealthy(prNumber int) (bool, string) {
+func (s *stubRepo) PRChainIsHealthy(_ context.Context, prNumber int) (bool, string) {
 	if s.cfg.PRChainHealthyMsg != "" {
 		return s.cfg.PRChainHealthy, s.cfg.PRChainHealthyMsg
 	}
 	return true, ""
 }
 
-func (s *stubRepo) PRDiffForTask(taskID string) string {
+func (s *stubRepo) PRDiffForTask(ctx context.Context, taskID string) string {
 	return s.cfg.PRDiffForTaskResult
 }
 
@@ -603,7 +603,7 @@ func (s *stubRepo) ConflictDiff() string                   { return s.cfg.Confli
 func (s *stubRepo) RemoteURL() string                      { return s.cfg.RemoteURL }
 func (s *stubRepo) DetectDefaultBranch() string            { return s.cfg.DefaultBranch }
 func (s *stubRepo) RecentChangedFiles(_ int) string        { return s.cfg.RecentChangedFiles }
-func (s *stubRepo) GetCIFailureLog(_ int) string           { return s.cfg.CIFailureLog }
+func (s *stubRepo) GetCIFailureLog(_ context.Context, _ int) string { return s.cfg.CIFailureLog }
 
 // --- Branch lifecycle ---
 
@@ -721,23 +721,23 @@ func (s *stubRepo) PushAndCreatePR(_ context.Context, _, _, _ string) (int, erro
 
 // --- Reviewer / review operations: delegate to gh where possible ---
 
-func (s *stubRepo) DetectActiveReviewers() ([]Reviewer, error) {
+func (s *stubRepo) DetectActiveReviewers(ctx context.Context) ([]Reviewer, error) {
 	nwo := NWOFromRemote(s.cfg.RemoteURL)
 	if nwo == "" {
 		return nil, nil
 	}
-	return s.gh.DetectActiveReviewers(nwo)
+	return s.gh.DetectActiveReviewers(ctx, nwo)
 }
 
-func (s *stubRepo) PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
+func (s *stubRepo) PollReview(ctx context.Context, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
 	nwo := NWOFromRemote(s.cfg.RemoteURL)
 	if nwo == "" {
 		return nil, nil
 	}
-	return s.gh.PollReview(nwo, botUsername, prNumber, timeout)
+	return s.gh.PollReview(ctx, nwo, botUsername, prNumber, timeout)
 }
 
-func (s *stubRepo) ReplyToAndResolveComments(_ int, _ []ReviewComment) error {
+func (s *stubRepo) ReplyToAndResolveComments(_ context.Context, _ int, _ []ReviewComment) error {
 	return s.cfg.ReplyToAndResolveCommentsErr
 }
 
@@ -806,8 +806,8 @@ func (s *stubRepo) GitHubAvailable() bool {
 	return s.gh.Available()
 }
 
-func (s *stubRepo) ListAllPRs(workDir string) ([]PRInfo, error) {
-	return s.gh.ListAllPRs(workDir)
+func (s *stubRepo) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
+	return s.gh.ListAllPRs(ctx, workDir)
 }
 
 

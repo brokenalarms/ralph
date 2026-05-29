@@ -277,7 +277,7 @@ func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 		t.Fatal("expected non-zero PR number")
 	}
 
-	pr, _ := gh.GetPR("", prNum)
+	pr, _ := gh.GetPR(context.Background(), "", prNum)
 	if pr == nil {
 		t.Fatal("expected created PR to exist in world")
 	}
@@ -309,7 +309,7 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	pr, _ := gh.GetPR("", prNum)
+	pr, _ := gh.GetPR(context.Background(), "", prNum)
 	if pr == nil {
 		t.Fatal("expected created PR to exist in world")
 	}
@@ -346,7 +346,7 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	_, title, _, _ := gh.FindPR("ralph/test/feature", "")
+	_, title, _, _ := gh.FindPR(context.Background(), "ralph/test/feature", "")
 	if !strings.Contains(title, "[ralph-hm8]") {
 		t.Errorf("PR title should contain bead ID prefix [ralph-hm8], got: %q", title)
 	}
@@ -380,7 +380,7 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	_, title, _, _ := gh.FindPR("ralph/test/feature", "")
+	_, title, _, _ := gh.FindPR(context.Background(), "ralph/test/feature", "")
 	if strings.Contains(title, "[") {
 		t.Errorf("PR title should not contain brackets when no bead ID, got: %q", title)
 	}
@@ -873,7 +873,7 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 	}
 
 	// PR must remain in Merged state (SUT did not attempt another merge).
-	pr, _ := gh.GetPR("", 438)
+	pr, _ := gh.GetPR(context.Background(), "", 438)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 438 to remain merged, got state=%v", pr)
 	}
@@ -923,7 +923,7 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 
 	// After the SUT drives the pipeline, PR #438 must end up merged — proves
 	// both reopen (closed → open) and subsequent merge (open → merged) happened.
-	pr, _ := gh.GetPR("", 438)
+	pr, _ := gh.GetPR(context.Background(), "", 438)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 438 to end up merged after reopen + auto-merge, got state=%v", pr)
 	}
@@ -964,7 +964,7 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 	}
 
 	// Reopen observable via state: PR #438 must be Open after the SUT's call.
-	pr, _ := gh.GetPR("", 438)
+	pr, _ := gh.GetPR(context.Background(), "", 438)
 	if pr == nil || pr.State != PRStateOpen {
 		t.Errorf("expected PR 438 to be reopened (state=Open), got state=%v", pr)
 	}
@@ -1007,7 +1007,7 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 	}
 
 	// PR must remain Merged (no reopen attempted).
-	pr, _ := gh.GetPR("", 438)
+	pr, _ := gh.GetPR(context.Background(), "", 438)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 438 to remain merged, got state=%v", pr)
 	}
@@ -1135,7 +1135,7 @@ func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 	}
 
 	// PR must remain Open (never merged).
-	pr, _ := gh.GetPR("", 55)
+	pr, _ := gh.GetPR(context.Background(), "", 55)
 	if pr == nil || pr.State != PRStateOpen {
 		t.Errorf("expected PR 55 to remain open after blocked merge, got state=%v", pr)
 	}

@@ -374,12 +374,12 @@ func (l *Loop) skipTask(id, reason string) (bool, string) {
 
 // ensureActiveReviewers populates l.activeReviewers on first call. Subsequent
 // calls are no-ops. The loop is single-threaded so no synchronization is needed.
-func (l *Loop) ensureActiveReviewers() {
+func (l *Loop) ensureActiveReviewers(ctx context.Context) {
 	if l.reviewersDetected {
 		return
 	}
 	l.reviewersDetected = true
-	reviewers, err := l.git.DetectActiveReviewers()
+	reviewers, err := l.git.DetectActiveReviewers(ctx)
 	if err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not detect active reviewers: %v", err)
 		return
@@ -644,7 +644,7 @@ iterLoop:
 		}
 		externalRef, _ := l.taskBackend.GetExternalRef(task.id)
 		if externalRef != "" {
-			l.ensureActiveReviewers()
+			l.ensureActiveReviewers(ctx)
 		}
 		resumeResult, resumeErr := l.git.ResumeTask(ctx, git.ResumeTaskMeta{
 			TaskID:      task.id,
@@ -846,7 +846,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 
 	// Reviewer detection happens after push (lazy, deferred until post-push
 	// context is established) regardless of AutoMerge setting.
-	l.ensureActiveReviewers()
+	l.ensureActiveReviewers(ctx)
 
 	if !l.cfg.AutoMerge || result.PRNumber == 0 {
 		return result.PRNumber, result.PRURL, false, false, false, false, pushedBranch, nil

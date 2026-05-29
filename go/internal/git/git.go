@@ -503,7 +503,7 @@ func (r *repo) validateStackParent(ctx context.Context) {
 	// This is the path that catches squash-merged parents (their PR is
 	// closed; topology alone can't distinguish squash-merge from a diverged
 	// branch with unmerged work).
-	openBranches, err := r.ListOpenPRBranches()
+	openBranches, err := r.ListOpenPRBranches(ctx)
 	if err != nil || len(openBranches) == 0 {
 		return
 	}

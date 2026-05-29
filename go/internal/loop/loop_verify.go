@@ -107,7 +107,7 @@ func (l *Loop) fixLoop(ctx context.Context, opts fixLoopSpec) fixLoopResult {
 //   - CIFixNoCommits: agent ran but made no commits (infrastructure failure)
 //   - CIFixFailed:    agent error or push failure
 func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) git.CIFixResult {
-	ciLog := l.git.GetCIFailureLog(ciErr.PRNumber)
+	ciLog := l.git.GetCIFailureLog(ctx, ciErr.PRNumber)
 	baseBranch := l.git.DetectDefaultBranch()
 
 	// Pre-filter required vs optional check failures. Verifier does not
@@ -293,7 +293,7 @@ func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, re
 			}, reviewCtx)
 		},
 		onPushed: func() error {
-			return l.git.ReplyToAndResolveComments(prNumber, actionable)
+			return l.git.ReplyToAndResolveComments(ctx, prNumber, actionable)
 		},
 	})
 	return result == fixApplied

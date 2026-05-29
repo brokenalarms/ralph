@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -133,44 +134,44 @@ type MergeResult struct {
 // tests inject stubGitHub via newStubGitHub (same-package, unexported).
 type gitHub interface {
 	Available() bool
-	FindOpenPR(branch, repoURL string) (prNumber int, err error)
-	CreatePR(opts CreatePROpts) (prNumber int, err error)
-	MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResult
-	ListChecks(prNumber int, repoURL string) ([]CICheckResult, error)
-	EditPR(prNumber int, repoURL, title, body string) error
+	FindOpenPR(ctx context.Context, branch, repoURL string) (prNumber int, err error)
+	CreatePR(ctx context.Context, opts CreatePROpts) (prNumber int, err error)
+	MergePR(ctx context.Context, prNumber int, repoURL string, opts MergeOpts) MergeResult
+	ListChecks(ctx context.Context, prNumber int, repoURL string) ([]CICheckResult, error)
+	EditPR(ctx context.Context, prNumber int, repoURL, title, body string) error
 	// EditPRBase retargets a PR to the given base branch via PATCH /repos/{nwo}/pulls/{number}.
-	EditPRBase(prNumber int, repoURL, base string) error
-	GetRunLog(prNumber int, workDir string) string
-	FindPR(branch, repoURL string) (number int, title, url string, err error)
-	SearchPR(workDir, query string) (prNumber int, err error)
-	PRDiff(repoURL string, prNumber int) (string, error)
-	GetPR(nwo string, prNumber int) (*PRDetail, error)
-	ListOpenPRBranches(repoURL string) ([]string, error)
-	ReopenPR(prNumber int, repoURL string) error
-	CreatePRViaAPI(nwo string, opts CreatePROpts) (prNumber int, err error)
-	GetJobStepCount(nwo string, prNumber int) (int, error)
+	EditPRBase(ctx context.Context, prNumber int, repoURL, base string) error
+	GetRunLog(ctx context.Context, prNumber int, workDir string) string
+	FindPR(ctx context.Context, branch, repoURL string) (number int, title, url string, err error)
+	SearchPR(ctx context.Context, workDir, query string) (prNumber int, err error)
+	PRDiff(ctx context.Context, repoURL string, prNumber int) (string, error)
+	GetPR(ctx context.Context, nwo string, prNumber int) (*PRDetail, error)
+	ListOpenPRBranches(ctx context.Context, repoURL string) ([]string, error)
+	ReopenPR(ctx context.Context, prNumber int, repoURL string) error
+	CreatePRViaAPI(ctx context.Context, nwo string, opts CreatePROpts) (prNumber int, err error)
+	GetJobStepCount(ctx context.Context, nwo string, prNumber int) (int, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
-	ListAllPRs(workDir string) ([]PRInfo, error)
+	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
 	// DetectActiveReviewers queries the repo's installed GitHub Apps and cross-
 	// references against the Known reviewer registry. For Copilot it also checks
 	// rulesets to set the correct timeout. Returns the active reviewer list.
-	DetectActiveReviewers(nwo string) ([]Reviewer, error)
+	DetectActiveReviewers(ctx context.Context, nwo string) ([]Reviewer, error)
 	// PollReview polls for a review from the given bot username on the given PR,
 	// returning it with inline comments when found. Returns nil without error if
 	// the timeout expires before a review arrives.
-	PollReview(nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
+	PollReview(ctx context.Context, nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
 	// GetRequiredChecks returns the required status check context names for the
 	// given branch from branch protection rulesets. Returns an empty slice when
 	// no required checks are configured, which means all checks are evaluated.
-	GetRequiredChecks(nwo, branch string) ([]string, error)
+	GetRequiredChecks(ctx context.Context, nwo, branch string) ([]string, error)
 	// ReplyToReviewComment posts a reply to an inline review comment thread.
-	ReplyToReviewComment(nwo string, prNumber, commentID int, body string) error
+	ReplyToReviewComment(ctx context.Context, nwo string, prNumber, commentID int, body string) error
 	// FetchReviewThreadIDs returns a map from REST comment database ID to GraphQL
 	// thread node ID for all review threads on the given PR. Used to resolve threads
 	// after addressing review feedback.
-	FetchReviewThreadIDs(nwo string, prNumber int, commentIDs []int) (map[int]string, error)
+	FetchReviewThreadIDs(ctx context.Context, nwo string, prNumber int, commentIDs []int) (map[int]string, error)
 	// ResolveReviewThread resolves a review thread by its GraphQL node ID.
-	ResolveReviewThread(threadID string) error
+	ResolveReviewThread(ctx context.Context, threadID string) error
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -185,12 +186,12 @@ func (g *ghCLI) Available() bool {
 	return err == nil && p != ""
 }
 
-func (g *ghCLI) FindOpenPR(branch, repoURL string) (int, error) {
+func (g *ghCLI) FindOpenPR(ctx context.Context, branch, repoURL string) (int, error) {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return 0, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	cmd := exec.Command("gh", "pr", "list",
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--head", branch,
 		"--repo", nwo,
 		"--state", "open",
@@ -207,13 +208,13 @@ func (g *ghCLI) FindOpenPR(branch, repoURL string) (int, error) {
 	return ParsePRNumber(result)
 }
 
-func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
+func (g *ghCLI) ListOpenPRBranches(ctx context.Context, repoURL string) ([]string, error) {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return nil, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls?state=open", nwo)
-	cmd := exec.Command("gh", "api", "--paginate", endpoint, "--jq", ".[].head.ref")
+	cmd := exec.CommandContext(ctx, "gh", "api", "--paginate", endpoint, "--jq", ".[].head.ref")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api pulls failed: %w", err)
@@ -225,15 +226,15 @@ func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
 	return strings.Split(raw, "\n"), nil
 }
 
-func (g *ghCLI) CreatePR(opts CreatePROpts) (int, error) {
+func (g *ghCLI) CreatePR(ctx context.Context, opts CreatePROpts) (int, error) {
 	nwo := NWOFromRemote(opts.repo)
 	if nwo == "" {
 		return 0, fmt.Errorf("cannot determine owner/repo from %q", opts.repo)
 	}
-	return g.CreatePRViaAPI(nwo, opts)
+	return g.CreatePRViaAPI(ctx, nwo, opts)
 }
 
-func (g *ghCLI) EditPR(prNumber int, repoURL, title, body string) error {
+func (g *ghCLI) EditPR(ctx context.Context, prNumber int, repoURL, title, body string) error {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return fmt.Errorf("cannot determine owner/repo from %q", repoURL)
@@ -243,27 +244,27 @@ func (g *ghCLI) EditPR(prNumber int, repoURL, title, body string) error {
 	if body != "" {
 		args = append(args, "-f", "body="+body)
 	}
-	cmd := exec.Command("gh", args...)
+	cmd := exec.CommandContext(ctx, "gh", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("PR edit failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-func (g *ghCLI) EditPRBase(prNumber int, repoURL, base string) error {
+func (g *ghCLI) EditPRBase(ctx context.Context, prNumber int, repoURL, base string) error {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
-	cmd := exec.Command("gh", "api", "-X", "PATCH", endpoint, "-f", "base="+base)
+	cmd := exec.CommandContext(ctx, "gh", "api", "-X", "PATCH", endpoint, "-f", "base="+base)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("PR base retarget failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-func (g *ghCLI) MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResult {
+func (g *ghCLI) MergePR(ctx context.Context, prNumber int, repoURL string, opts MergeOpts) MergeResult {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return MergeResult{Message: "cannot determine owner/repo from remote URL"}
@@ -278,13 +279,13 @@ func (g *ghCLI) MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResul
 	if opts.Admin {
 		args = append(args, "-F", "bypass_restrictions=true")
 	}
-	cmd := exec.Command("gh", args...)
+	cmd := exec.CommandContext(ctx, "gh", args...)
 	out, err := cmd.CombinedOutput()
 
 	result := classifyMergeStatus(string(out), err)
 	if result.Merged {
 		if opts.DeleteBranch {
-			g.deleteBranch(nwo, pr)
+			g.deleteBranch(ctx, nwo, pr)
 		}
 		return result
 	}
@@ -348,9 +349,9 @@ func parseAPIMessage(output string) string {
 }
 
 // deleteBranch deletes the PR's head branch after a successful merge.
-func (g *ghCLI) deleteBranch(nwo, prNumber string) {
+func (g *ghCLI) deleteBranch(ctx context.Context, nwo, prNumber string) {
 	// Look up the head branch name from the PR.
-	cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/pulls/%s", nwo, prNumber), "--jq", ".head.ref")
+	cmd := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/pulls/%s", nwo, prNumber), "--jq", ".head.ref")
 	out, err := cmd.Output()
 	if err != nil {
 		return
@@ -359,23 +360,23 @@ func (g *ghCLI) deleteBranch(nwo, prNumber string) {
 	if branch == "" {
 		return
 	}
-	delCmd := exec.Command("gh", "api",
+	delCmd := exec.CommandContext(ctx, "gh", "api",
 		fmt.Sprintf("repos/%s/git/refs/heads/%s", nwo, branch),
 		"--method", "DELETE")
 	delCmd.CombinedOutput() // best-effort
 }
 
-func (g *ghCLI) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
+func (g *ghCLI) ListChecks(ctx context.Context, prNumber int, repoURL string) ([]CICheckResult, error) {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return nil, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	detail, err := g.GetPR(nwo, prNumber)
+	detail, err := g.GetPR(ctx, nwo, prNumber)
 	if err != nil {
 		return nil, fmt.Errorf("getting PR head SHA: %w", err)
 	}
 	endpoint := fmt.Sprintf("repos/%s/commits/%s/check-runs", nwo, detail.HeadSHA)
-	cmd := exec.Command("gh", "api", endpoint, "--jq", ".check_runs")
+	cmd := exec.CommandContext(ctx, "gh", "api", endpoint, "--jq", ".check_runs")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api check-runs failed: %w", err)
@@ -424,9 +425,9 @@ func mapCheckRun(name, status string, conclusion *string, startedAt *time.Time) 
 	}
 	return CICheckResult{Name: name, State: state, Bucket: bucket, StartedAt: t}
 }
-func (g *ghCLI) GetRequiredChecks(nwo, branch string) ([]string, error) {
+func (g *ghCLI) GetRequiredChecks(ctx context.Context, nwo, branch string) ([]string, error) {
 	endpoint := fmt.Sprintf("repos/%s/rules/branches/%s", nwo, branch)
-	cmd := exec.Command("gh", "api", endpoint)
+	cmd := exec.CommandContext(ctx, "gh", "api", endpoint)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api rules/branches failed: %w", err)
@@ -453,7 +454,7 @@ func (g *ghCLI) GetRequiredChecks(nwo, branch string) ([]string, error) {
 	return checks, nil
 }
 
-func (g *ghCLI) ReplyToReviewComment(nwo string, prNumber, commentID int, body string) error {
+func (g *ghCLI) ReplyToReviewComment(ctx context.Context, nwo string, prNumber, commentID int, body string) error {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/comments/%d/replies", nwo, prNumber, commentID)
 	input, err := json.Marshal(struct {
 		Body string `json:"body"`
@@ -461,7 +462,7 @@ func (g *ghCLI) ReplyToReviewComment(nwo string, prNumber, commentID int, body s
 	if err != nil {
 		return fmt.Errorf("marshaling reply body: %w", err)
 	}
-	cmd := exec.Command("gh", "api", "--method", "POST", endpoint, "--input", "-")
+	cmd := exec.CommandContext(ctx, "gh", "api", "--method", "POST", endpoint, "--input", "-")
 	cmd.Stdin = bytes.NewReader(input)
 	if _, err := cmd.Output(); err != nil {
 		return fmt.Errorf("gh api reply to review comment: %w", err)
@@ -469,7 +470,7 @@ func (g *ghCLI) ReplyToReviewComment(nwo string, prNumber, commentID int, body s
 	return nil
 }
 
-func (g *ghCLI) FetchReviewThreadIDs(nwo string, prNumber int, commentIDs []int) (map[int]string, error) {
+func (g *ghCLI) FetchReviewThreadIDs(ctx context.Context, nwo string, prNumber int, commentIDs []int) (map[int]string, error) {
 	parts := strings.SplitN(nwo, "/", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid nwo: %q", nwo)
@@ -490,7 +491,7 @@ func (g *ghCLI) FetchReviewThreadIDs(nwo string, prNumber int, commentIDs []int)
     }
   }
 }`
-	cmd := exec.Command("gh", "api", "graphql",
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+q,
 		"-f", "owner="+parts[0],
 		"-f", "repo="+parts[1],
@@ -536,13 +537,13 @@ func (g *ghCLI) FetchReviewThreadIDs(nwo string, prNumber int, commentIDs []int)
 	return result, nil
 }
 
-func (g *ghCLI) ResolveReviewThread(threadID string) error {
+func (g *ghCLI) ResolveReviewThread(ctx context.Context, threadID string) error {
 	const q = `mutation($threadId: ID!) {
   resolveReviewThread(input: {threadId: $threadId}) {
     thread { id }
   }
 }`
-	cmd := exec.Command("gh", "api", "graphql",
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
 		"-f", "query="+q,
 		"-f", "threadId="+threadID,
 	)
@@ -552,9 +553,9 @@ func (g *ghCLI) ResolveReviewThread(threadID string) error {
 	return nil
 }
 
-func (g *ghCLI) GetRunLog(prNumber int, workDir string) string {
+func (g *ghCLI) GetRunLog(ctx context.Context, prNumber int, workDir string) string {
 	pr := strconv.Itoa(prNumber)
-	cmd := exec.Command("gh", "pr", "checks", pr, "--json", "name,state,link", "--jq",
+	cmd := exec.CommandContext(ctx, "gh", "pr", "checks", pr, "--json", "name,state,link", "--jq",
 		`.[] | select(.state == "FAILURE") | .link`)
 	cmd.Dir = workDir
 	out, err := cmd.Output()
@@ -576,7 +577,7 @@ func (g *ghCLI) GetRunLog(prNumber int, workDir string) string {
 		return ""
 	}
 
-	logCmd := exec.Command("gh", "run", "view", runID, "--log-failed")
+	logCmd := exec.CommandContext(ctx, "gh", "run", "view", runID, "--log-failed")
 	logCmd.Dir = workDir
 	logOut, err := logCmd.Output()
 	if err != nil {
@@ -590,12 +591,12 @@ func (g *ghCLI) GetRunLog(prNumber int, workDir string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (g *ghCLI) FindPR(branch, repoURL string) (int, string, string, error) {
+func (g *ghCLI) FindPR(ctx context.Context, branch, repoURL string) (int, string, string, error) {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return 0, "", "", fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	cmd := exec.Command("gh", "pr", "list",
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--head", branch,
 		"--repo", nwo,
 		"--state", "all",
@@ -625,7 +626,7 @@ func (g *ghCLI) FindPR(branch, repoURL string) (int, string, string, error) {
 	return num, title, url, nil
 }
 
-func (g *ghCLI) SearchPR(workDir, query string) (int, error) {
+func (g *ghCLI) SearchPR(ctx context.Context, workDir, query string) (int, error) {
 	remoteOut, err := exec.Command("git", "-C", workDir, "remote", "get-url", "origin").Output()
 	if err != nil {
 		return 0, fmt.Errorf("get remote URL: %w", err)
@@ -635,7 +636,7 @@ func (g *ghCLI) SearchPR(workDir, query string) (int, error) {
 		return 0, fmt.Errorf("cannot determine owner/repo from remote URL")
 	}
 	q := fmt.Sprintf("%s+repo:%s+type:pr", query, nwo)
-	out, err := exec.Command("gh", "api", "search/issues", "-f", "q="+q, "--jq", ".items[0].number // empty").Output()
+	out, err := exec.CommandContext(ctx, "gh", "api", "search/issues", "-f", "q="+q, "--jq", ".items[0].number // empty").Output()
 	if err != nil {
 		return 0, fmt.Errorf("gh api search failed: %w", err)
 	}
@@ -646,12 +647,12 @@ func (g *ghCLI) SearchPR(workDir, query string) (int, error) {
 	return ParsePRNumber(raw)
 }
 
-func (g *ghCLI) PRDiff(repoURL string, prNumber int) (string, error) {
+func (g *ghCLI) PRDiff(ctx context.Context, repoURL string, prNumber int) (string, error) {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return "", fmt.Errorf("could not determine repo NWO from %q", repoURL)
 	}
-	cmd := exec.Command("gh", "api",
+	cmd := exec.CommandContext(ctx, "gh", "api",
 		fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber),
 		"-H", "Accept: application/vnd.github.diff")
 	out, err := cmd.Output()
@@ -661,20 +662,20 @@ func (g *ghCLI) PRDiff(repoURL string, prNumber int) (string, error) {
 	return string(out), nil
 }
 
-func (g *ghCLI) ReopenPR(prNumber int, repoURL string) error {
+func (g *ghCLI) ReopenPR(ctx context.Context, prNumber int, repoURL string) error {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
-	cmd := exec.Command("gh", "api", "-X", "PATCH", endpoint, "-f", "state=open")
+	cmd := exec.CommandContext(ctx, "gh", "api", "-X", "PATCH", endpoint, "-f", "state=open")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("gh api PATCH %s failed: %s", endpoint, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (int, error) {
+func (g *ghCLI) CreatePRViaAPI(ctx context.Context, nwo string, opts CreatePROpts) (int, error) {
 	type prRequest struct {
 		Title string `json:"title"`
 		Body  string `json:"body"`
@@ -686,12 +687,12 @@ func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (int, error) {
 		return 0, fmt.Errorf("marshaling PR request: %w", err)
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
-	cmd := exec.Command("gh", "api", endpoint, "--method", "POST", "--input", "-")
+	cmd := exec.CommandContext(ctx, "gh", "api", endpoint, "--method", "POST", "--input", "-")
 	cmd.Stdin = bytes.NewReader(bodyBytes)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(out), "already exists") {
-			if existing, findErr := g.FindOpenPR(opts.Head, opts.repo); findErr == nil && existing != 0 {
+			if existing, findErr := g.FindOpenPR(ctx, opts.Head, opts.repo); findErr == nil && existing != 0 {
 				return existing, nil
 			}
 		}
@@ -709,8 +710,8 @@ func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (int, error) {
 	return resp.Number, nil
 }
 
-func (g *ghCLI) GetJobStepCount(nwo string, prNumber int) (int, error) {
-	cmd := exec.Command("gh", "api",
+func (g *ghCLI) GetJobStepCount(ctx context.Context, nwo string, prNumber int) (int, error) {
+	cmd := exec.CommandContext(ctx, "gh", "api",
 		fmt.Sprintf("repos/%s/actions/runs?event=pull_request&per_page=1", nwo),
 		"--jq", ".workflow_runs[0].id")
 	out, err := cmd.Output()
@@ -721,7 +722,7 @@ func (g *ghCLI) GetJobStepCount(nwo string, prNumber int) (int, error) {
 	if runID == "" {
 		return -1, fmt.Errorf("no runs found")
 	}
-	jobsCmd := exec.Command("gh", "api",
+	jobsCmd := exec.CommandContext(ctx, "gh", "api",
 		fmt.Sprintf("repos/%s/actions/runs/%s/jobs", nwo, runID),
 		"--jq", "[.jobs[].steps | length] | add // 0")
 	jobsOut, err := jobsCmd.Output()
@@ -733,9 +734,9 @@ func (g *ghCLI) GetJobStepCount(nwo string, prNumber int) (int, error) {
 	return count, nil
 }
 
-func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
+func (g *ghCLI) GetPR(ctx context.Context, nwo string, prNumber int) (*PRDetail, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
-	cmd := exec.Command("gh", "api", endpoint,
+	cmd := exec.CommandContext(ctx, "gh", "api", endpoint,
 		"--jq", `(if .merged_at != null then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end)+"\t"+.base.ref+"\t"+.head.ref+"\t"+.head.sha`)
 	out, err := cmd.Output()
 	if err != nil {
@@ -756,12 +757,12 @@ func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 // DetectActiveReviewers probes the repo for known automated reviewers using
 // endpoints that work with standard OAuth tokens. For Copilot, it uses the
 // rulesets endpoint (checkCopilotRulesets). Reviewers with no probe are skipped.
-func (g *ghCLI) DetectActiveReviewers(nwo string) ([]Reviewer, error) {
+func (g *ghCLI) DetectActiveReviewers(ctx context.Context, nwo string) ([]Reviewer, error) {
 	var active []Reviewer
 	for _, r := range Known {
 		switch r.AppSlug {
 		case "copilot-code-review":
-			enabled, reviewOnPush, err := g.checkCopilotRulesets(nwo)
+			enabled, reviewOnPush, err := g.checkCopilotRulesets(ctx, nwo)
 			if err != nil || !enabled {
 				continue
 			}
@@ -780,8 +781,8 @@ func (g *ghCLI) DetectActiveReviewers(nwo string) ([]Reviewer, error) {
 
 // checkCopilotRulesets fetches each ruleset detail to find a copilot_code_review
 // rule. Returns (enabled, reviewOnPush, error).
-func (g *ghCLI) checkCopilotRulesets(nwo string) (bool, bool, error) {
-	listCmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/rulesets", nwo))
+func (g *ghCLI) checkCopilotRulesets(ctx context.Context, nwo string) (bool, bool, error) {
+	listCmd := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/rulesets", nwo))
 	listOut, err := listCmd.Output()
 	if err != nil {
 		return false, false, fmt.Errorf("gh api rulesets failed: %w", err)
@@ -793,7 +794,7 @@ func (g *ghCLI) checkCopilotRulesets(nwo string) (bool, bool, error) {
 		return false, false, fmt.Errorf("parsing rulesets list: %w", err)
 	}
 	for _, entry := range listing {
-		detailCmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/rulesets/%d", nwo, entry.ID))
+		detailCmd := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/rulesets/%d", nwo, entry.ID))
 		detailOut, err := detailCmd.Output()
 		if err != nil {
 			return false, false, fmt.Errorf("gh api rulesets/%d failed: %w", entry.ID, err)
@@ -818,9 +819,9 @@ func (g *ghCLI) checkCopilotRulesets(nwo string) (bool, bool, error) {
 	return false, false, nil
 }
 
-func (g *ghCLI) PollReview(nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
+func (g *ghCLI) PollReview(ctx context.Context, nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
 	// Check if a completed review already exists before doing anything else.
-	existing, err := g.fetchReview(nwo, botUsername, prNumber)
+	existing, err := g.fetchReview(ctx, nwo, botUsername, prNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -830,7 +831,7 @@ func (g *ghCLI) PollReview(nwo string, botUsername string, prNumber int, timeout
 	}
 
 	// If the bot is not a requested reviewer and has no review, none is coming.
-	requested, err := g.isRequestedReviewer(nwo, botUsername, prNumber)
+	requested, err := g.isRequestedReviewer(ctx, nwo, botUsername, prNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -841,7 +842,7 @@ func (g *ghCLI) PollReview(nwo string, botUsername string, prNumber int, timeout
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		review, err := g.fetchReview(nwo, botUsername, prNumber)
+		review, err := g.fetchReview(ctx, nwo, botUsername, prNumber)
 		if err != nil {
 			return nil, err
 		}
@@ -864,9 +865,9 @@ func (g *ghCLI) PollReview(nwo string, botUsername string, prNumber int, timeout
 }
 
 // isRequestedReviewer reports whether botUsername is listed as a requested reviewer on the PR.
-func (g *ghCLI) isRequestedReviewer(nwo, botUsername string, prNumber int) (bool, error) {
+func (g *ghCLI) isRequestedReviewer(ctx context.Context, nwo, botUsername string, prNumber int) (bool, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/requested_reviewers", nwo, prNumber)
-	cmd := exec.Command("gh", "api", endpoint)
+	cmd := exec.CommandContext(ctx, "gh", "api", endpoint)
 	out, err := cmd.Output()
 	if err != nil {
 		return false, fmt.Errorf("gh api requested_reviewers: %w", err)
@@ -896,9 +897,9 @@ var terminalReviewStates = map[string]bool{
 	"DISMISSED":          true,
 }
 
-func (g *ghCLI) fetchReview(nwo, botUsername string, prNumber int) (*AutoReview, error) {
+func (g *ghCLI) fetchReview(ctx context.Context, nwo, botUsername string, prNumber int) (*AutoReview, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/reviews", nwo, prNumber)
-	cmd := exec.Command("gh", "api", endpoint)
+	cmd := exec.CommandContext(ctx, "gh", "api", endpoint)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api reviews: %w", err)
@@ -916,7 +917,7 @@ func (g *ghCLI) fetchReview(nwo, botUsername string, prNumber int) (*AutoReview,
 	}
 	for _, r := range reviews {
 		if r.User.Login == botUsername && terminalReviewStates[r.State] {
-			comments, err := g.fetchReviewComments(nwo, prNumber, r.ID)
+			comments, err := g.fetchReviewComments(ctx, nwo, prNumber, r.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -926,10 +927,10 @@ func (g *ghCLI) fetchReview(nwo, botUsername string, prNumber int) (*AutoReview,
 	return nil, nil
 }
 
-func (g *ghCLI) fetchReviewComments(nwo string, prNumber, reviewID int) ([]ReviewComment, error) {
+func (g *ghCLI) fetchReviewComments(ctx context.Context, nwo string, prNumber, reviewID int) ([]ReviewComment, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/comments", nwo, prNumber)
 	jqFilter := fmt.Sprintf("[.[] | select(.pull_request_review_id == %d) | {id: .id, path: .path, line: (.line // .original_line // 0), body: .body}]", reviewID)
-	cmd := exec.Command("gh", "api", endpoint, "--jq", jqFilter)
+	cmd := exec.CommandContext(ctx, "gh", "api", endpoint, "--jq", jqFilter)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api pr comments: %w", err)
@@ -950,7 +951,7 @@ func (g *ghCLI) fetchReviewComments(nwo string, prNumber, reviewID int) ([]Revie
 	return comments, nil
 }
 
-func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
+func (g *ghCLI) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
 	remoteOut, err := exec.Command("git", "-C", workDir, "remote", "get-url", "origin").Output()
 	if err != nil {
 		return nil, fmt.Errorf("get remote URL: %w", err)
@@ -960,7 +961,7 @@ func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
 		return nil, fmt.Errorf("cannot determine owner/repo from remote URL")
 	}
 	endpoint := fmt.Sprintf("repos/%s/pulls?state=all", nwo)
-	out, err := exec.Command("gh", "api", "--paginate", "--jq", ".[]", endpoint).Output()
+	out, err := exec.CommandContext(ctx, "gh", "api", "--paginate", "--jq", ".[]", endpoint).Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api pulls: %w", err)
 	}

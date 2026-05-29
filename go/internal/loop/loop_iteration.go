@@ -211,12 +211,12 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				prNum = parsePRNumber(ref)
 			}
 			if prNum == 0 {
-				if n, _, _, err := l.git.FindPRForBranch(l.git.GetWorktreeBranch()); err == nil && n != 0 {
+				if n, _, _, err := l.git.FindPRForBranch(ctx, l.git.GetWorktreeBranch()); err == nil && n != 0 {
 					prNum = n
 				}
 			}
 			if prNum != 0 {
-				prState, _ := l.git.GetPRState(prNum)
+				prState, _ := l.git.GetPRState(ctx, prNum)
 				if prState == git.PRStateOpen {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
 					_, _, merged, _, _, _, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
@@ -310,13 +310,13 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			}
 		}
 		if prNumber == 0 {
-			if n, _, _, err := l.git.FindPRForBranch(l.git.GetWorktreeBranch()); err == nil && n != 0 {
+			if n, _, _, err := l.git.FindPRForBranch(ctx, l.git.GetWorktreeBranch()); err == nil && n != 0 {
 				prNumber = n
 			}
 		}
 	}
 
-	ct := l.buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber)
+	ct := l.buildCompletedTask(ctx, p.taskID, p.nextTask, p.result.Summary, prNumber)
 	if shipURL != "" {
 		ct.PRURL = shipURL
 	}
@@ -542,14 +542,14 @@ func (l *Loop) setPhaseInterrupted(taskID string) {
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
-func (l *Loop) buildCompletedTask(taskID, nextTask, summary string, prNumber int) CompletedTask {
+func (l *Loop) buildCompletedTask(ctx context.Context, taskID, nextTask, summary string, prNumber int) CompletedTask {
 	ct := CompletedTask{
 		ID:      taskID,
 		Title:   nextTask,
 		Summary: summary,
 		PRNum:   prNumber,
 	}
-	if num, t, u, err := l.git.FindPRForBranch(l.git.GetWorktreeBranch()); err == nil && num != 0 {
+	if num, t, u, err := l.git.FindPRForBranch(ctx, l.git.GetWorktreeBranch()); err == nil && num != 0 {
 		ct.PRNum = num
 		ct.PRTitle = t
 		ct.PRURL = u

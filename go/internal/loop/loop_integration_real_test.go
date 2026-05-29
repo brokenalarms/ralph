@@ -1251,7 +1251,7 @@ func TestIntegrationReal_StackContinuesAfterCIInfraFailure(t *testing.T) {
 // recorded PRs. Fails the test if no PR matches.
 func findStubPR(t *testing.T, gm git.Ops, workDir, branch string) git.PRInfo {
 	t.Helper()
-	prs, err := gm.ListAllPRs(workDir)
+	prs, err := gm.ListAllPRs(context.Background(), workDir)
 	if err != nil {
 		t.Fatalf("ListAllPRs: %v", err)
 	}

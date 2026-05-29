@@ -17,7 +17,7 @@ func TestSetStackHead_SkipsWhenNoOpenPR(t *testing.T) {
 	// Default stub GitHub has no PRs → ListOpenPRBranches returns [].
 	r := newRepoForTest(Config{Logger: log}, nil)
 
-	setStackHead(r, []string{"ralph/some-task"})
+	setStackHead(context.Background(), r, []string{"ralph/some-task"})
 
 	if r.prevBranch != "" {
 		t.Errorf("prevBranch should be empty when top branch has no open PR, got %q", r.prevBranch)
@@ -35,7 +35,7 @@ func TestSetStackHead_SilentWhenNoCompletedBranches(t *testing.T) {
 	log := &testLog{}
 	r := newRepoForTest(Config{Logger: log}, nil)
 
-	setStackHead(r, nil)
+	setStackHead(context.Background(), r, nil)
 
 	for _, msg := range log.messages {
 		if strings.Contains(msg, "No stacked parents") {
@@ -55,7 +55,7 @@ func TestSetStackHead_AllMergedStack_PrevBranchEmpty(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	r := newRepoForTest(Config{Logger: log}, gh, withRunner(runner))
 
-	setStackHead(r, []string{"ralph/task-a", "ralph/task-b"})
+	setStackHead(context.Background(), r, []string{"ralph/task-a", "ralph/task-b"})
 
 	if r.prevBranch != "" {
 		t.Errorf("prevBranch should be empty when all PRs are merged, got %q", r.prevBranch)
@@ -81,7 +81,7 @@ func TestSetStackHead_TopOpenAndAheadOfMain_Selected(t *testing.T) {
 
 	r := newRepoForTest(Config{Logger: log}, gh, withRunner(runner))
 
-	setStackHead(r, []string{"ralph/task-a", "ralph/task-b"})
+	setStackHead(context.Background(), r, []string{"ralph/task-a", "ralph/task-b"})
 
 	if r.prevBranch != "ralph/task-b" {
 		t.Errorf("expected prevBranch=ralph/task-b, got %q", r.prevBranch)
@@ -113,7 +113,7 @@ func TestSetStackHead_TopPRClosed_PrevBranchEmpty(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	r := newRepoForTest(Config{Logger: log}, gh, withRunner(runner))
 
-	setStackHead(r, []string{"ralph/task-a", "ralph/task-b"})
+	setStackHead(context.Background(), r, []string{"ralph/task-a", "ralph/task-b"})
 
 	if r.prevBranch != "" {
 		t.Errorf("prevBranch should be empty when top PR is closed, got %q", r.prevBranch)
@@ -139,7 +139,7 @@ func TestSetStackHead_OpenPRButNotAheadOfMain_PrevBranchEmpty(t *testing.T) {
 
 	r := newRepoForTest(Config{Logger: log}, gh, withRunner(runner))
 
-	setStackHead(r, []string{"ralph/task-a"})
+	setStackHead(context.Background(), r, []string{"ralph/task-a"})
 
 	if r.prevBranch != "" {
 		t.Errorf("prevBranch should be empty when branch is not ahead of main, got %q", r.prevBranch)
@@ -205,9 +205,9 @@ type countingGitHub struct {
 	listOpenPRBranchesCalls int
 }
 
-func (c *countingGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {
+func (c *countingGitHub) ListOpenPRBranches(ctx context.Context, repoURL string) ([]string, error) {
 	c.listOpenPRBranchesCalls++
-	return c.gitHub.ListOpenPRBranches(repoURL)
+	return c.gitHub.ListOpenPRBranches(ctx, repoURL)
 }
 
 // SyncWorktreeBase followed by BranchForTask on the first iteration must not

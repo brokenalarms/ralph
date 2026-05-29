@@ -182,7 +182,7 @@ func (l *Loop) validateResumeState(ctx context.Context, resumeID string, waited 
 	if prNum == 0 {
 		return actionProceed, true
 	}
-	prState, err := l.git.GetPRState(prNum)
+	prState, err := l.git.GetPRState(ctx, prNum)
 	if err != nil || prState != git.PRStateMerged {
 		return actionProceed, true
 	}

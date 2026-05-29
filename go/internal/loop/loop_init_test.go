@@ -144,7 +144,7 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 		t.Fatal("reviewersDetected should be false before first ensureActiveReviewers call")
 	}
 
-	l.ensureActiveReviewers()
+	l.ensureActiveReviewers(context.Background())
 
 	if !l.reviewersDetected {
 		t.Error("reviewersDetected should be true after first call")
@@ -160,7 +160,7 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 	// ensureActiveReviewers returns early before calling DetectActiveReviewers
 	// when that flag is set. After a second call, activeReviewers is
 	// unchanged (still populated from the first call).
-	l.ensureActiveReviewers()
+	l.ensureActiveReviewers(context.Background())
 	if len(l.activeReviewers) != 1 || l.activeReviewers[0].BotUsername != "copilot-pull-request-reviewer" {
 		t.Errorf("activeReviewers changed on second call — cache did not hold: %v", l.activeReviewers)
 	}
@@ -194,7 +194,7 @@ func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 	})
 
 	// Build the same ensureReviewersFn closure that loop.go passes to completeTaskParams.
-	ensureReviewersFn := func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers }
+	ensureReviewersFn := func() []git.Reviewer { l.ensureActiveReviewers(context.Background()); return l.activeReviewers }
 
 	// Before the closure is called, detection must not have run.
 	if l.reviewersDetected {

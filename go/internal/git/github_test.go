@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -130,7 +131,7 @@ func TestPRDiff_UsesGhAPI(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	diff, err := g.PRDiff("https://github.com/owner/repo.git", 42)
+	diff, err := g.PRDiff(context.Background(), "https://github.com/owner/repo.git", 42)
 	if err != nil {
 		t.Fatalf("PRDiff returned error: %v", err)
 	}
@@ -167,7 +168,7 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	})
 	repo := newRepoForTest(Config{BaseBranch: "main"}, gh)
 
-	result := repo.GetCIFailureLog(42)
+	result := repo.GetCIFailureLog(context.Background(), 42)
 	if result != "test failure output line 1\nline 2" {
 		t.Errorf("expected delegated log output, got %q", result)
 	}
@@ -195,7 +196,7 @@ func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{CopilotGatedTimeout: 120 * time.Second, CopilotOpportunisticTimeout: 90 * time.Second}
-	reviewers, err := g.DetectActiveReviewers("owner/repo")
+	reviewers, err := g.DetectActiveReviewers(context.Background(), "owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,7 +242,7 @@ func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{CopilotGatedTimeout: 120 * time.Second, CopilotOpportunisticTimeout: 90 * time.Second}
-	reviewers, err := g.DetectActiveReviewers("owner/repo")
+	reviewers, err := g.DetectActiveReviewers(context.Background(), "owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestDetectActiveReviewers_NoCopilotRuleset(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{CopilotGatedTimeout: 120 * time.Second, CopilotOpportunisticTimeout: 90 * time.Second}
-	reviewers, err := g.DetectActiveReviewers("owner/repo")
+	reviewers, err := g.DetectActiveReviewers(context.Background(), "owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -306,7 +307,7 @@ func TestPollReview_ReturnsAutoReview(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 5*time.Second)
+	review, err := g.PollReview(context.Background(), "owner/repo", "copilot-pull-request-reviewer", 42, 5*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -353,7 +354,7 @@ func TestListChecks_UsesGhAPICheckRuns(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	checks, err := g.ListChecks(42, "https://github.com/owner/repo.git")
+	checks, err := g.ListChecks(context.Background(), 42, "https://github.com/owner/repo.git")
 	if err != nil {
 		t.Fatalf("ListChecks returned error: %v", err)
 	}
@@ -440,7 +441,7 @@ func TestMergePR_HTTP405_ReturnsBlocked_NoAdminRetry(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	result := g.MergePR(42, "https://github.com/owner/repo.git", MergeOpts{})
+	result := g.MergePR(context.Background(), 42, "https://github.com/owner/repo.git", MergeOpts{})
 	if result.Merged {
 		t.Error("expected Merged=false when branch protection blocks merge")
 	}
@@ -472,7 +473,7 @@ func TestEditPR_UsesGhAPI(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	err := g.EditPR(42, "https://github.com/owner/repo.git", "New Title", "New body")
+	err := g.EditPR(context.Background(), 42, "https://github.com/owner/repo.git", "New Title", "New body")
 	if err != nil {
 		t.Fatalf("EditPR returned error: %v", err)
 	}
@@ -516,7 +517,7 @@ func TestReopenPR_UsesGhAPI(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	err := g.ReopenPR(42, "https://github.com/owner/repo.git")
+	err := g.ReopenPR(context.Background(), 42, "https://github.com/owner/repo.git")
 	if err != nil {
 		t.Fatalf("ReopenPR returned error: %v", err)
 	}
@@ -555,7 +556,7 @@ func TestListOpenPRBranches_UsesGhAPI(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	branches, err := g.ListOpenPRBranches("https://github.com/owner/repo.git")
+	branches, err := g.ListOpenPRBranches(context.Background(), "https://github.com/owner/repo.git")
 	if err != nil {
 		t.Fatalf("ListOpenPRBranches returned error: %v", err)
 	}
@@ -607,7 +608,7 @@ func TestListAllPRs_UsesGhAPI(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	prs, err := g.ListAllPRs(bin)
+	prs, err := g.ListAllPRs(context.Background(), bin)
 	if err != nil {
 		t.Fatalf("ListAllPRs returned error: %v", err)
 	}
@@ -669,7 +670,7 @@ func TestListAllPRs_Paginates(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	prs, err := g.ListAllPRs(bin)
+	prs, err := g.ListAllPRs(context.Background(), bin)
 	if err != nil {
 		t.Fatalf("ListAllPRs returned error: %v", err)
 	}
@@ -696,7 +697,7 @@ func TestListOpenPRBranches_Paginates(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	branches, err := g.ListOpenPRBranches("https://github.com/owner/repo.git")
+	branches, err := g.ListOpenPRBranches(context.Background(), "https://github.com/owner/repo.git")
 	if err != nil {
 		t.Fatalf("ListOpenPRBranches returned error: %v", err)
 	}
@@ -724,7 +725,7 @@ func TestSearchPR_UsesGhAPI(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	prNumber, err := g.SearchPR(bin, "my-task-id")
+	prNumber, err := g.SearchPR(context.Background(), bin, "my-task-id")
 	if err != nil {
 		t.Fatalf("SearchPR returned error: %v", err)
 	}
@@ -765,7 +766,7 @@ func TestPollReview_Timeout_ReturnsNil(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 1*time.Millisecond)
+	review, err := g.PollReview(context.Background(), "owner/repo", "copilot-pull-request-reviewer", 42, 1*time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -795,7 +796,7 @@ func TestPollReview_NotRequested_ReturnsNilImmediately(t *testing.T) {
 
 	g := &ghCLI{}
 	// Long timeout — if pre-check works, returns nil immediately without waiting.
-	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 60*time.Second)
+	review, err := g.PollReview(context.Background(), "owner/repo", "copilot-pull-request-reviewer", 42, 60*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -850,7 +851,7 @@ func TestPollReview_PendingStateKeepsPolling(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 200*time.Millisecond)
+	review, err := g.PollReview(context.Background(), "owner/repo", "copilot-pull-request-reviewer", 42, 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -881,7 +882,7 @@ func TestPollReview_TerminalStateNoComments(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 5*time.Second)
+	review, err := g.PollReview(context.Background(), "owner/repo", "copilot-pull-request-reviewer", 42, 5*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -913,7 +914,7 @@ func TestFindOpenPR_UsesPRListNotAPIFilter(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	prNum, err := g.FindOpenPR("ralph/my-task-branch", "https://github.com/owner/repo.git")
+	prNum, err := g.FindOpenPR(context.Background(), "ralph/my-task-branch", "https://github.com/owner/repo.git")
 	if err != nil {
 		t.Fatalf("FindOpenPR returned error: %v", err)
 	}
@@ -954,7 +955,7 @@ func TestFindPR_UsesPRListNotAPIFilter(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	num, title, url, err := g.FindPR("ralph/my-task-branch", "https://github.com/owner/repo.git")
+	num, title, url, err := g.FindPR(context.Background(), "ralph/my-task-branch", "https://github.com/owner/repo.git")
 	if err != nil {
 		t.Fatalf("FindPR returned error: %v", err)
 	}
@@ -1010,7 +1011,7 @@ exit 1
 		Base: "main",
 		repo: "https://github.com/owner/repo.git",
 	}
-	prNum, err := g.CreatePRViaAPI("owner/repo", opts)
+	prNum, err := g.CreatePRViaAPI(context.Background(), "owner/repo", opts)
 	if err != nil {
 		t.Fatalf("CreatePRViaAPI returned error on 422: %v", err)
 	}
@@ -1036,7 +1037,7 @@ func TestCreatePRViaAPI_SpecialCharsProduceValidJSON(t *testing.T) {
 		Head:  "feature/my-branch",
 		Base:  "main",
 	}
-	prNum, err := g.CreatePRViaAPI("owner/repo", opts)
+	prNum, err := g.CreatePRViaAPI(context.Background(), "owner/repo", opts)
 	if err != nil {
 		t.Fatalf("CreatePRViaAPI returned error: %v", err)
 	}
@@ -1075,7 +1076,7 @@ func TestReplyToReviewComment_POSTsToCorrectEndpoint(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	if err := g.ReplyToReviewComment("owner/repo", 42, 5001, "Addressed — fix committed and pushed."); err != nil {
+	if err := g.ReplyToReviewComment(context.Background(), "owner/repo", 42, 5001, "Addressed — fix committed and pushed."); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1115,7 +1116,7 @@ func TestFetchReviewThreadIDs_MapsCommentIDsToThreadIDs(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	result, err := g.FetchReviewThreadIDs("owner/repo", 42, []int{5001, 5003})
+	result, err := g.FetchReviewThreadIDs(context.Background(), "owner/repo", 42, []int{5001, 5003})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1148,7 +1149,7 @@ func TestResolveReviewThread_CallsGraphQLMutation(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	if err := g.ResolveReviewThread("T_abc123"); err != nil {
+	if err := g.ResolveReviewThread(context.Background(), "T_abc123"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1162,3 +1163,98 @@ func TestResolveReviewThread_CallsGraphQLMutation(t *testing.T) {
 	}
 }
 
+// A cancelled context causes ghCLI methods to return immediately with an error
+// rather than waiting for the fake gh script to finish. This verifies that
+// exec.CommandContext is used, not exec.Command.
+func TestGhCLI_CancelledContext_ReturnsImmediately(t *testing.T) {
+	bin := t.TempDir()
+	// Fake gh that sleeps for 30 seconds — long enough that any test timeout
+	// would fire before it exits naturally.
+	script := "#!/bin/sh\nsleep 30\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately — context is already done before the call
+
+	g := &ghCLI{}
+	start := time.Now()
+	_, err := g.FindOpenPR(ctx, "my-branch", "https://github.com/owner/repo.git")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("call with cancelled ctx took %v — expected near-instant return, gh binary not killed", elapsed)
+	}
+}
+
+// blockingGitHub is a gitHub implementation that blocks on MergePR until
+// ctx is cancelled. Used to simulate a hung gh CLI invocation inside Ship.
+type blockingGitHub struct {
+	gitHub
+	blockUntilCtxDone bool
+}
+
+func (b *blockingGitHub) MergePR(ctx context.Context, prNumber int, repoURL string, opts MergeOpts) MergeResult {
+	if b.blockUntilCtxDone {
+		<-ctx.Done()
+		return MergeResult{Message: ctx.Err().Error()}
+	}
+	return b.gitHub.MergePR(ctx, prNumber, repoURL, opts)
+}
+
+// PostSignalTimeout cancellation propagates through Ship into the gitHub
+// method layer and kills the in-flight call within 1 second of expiry.
+//
+// Ship receives the loop's iteration context. When that context is cancelled
+// (e.g. by PostSignalTimeout), the context passed to gh CLI invocations is
+// cancelled and the calls return promptly instead of blocking until the
+// process exits naturally.
+func TestShip_PostSignalTimeoutCancellation_KillsHungGhCall(t *testing.T) {
+	// Set up an open PR in the stub world so Ship proceeds to the merge phase.
+	inner := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 42, Branch: "ralph/test-branch", State: PRStateOpen},
+		},
+		// JobStepCount=0 (default) triggers infrastructure-failure fast-path in
+		// AutoMergeCurrentBranch, skipping AwaitCI and going straight to MergePR.
+	})
+	gh := &blockingGitHub{gitHub: inner, blockUntilCtxDone: true}
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+
+	r := newRepoForTest(Config{
+		ProjectDir: "/project",
+		WorkDir:    "/project/wt",
+		BaseBranch: "main",
+		Logger:     &testLog{},
+	}, gh, withRunner(runner), withWorktreeBranch("ralph/test-branch"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	deadline, _ := ctx.Deadline()
+	_, err := r.Ship(ctx, ShipOpts{
+		PRNumber:  42,
+		AutoMerge: true,
+	})
+
+	elapsed := time.Since(deadline)
+	if err == nil {
+		t.Fatal("expected context error from Ship, got nil")
+	}
+	if elapsed > time.Second {
+		t.Errorf("Ship returned %v after deadline — context cancellation took %v, expected < 1s", err, elapsed)
+	}
+}
