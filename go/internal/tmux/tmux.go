@@ -68,7 +68,7 @@ func (s *Session) Setup() error {
 
 // Attach attaches to the tmux session. Blocks until detached or session ends.
 func (s *Session) Attach() error {
-	cmd := exec.Command("tmux", "attach-session", "-t", s.Name)
+	cmd := exec.Command("tmux", "attach-session", "-t", "="+s.Name)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -77,7 +77,7 @@ func (s *Session) Attach() error {
 
 // Kill destroys the tmux session. Used on interrupt/Ctrl-C.
 func (s *Session) Kill() {
-	exec.Command("tmux", "kill-session", "-t", s.Name).Run() //nolint:errcheck
+	exec.Command("tmux", "kill-session", "-t", "="+s.Name).Run() //nolint:errcheck
 }
 
 // HasSession returns true if the tmux session still exists.
@@ -105,22 +105,22 @@ func (s *Session) createStandardSession() error {
 	}
 
 	streamCmd := s.filterStreamCmd()
-	if err := tmuxCmd("split-window", "-h", "-t", s.Name, streamCmd); err != nil {
+	if err := tmuxCmd("split-window", "-h", "-t", "="+s.Name, streamCmd); err != nil {
 		return err
 	}
 
 	planCmd := fmt.Sprintf("bash '%s'", planWatchPath)
-	if err := tmuxCmd("split-window", "-v", "-t", s.Name+":.1", planCmd); err != nil {
+	if err := tmuxCmd("split-window", "-v", "-t", "="+s.Name+":.1", planCmd); err != nil {
 		return err
 	}
 
-	tmuxCmd("select-pane", "-t", s.Name+":.0", "-T", "(go) ralph") //nolint:errcheck
-	tmuxCmd("select-pane", "-t", s.Name+":.1", "-T", "stream") //nolint:errcheck
-	tmuxCmd("select-pane", "-t", s.Name+":.2", "-T", "plan")   //nolint:errcheck
+	tmuxCmd("select-pane", "-t", "="+s.Name+":.0", "-T", "(go) ralph") //nolint:errcheck
+	tmuxCmd("select-pane", "-t", "="+s.Name+":.1", "-T", "stream")     //nolint:errcheck
+	tmuxCmd("select-pane", "-t", "="+s.Name+":.2", "-T", "plan")       //nolint:errcheck
 
 	s.applySessionOptions()
 
-	tmuxCmd("select-pane", "-t", s.Name+":.0") //nolint:errcheck
+	tmuxCmd("select-pane", "-t", "="+s.Name+":.0") //nolint:errcheck
 
 	return nil
 }
@@ -130,18 +130,18 @@ func (s *Session) filterStreamCmd() string {
 }
 
 func (s *Session) applySessionOptions() {
-	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")                                                  //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) , #{pane_title} }") //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "remain-on-exit", "on")                                                       //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "set-titles", "off")                                                           //nolint:errcheck
+	tmuxCmd("set-option", "-t", "="+s.Name, "pane-border-status", "top")                                                  //nolint:errcheck
+	tmuxCmd("set-option", "-t", "="+s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) , #{pane_title} }") //nolint:errcheck
+	tmuxCmd("set-option", "-t", "="+s.Name, "remain-on-exit", "on")                                                       //nolint:errcheck
+	tmuxCmd("set-option", "-t", "="+s.Name, "set-titles", "off")                                                          //nolint:errcheck
 
 	// Auto-kill the session when the ralph loop pane (pane 0) dies.
 	// This replaces the old root-level q binding that stole keypresses globally.
 	hookCmd := fmt.Sprintf(
-		"if-shell \"tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1\" \"kill-session -t '%s'\"",
+		"if-shell \"tmux display-message -t '=%s:.0' -p '#{pane_dead}' | grep -q 1\" \"kill-session -t '=%s'\"",
 		s.Name, s.Name,
 	)
-	tmuxCmd("set-hook", "-t", s.Name, "pane-died", hookCmd) //nolint:errcheck
+	tmuxCmd("set-hook", "-t", "="+s.Name, "pane-died", hookCmd) //nolint:errcheck
 }
 
 func (s *Session) writePlanWatcher() error {
@@ -281,10 +281,21 @@ func sanitizeSessionName(name string) string {
 	return name
 }
 
+// InsideTmux returns true when the calling process is running inside a tmux
+// session. Used to refuse nested attaches before any tmux command runs.
+func InsideTmux() bool {
+	return os.Getenv("TMUX") != ""
+}
+
+// execHasSession is a var so tests can stub it without depending on tmux.
+var execHasSession = func(target string) error {
+	return exec.Command("tmux", "has-session", "-t", target).Run()
+}
+
 // sessionExists is a package-level var so tests can stub it to avoid
 // depending on live tmux state.
 var sessionExists = func(name string) bool {
-	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
+	return execHasSession("="+name) == nil
 }
 
 func shellQuote(s string) string {

@@ -989,6 +989,28 @@ func TestTaskReviewModelResolution_OpusCap(t *testing.T) {
 	}
 }
 
+// Verifies that handleTmuxAttach refuses immediately when run from inside
+// a tmux session, returning exit code 1 with the nesting error before
+// invoking any tmux command that could mutate the user's session.
+func TestHandleTmuxAttach_RefusesInsideTmux(t *testing.T) {
+	t.Setenv("TMUX", "/private/tmp/tmux-501/default,69145,0")
+
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	dir := t.TempDir()
+	cfg := config.Config{ProjectDir: dir}
+
+	code := handleTmuxAttach(cfg, "/usr/local/bin/ralph", dir, 0, log)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(buf.String(), "must be run from outside tmux") {
+		t.Errorf("error message missing 'must be run from outside tmux': %s", buf.String())
+	}
+}
+
 // handleLoop starts normally when a stale PID file exists (dead process).
 // Verifies stale cleanup by confirming the PID file is removed.
 func TestHandleLoop_CleansUpStalePID(t *testing.T) {
