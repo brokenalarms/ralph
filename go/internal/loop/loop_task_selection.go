@@ -82,6 +82,12 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		return taskContext{}, actionDone, waited
 	}
 
+	if l.consecutiveNoAgentIters >= 2 {
+		l.logger.Emit(logging.Opts{Level: logging.Error}, "Halting: %d consecutive iterations with no agent run", l.consecutiveNoAgentIters)
+		l.state.Write("status", "halted_no_agent_progress")
+		return taskContext{}, actionDone, waited
+	}
+
 	avail, err := tasks.CheckAvailability(l.taskBackend)
 	if err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error: %v", err)
