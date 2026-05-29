@@ -59,6 +59,12 @@ func (r *repo) MergeStack(ctx context.Context, opts MergeStackOpts) (MergeStackR
 }
 
 func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch string, opts MergeStackOpts) (int, error) {
+	// Guard 1: assert the stack's base is cfg.BaseBranch before touching GitHub.
+	if err := r.assertValidBase(defaultBranch); err != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v", err)
+		return 0, err
+	}
+
 	topBranch := prs[len(prs)-1].head
 	allBranches := make([]string, len(prs))
 	for i, pr := range prs {
@@ -161,6 +167,12 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 		}
 		merged++
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "PR #%d merged (%d/%d)", pr.number, merged, len(prs))
+
+		// Guard 2: assert merged SHA is an ancestor of origin/<baseBranch>.
+		if ancestorErr := r.assertMergedAncestor(result.MergedSHA); ancestorErr != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v", ancestorErr)
+			return merged, ancestorErr
+		}
 
 		r.ResetBranchToRemote(ctx, defaultBranch)
 	}

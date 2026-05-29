@@ -187,7 +187,7 @@ func (s *stubGitHub) MergePR(_ context.Context, prNumber int, _ string, opts Mer
 		return MergeResult{Blocked: true, Message: fmt.Sprintf("PR %d blocked by branch protection", prNumber)}
 	}
 	pr.State = PRStateMerged
-	return MergeResult{Merged: true}
+	return MergeResult{Merged: true, MergedSHA: pr.HeadSHA}
 }
 
 func (s *stubGitHub) ListChecks(_ context.Context, prNumber int, _ string) ([]CICheckResult, error) {

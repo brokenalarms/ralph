@@ -855,7 +855,7 @@ func TestExecuteMerge_PackageFunc_MergesSuccessfully(t *testing.T) {
 		},
 	}
 
-	merged, err := executeMerge(context.Background(), gh, opts, discardLog{})
+	_, merged, err := executeMerge(context.Background(), gh, opts, discardLog{})
 	if err != nil {
 		t.Fatalf("executeMerge: %v", err)
 	}

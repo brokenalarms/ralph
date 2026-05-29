@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1223,5 +1224,92 @@ func TestFlushUnpushedWork_SkipsWhenNoBranchAndNotAheadOfMain(t *testing.T) {
 	}
 	if runner.CalledWith("push") {
 		t.Error("must not push when origin/<branch> absent and HEAD is at origin/main")
+	}
+}
+
+// Ship must refuse to create a PR when the resolved base branch is neither
+// cfg.BaseBranch nor the active stack parent — prevents orphaned PRs targeting
+// a stale/wrong branch (the sharpe 2026-05-28 failure scenario).
+func TestShip_RejectsUnexpectedBase(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("fetch", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("push", "", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
+
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-unexpected-base"),
+	)
+
+	// Pass an explicit base that is neither "main" (cfg.BaseBranch) nor prevBranch.
+	result, err := repo.Ship(context.Background(), ShipOpts{
+		TaskID:     "ralph-z999",
+		TaskTitle:  "test task",
+		BaseBranch: "claude/some-stale-bot-branch",
+		AutoMerge:  false,
+	})
+	if err == nil {
+		t.Fatal("expected error when resolved base is not cfg.BaseBranch or active stack parent")
+	}
+	if result.PRNumber != 0 {
+		t.Errorf("expected PRNumber=0 when base is rejected, got %d", result.PRNumber)
+	}
+	if !strings.Contains(err.Error(), "base branch guard") {
+		t.Errorf("expected 'base branch guard' in error message, got: %v", err)
+	}
+	// The gh stub must not have received a CreatePR call — guard fires before API.
+	// We confirm by checking that no PR was created in the fake world.
+	branches, _ := gh.ListOpenPRBranches(context.Background(), "https://github.com/test/repo.git")
+	if len(branches) != 0 {
+		t.Errorf("expected no PR created, but found open PR branches: %v", branches)
+	}
+}
+
+// executeMerge must return an error when the merged SHA is not an ancestor of
+// origin/<BaseBranch> — catches the case where a merge landed on a dead/stale
+// lineage rather than the real base branch (the sharpe 2026-05-28 failure).
+func TestExecuteMerge_PostMergeAncestorCheckFails(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	// Post-merge ancestor check: always fails — merged SHA not on base branch.
+	runner.On("merge-base --is-ancestor", "", errors.New("not ancestor of base"))
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  42,
+			Branch:  "ralph/test/01-orphan",
+			HeadSHA: "deadbeef123",
+			State:   PRStateOpen,
+		}},
+	})
+
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-orphan"),
+	)
+
+	merged, err := repo.executeMerge(context.Background(), 42, "https://github.com/test/repo.git")
+	if merged {
+		t.Error("expected merged=false when post-merge ancestor check fails")
+	}
+	if err == nil {
+		t.Fatal("expected error when merged SHA is not an ancestor of base branch")
+	}
+	if !strings.Contains(err.Error(), "NOT an ancestor") {
+		t.Errorf("expected 'NOT an ancestor' in error, got: %v", err)
 	}
 }

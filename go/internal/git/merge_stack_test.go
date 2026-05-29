@@ -701,6 +701,30 @@ func TestMergeStack_ProjectDirRemainsCleanAfterStackMerge(t *testing.T) {
 	}
 }
 
+// MergeStack must refuse to proceed when the collected stack's base branch is
+// neither cfg.BaseBranch nor an active stack parent — prevents merging into a
+// stale/wrong branch.
+func TestMergeStack_RejectsUnexpectedBase(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 42, Branch: "feature", Base: "some-stale-origin-branch", State: PRStateOpen},
+		},
+	})
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+	)
+
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "42"})
+	if err == nil {
+		t.Fatal("expected error when stack base is not cfg.BaseBranch or active stack parent")
+	}
+	if !strings.Contains(err.Error(), "base branch guard") {
+		t.Errorf("expected 'base branch guard' in error, got: %v", err)
+	}
+}
+
 // initBareRepoIn initializes a git repo with one commit in the given directory.
 func initBareRepoIn(t *testing.T, dir string) {
 	t.Helper()

@@ -34,6 +34,37 @@ func (r *repo) resolveBaseBranch() string {
 	return r.detectDefaultBranch()
 }
 
+// assertValidBase returns an error when base is not the configured BaseBranch
+// and is not the active prevBranch stack parent. Prevents PRs from being
+// created or merged against an unexpected branch (the sharpe 2026-05-28 failure
+// scenario where a stale origin/HEAD pointer produced base=wrong-branch).
+func (r *repo) assertValidBase(base string) error {
+	if base == r.baseBranch {
+		return nil
+	}
+	if r.prevBranch != "" && base == r.prevBranch {
+		return nil
+	}
+	return fmt.Errorf("base branch guard: resolved base %q is neither cfg.BaseBranch (%q) nor active stack parent %q — refusing to create/merge PR", base, r.baseBranch, r.prevBranch)
+}
+
+// assertMergedAncestor verifies that mergedSHA is an ancestor of
+// origin/<baseBranch> after a successful squash-merge. A merge that lands on a
+// dead lineage (not on the real base) returns a non-nil error so the caller can
+// fail the iteration loudly without closing the bead.
+func (r *repo) assertMergedAncestor(mergedSHA string) error {
+	if mergedSHA == "" {
+		return nil
+	}
+	dir := r.projectDir
+	_ = r.gitCmdErr(dir, "fetch", "origin", r.baseBranch)
+	ref := "origin/" + r.baseBranch
+	if r.gitCmdErr(dir, "merge-base", "--is-ancestor", mergedSHA, ref) != nil {
+		return fmt.Errorf("post-merge ancestor check FAILED: merged SHA %s is NOT an ancestor of %s — commits may have landed in a dead lineage; bead left open for manual recovery", mergedSHA, ref)
+	}
+	return nil
+}
+
 // Push squashes all commits into one and force-pushes the branch.
 // Always uses --force-with-lease (safe — only forces if remote matches
 // last fetch). Squash ensures stacked PRs cascade cleanly on merge.
@@ -230,11 +261,16 @@ func CreatePR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string,
 // description / acceptance criteria use the package function CreatePR
 // directly.
 func (r *repo) CreatePR(ctx context.Context, taskID, taskDesc, summary string) (int, error) {
+	baseBranch := r.resolveBaseBranch()
+	if err := r.assertValidBase(baseBranch); err != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v", err)
+		return 0, err
+	}
 	return CreatePR(ctx, r.github, r.workDir, r.worktreeBranch, r.RemoteURL(), EnsurePROpts{
 		TaskID:     taskID,
 		TaskDesc:   taskDesc,
 		Summary:    summary,
-		BaseBranch: r.resolveBaseBranch(),
+		BaseBranch: baseBranch,
 		Logger:     r.logger,
 	})
 }
@@ -468,6 +504,12 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		}
 		// PRStateOpen — fall through to merge phase.
 	} else {
+		// Guard 1: assert base is cfg.BaseBranch or active stack parent before
+		// any push or PR creation API call.
+		if err := r.assertValidBase(opts.BaseBranch); err != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v", err)
+			return ShipResult{}, err
+		}
 		infra := shipInfra{
 			push:                 r.Push,
 			hasUncommitted:       r.HasUncommittedChanges,
@@ -781,9 +823,12 @@ type ExecuteMergeOpts struct {
 }
 
 // executeMerge attempts the squash-merge and handles CI-gated retries.
+// Returns (mergedSHA, merged, err). mergedSHA is the squash-merge commit SHA
+// from the GitHub API, populated when merged=true; callers use it for the
+// post-merge ancestor check (Guard 2).
 // It is a package function — callers compose it without a repo receiver.
 // repo.executeMerge delegates here.
-func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger Log) (bool, error) {
+func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger Log) (string, bool, error) {
 	nwo := NWOFromRemote(opts.RepoURL)
 	prLink := logging.PRLinkOpt(nwo, opts.PRNumber)
 	mergeOpts := opts.MergeOpts
@@ -794,14 +839,15 @@ func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger 
 
 	result := gh.MergePR(ctx, opts.PRNumber, opts.RepoURL, mergeOpts)
 	if result.Merged {
-		return postMergeLog(nwo, opts.PRNumber, opts.DefaultBranch, logger)
+		merged, err := postMergeLog(nwo, opts.PRNumber, opts.DefaultBranch, logger)
+		return result.MergedSHA, merged, err
 	}
 
 	if result.Conflict {
 		if logger != nil {
 			logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "has merge conflicts — attempting rebase")
 		}
-		return false, &MergeConflictError{PRNumber: opts.PRNumber}
+		return "", false, &MergeConflictError{PRNumber: opts.PRNumber}
 	}
 
 	if result.Blocked {
@@ -809,14 +855,14 @@ func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger 
 			logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "blocked by branch protection: %s — waiting for CI...", result.Message)
 		}
 		if opts.AwaitCI == nil {
-			return false, fmt.Errorf("auto-merge blocked for PR #%d: %s", opts.PRNumber, result.Message)
+			return "", false, fmt.Errorf("auto-merge blocked for PR #%d: %s", opts.PRNumber, result.Message)
 		}
 		checks, status, waitErr := opts.AwaitCI(ctx, opts.PRNumber, opts.RepoURL, time.Time{})
 		if waitErr != nil {
-			return false, fmt.Errorf("CI polling failed for PR #%d: %w", opts.PRNumber, waitErr)
+			return "", false, fmt.Errorf("CI polling failed for PR #%d: %w", opts.PRNumber, waitErr)
 		}
 		if status == CIFailed {
-			return false, &CIFailureError{PRNumber: opts.PRNumber, Failures: failedChecks(checks)}
+			return "", false, &CIFailureError{PRNumber: opts.PRNumber, Failures: failedChecks(checks)}
 		}
 		if status == CIPassed {
 			if logger != nil {
@@ -824,19 +870,20 @@ func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger 
 			}
 			retry := gh.MergePR(ctx, opts.PRNumber, opts.RepoURL, mergeOpts)
 			if retry.Merged {
-				return postMergeLog(nwo, opts.PRNumber, opts.DefaultBranch, logger)
+				merged, err := postMergeLog(nwo, opts.PRNumber, opts.DefaultBranch, logger)
+				return retry.MergedSHA, merged, err
 			}
 			if logger != nil {
 				logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Merge retry failed: %s", retry.Message)
 			}
-			return false, fmt.Errorf("merge retry failed for PR #%d after CI passed: %s", opts.PRNumber, retry.Message)
+			return "", false, fmt.Errorf("merge retry failed for PR #%d after CI passed: %s", opts.PRNumber, retry.Message)
 		}
 	}
 
 	if logger != nil {
 		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Auto-merge failed: %s", result.Message)
 	}
-	return false, fmt.Errorf("auto-merge failed for PR #%d: %s", opts.PRNumber, result.Message)
+	return "", false, fmt.Errorf("auto-merge failed for PR #%d: %s", opts.PRNumber, result.Message)
 }
 
 // postMergeLog logs the merge completion.
@@ -847,9 +894,12 @@ func postMergeLog(nwo string, prNumber int, defaultBranch string, logger Log) (b
 	return true, nil
 }
 
-// repo.executeMerge delegates to the package-level executeMerge function.
+// repo.executeMerge delegates to the package-level executeMerge function and
+// runs the post-merge ancestor check (Guard 2): if the merged SHA is not an
+// ancestor of origin/<baseBranch>, the iteration fails loudly without closing
+// the bead.
 func (r *repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (bool, error) {
-	return executeMerge(ctx, r.github, ExecuteMergeOpts{
+	mergedSHA, merged, err := executeMerge(ctx, r.github, ExecuteMergeOpts{
 		PRNumber:       prNumber,
 		RepoURL:        repoURL,
 		WorktreeBranch: r.worktreeBranch,
@@ -858,6 +908,14 @@ func (r *repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (
 		MergeOpts:      r.mergeOpts(),
 		AwaitCI:        r.AwaitCI,
 	}, r.logger)
+	if !merged || err != nil {
+		return merged, err
+	}
+	if ancestorErr := r.assertMergedAncestor(mergedSHA); ancestorErr != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v", ancestorErr)
+		return false, ancestorErr
+	}
+	return merged, nil
 }
 
 // executeMergeWithAdminOverride is like executeMerge but sets Admin:true on MergeOpts
@@ -867,7 +925,7 @@ func (r *repo) executeMergeWithAdminOverride(ctx context.Context, prNumber int, 
 	if r.adminMergeOnCIInfraFailure {
 		opts.Admin = true
 	}
-	return executeMerge(ctx, r.github, ExecuteMergeOpts{
+	mergedSHA, merged, err := executeMerge(ctx, r.github, ExecuteMergeOpts{
 		PRNumber:       prNumber,
 		RepoURL:        repoURL,
 		WorktreeBranch: r.worktreeBranch,
@@ -876,6 +934,14 @@ func (r *repo) executeMergeWithAdminOverride(ctx context.Context, prNumber int, 
 		MergeOpts:      opts,
 		AwaitCI:        r.AwaitCI,
 	}, r.logger)
+	if !merged || err != nil {
+		return merged, err
+	}
+	if ancestorErr := r.assertMergedAncestor(mergedSHA); ancestorErr != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v", ancestorErr)
+		return false, ancestorErr
+	}
+	return merged, nil
 }
 
 // GetCIFailureLog retrieves the failed CI run's log output for the given PR.
