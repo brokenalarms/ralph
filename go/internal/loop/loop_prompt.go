@@ -49,22 +49,32 @@ func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (strin
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
 	}
 
-	return prompt.BuildPrompt(prompt.Vars{
-		PromptsDir:       l.cfg.Dirs.PromptsDir,
-		ProjectDir:       l.cfg.Dirs.ProjectDir,
-		WorkDir:          l.git.GetWorkDir(),
-		RalphDir:         l.cfg.Dirs.RalphDir,
-		PlanFile:         l.cfg.PlanFile,
+	result, err := prompt.BuildPrompt(prompt.Vars{
+		PromptsDir:        l.cfg.Dirs.PromptsDir,
+		ProjectDir:        l.cfg.Dirs.ProjectDir,
+		WorkDir:           l.git.GetWorkDir(),
+		RalphDir:          l.cfg.Dirs.RalphDir,
+		PlanFile:          l.cfg.PlanFile,
 		SignalToken:       l.signals.Complete,
 		CurrentTaskToken:  l.signals.CurrentTask,
 		AllCompleteToken:  l.signals.AllComplete,
 		NoCodeNeededToken: l.signals.NoCodeNeeded,
-		TaskPrompt:       taskPrompt,
-		AttemptHistory:   attemptHistory,
-		TestStatus:       testStatus,
-		TasksContext:     tasksContext,
-		TaskBackend:      prompt.BackendBD,
+		TaskPrompt:        taskPrompt,
+		AttemptHistory:    attemptHistory,
+		TestStatus:        testStatus,
+		TasksContext:      tasksContext,
+		TaskBackend:       prompt.BackendBD,
 	})
+	if err != nil {
+		return "", err
+	}
+
+	inputSum := len(taskPrompt) + len(attemptHistory) + len(testStatus) + len(tasksContext)
+	l.logger.Emit(logging.Opts{Domain: logging.LLM},
+		"Prompt sizes — taskPrompt: %dB, attemptHistory: %dB, testStatus: %dB, tasksContext: %dB, total: %dB (template overhead: %dB)",
+		len(taskPrompt), len(attemptHistory), len(testStatus), len(tasksContext), len(result), len(result)-inputSum)
+
+	return result, nil
 }
 
 // attemptContext assembles attempt history, reflections, and cross-task
@@ -74,32 +84,38 @@ func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (strin
 func (l *Loop) attemptContext(taskID, taskName string) string {
 	var parts []string
 
-	// Same-task attempt history (in-memory, iteration-scoped)
-	if history := renderAttemptHistory(l.taskAttempts, l.cfg.MaxPromptAttempts); history != "" {
+	history := renderAttemptHistory(l.taskAttempts, l.cfg.MaxPromptAttempts)
+	if history != "" {
 		parts = append(parts, "## Previous attempts on this task\n"+history)
 	}
 
-	// Same-task reflection (written to disk by the agent at task end)
-	if reflection := readReflection(l.cfg.Dirs.RalphDir, taskID, taskName); reflection != "" {
-		parts = append(parts, "### Previous reflection\n"+reflection)
+	ownReflection := readReflection(l.cfg.Dirs.RalphDir, taskID, taskName)
+	if ownReflection != "" {
+		parts = append(parts, "### Previous reflection\n"+ownReflection)
 	}
 
-	// Cross-task learnings: recent reflections from other completed tasks
 	excludeKey := taskID
 	if excludeKey == "" {
 		excludeKey = git.Slugify(taskName)
 	}
 
+	var crossTaskLearnings string
 	reflections := recentReflections(l.cfg.Dirs.RalphDir, excludeKey, maxCrossTaskReflections)
 	if len(reflections) > 0 {
 		var crossParts []string
 		for _, r := range reflections {
 			crossParts = append(crossParts, fmt.Sprintf("### %s\n%s", r.TaskID, r.Content))
 		}
-		parts = append(parts, "## Recent learnings from previous tasks\n"+strings.Join(crossParts, "\n"))
+		crossTaskLearnings = strings.Join(crossParts, "\n")
+		parts = append(parts, "## Recent learnings from previous tasks\n"+crossTaskLearnings)
 	}
 
-	return strings.Join(parts, "\n")
+	result := strings.Join(parts, "\n")
+	l.logger.Emit(logging.Opts{Domain: logging.LLM},
+		"attemptContext sizes — history: %dB, ownReflection: %dB, crossTaskLearnings: %dB, total: %dB",
+		len(history), len(ownReflection), len(crossTaskLearnings), len(result))
+
+	return result
 }
 
 // readReflection returns the content of a previous reflection file for a task.

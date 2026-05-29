@@ -1062,6 +1062,53 @@ func TestPoll_OversizedRawLogLineDoesNotBreakIdleDetection(t *testing.T) {
 	}
 }
 
+// TestRun_LogsSystemStatusEvents verifies that when a system event with
+// subtype=status appears in the raw log, poll emits a 'Claude system status'
+// log entry — needed to capture compaction and other SDK status signals.
+func TestRun_LogsSystemStatusEvents(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintln(f, `{"type":"system","subtype":"status","status":"compacting"}`)
+		f.Close()
+
+		time.Sleep(200 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+
+	found := false
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Claude system status") && strings.Contains(msg, "compacting") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'Claude system status: compacting' log entry, got: %v", log.logs)
+	}
+}
+
 // Verifies that the shorter progress-aware timeout fires once the agent has
 // produced content output in the raw log (text activity flips activitySeen).
 func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {

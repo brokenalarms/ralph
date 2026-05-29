@@ -316,6 +316,9 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	}
 	defer rawLog.Close()
 
+	r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model},
+		"Invoking claude with prompt size %dB, workDir %s, model %s", len(cfg.Prompt), cfg.WorkDir, cfg.Model)
+
 	var cmd *exec.Cmd
 	if r.CmdFactory != nil {
 		cmd = r.CmdFactory(cfg, rawLog)
@@ -340,6 +343,14 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		cmd.Stderr = rawLog
 		// Start in its own process group so we can signal it cleanly.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+
+	versionCtx, versionCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer versionCancel()
+	if out, err := exec.CommandContext(versionCtx, "claude", "--version").Output(); err != nil {
+		r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "claude --version failed: %v", err)
+	} else {
+		r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "Using claude binary version %s", strings.TrimSpace(string(out)))
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -485,6 +496,26 @@ func isContentActivity(line string) bool {
 	}
 }
 
+// parseSystemStatusEvent returns the status value if the line is a system event
+// with subtype=status (e.g. compacting, throttled). Returns "" for all other lines.
+func parseSystemStatusEvent(line string) string {
+	if len(line) == 0 || line[0] != '{' {
+		return ""
+	}
+	var ev struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+		Status  string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return ""
+	}
+	if ev.Type == "system" && ev.Subtype == "status" && ev.Status != "" {
+		return ev.Status
+	}
+	return ""
+}
+
 // newLinesScan holds results from scanning newly appended raw log lines.
 type newLinesScan struct {
 	hasActivity             bool
@@ -500,8 +531,10 @@ type newLinesScan struct {
 	rlAllowedIsUsingOverage bool
 	rlAllowedUtilization    float64
 	// True when any rate_limit_event in this scan had isUsingOverage=true.
-	rlFirstOverage  bool
+	rlFirstOverage   bool
 	rlOverageResetAt time.Time
+	// System status events (type=system, subtype=status) detected in this scan.
+	statusEvents []string
 }
 
 // scanNewLines reads new output appended to rawLog since *lastOffset.
@@ -569,6 +602,9 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 				result.rlFirstOverage = true
 				result.rlOverageResetAt = resetAt
 			}
+		}
+		if status := parseSystemStatusEvent(line); status != "" {
+			result.statusEvents = append(result.statusEvents, status)
 		}
 	}
 	// Scanner errored on oversized line — skip to EOF so we don't re-scan
@@ -651,6 +687,10 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				if scan.hasActivity {
 					lastActivity = time.Now()
 					activitySeen = true
+				}
+				for _, status := range scan.statusEvents {
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model},
+						"Claude system status: %s at %s", status, time.Since(runStart).Round(time.Millisecond))
 				}
 				if scan.rlThrottled {
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model},
