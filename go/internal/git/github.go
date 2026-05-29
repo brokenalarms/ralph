@@ -176,6 +176,7 @@ type gitHub interface {
 
 // ghCLI implements GitHub using the gh CLI tool.
 type ghCLI struct {
+	logger                      Log
 	CopilotGatedTimeout         time.Duration
 	CopilotOpportunisticTimeout time.Duration
 	CodeRabbitTimeout           time.Duration
