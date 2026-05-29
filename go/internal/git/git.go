@@ -104,6 +104,7 @@ func New(cfg Config) Ops {
 		codeRabbitTimeout:           cfg.CodeRabbitTimeout,
 		adminMergeOnCIInfraFailure:  cfg.AdminMergeOnCIInfraFailure,
 		github: &ghCLI{
+			logger:                      cfg.Logger,
 			CopilotGatedTimeout:         cfg.CopilotGatedTimeout,
 			CopilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
 			CodeRabbitTimeout:           cfg.CodeRabbitTimeout,
