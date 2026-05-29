@@ -110,11 +110,11 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 
 	// If resuming the same task, mark the branch as already renamed so
 	// BranchForTask doesn't re-rename it on the first iteration.
-	if lastID, _ := l.state.Read("last_task_id"); lastID != "" {
+	if lastID, _ := l.state.Read("current_task_id"); lastID != "" {
 		l.taskBackend.SetResumeTaskID(lastID)
 	}
 	nextInfo, _ := l.taskBackend.GetNextTaskInfo()
-	lastID, _ := l.state.Read("last_task_id")
+	lastID, _ := l.state.Read("current_task_id")
 	lastTask, _ := l.state.Read("last_task")
 	if !isNewTask(lastID, lastTask, nextInfo.ID, nextInfo.Title) {
 		l.git.SetBranchRenamed(true)

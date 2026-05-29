@@ -187,7 +187,7 @@ done
 
 func (s *Session) bdPlanRender() string {
 	stateFile := filepath.Join(s.RalphDir, "state.json")
-	return fmt.Sprintf(`    current_id=$(jq -r '.last_task_id // empty' '%s' 2>/dev/null)
+	return fmt.Sprintf(`    current_id=$(jq -r '.current_task_id // .last_task_id // empty' '%s' 2>/dev/null)
     current_title=$(jq -r '.last_task // empty' '%s' 2>/dev/null)
     if [[ -n "$current_title" ]]; then
       printf "${BOLD}${CYAN}▶ %%s${NC} (%%s)\n" "$current_title" "$current_id"

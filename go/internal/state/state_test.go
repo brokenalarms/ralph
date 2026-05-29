@@ -813,3 +813,105 @@ func TestStore_TouchPlanFiles(t *testing.T) {
 		t.Error("TouchPlanRefresh should create .plan-refresh")
 	}
 }
+
+// Proves: BeginIteration writes current_task_id (not last_task_id) to state.json,
+// and both Read("current_task_id") and Read("last_task_id") return the same value
+// for backwards compatibility.
+func TestBeginIteration_WritesCurrentTaskID(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.BeginIteration("ralph-abc", "Fix bug", 1)
+
+	// Canonical name must return the value.
+	v, err := st.Read("current_task_id")
+	if err != nil {
+		t.Fatalf("Read current_task_id: %v", err)
+	}
+	if v != "ralph-abc" {
+		t.Errorf("current_task_id = %q, want %q", v, "ralph-abc")
+	}
+
+	// Backwards-compat alias must also return the value.
+	v2, err := st.Read("last_task_id")
+	if err != nil {
+		t.Fatalf("Read last_task_id: %v", err)
+	}
+	if v2 != "ralph-abc" {
+		t.Errorf("last_task_id alias = %q, want %q", v2, "ralph-abc")
+	}
+
+	// JSON on disk must use current_task_id, not last_task_id.
+	data, _ := os.ReadFile(st.Path())
+	if !strings.Contains(string(data), `"current_task_id"`) {
+		t.Errorf("expected current_task_id in JSON, got: %s", data)
+	}
+	if strings.Contains(string(data), `"last_task_id"`) {
+		t.Errorf("last_task_id must not appear in written JSON: %s", data)
+	}
+}
+
+// Proves: ClearCurrentTask clears current_task_id in state.json, signalling
+// no task is actively in-flight after a terminal transition.
+func TestClearCurrentTask_ClearsField(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.BeginIteration("ralph-abc", "Fix bug", 1)
+
+	v, _ := st.Read("current_task_id")
+	if v != "ralph-abc" {
+		t.Fatalf("precondition: current_task_id should be ralph-abc, got %q", v)
+	}
+
+	if err := st.ClearCurrentTask(); err != nil {
+		t.Fatalf("ClearCurrentTask: %v", err)
+	}
+
+	v, _ = st.Read("current_task_id")
+	if v != "" {
+		t.Errorf("current_task_id should be empty after clear, got %q", v)
+	}
+
+	// JSON on disk must not contain current_task_id once cleared.
+	data, _ := os.ReadFile(st.Path())
+	if strings.Contains(string(data), `"current_task_id"`) {
+		t.Errorf("current_task_id should be absent from JSON after clear: %s", data)
+	}
+}
+
+// Proves: Load reads last_task_id from old state.json files (written by bash ralph)
+// into CurrentTaskID, providing backwards compatibility for one release.
+func TestLoad_BackwardsCompatLastTaskID(t *testing.T) {
+	dir := t.TempDir()
+	stateJSON := `{
+  "iteration": 5,
+  "status": "running",
+  "last_task_id": "ralph-xyz"
+}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := NewStore(dir)
+	s, err := st.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if s.CurrentTaskID != "ralph-xyz" {
+		t.Errorf("CurrentTaskID = %q, want ralph-xyz (read from last_task_id)", s.CurrentTaskID)
+	}
+
+	// Read via both aliases must return the same value.
+	v, _ := st.Read("current_task_id")
+	if v != "ralph-xyz" {
+		t.Errorf("Read(current_task_id) = %q, want ralph-xyz", v)
+	}
+	v2, _ := st.Read("last_task_id")
+	if v2 != "ralph-xyz" {
+		t.Errorf("Read(last_task_id) = %q, want ralph-xyz", v2)
+	}
+}
