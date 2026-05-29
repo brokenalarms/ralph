@@ -86,6 +86,10 @@ type Config struct {
 	// effect on real test failures.
 	AdminMergeOnCIInfraFailure bool
 
+	// LogRetentionDays is the number of days to keep loop logs in the stable
+	// log directory. Zero disables pruning.
+	LogRetentionDays int
+
 	cliSet map[string]bool
 }
 

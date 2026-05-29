@@ -582,8 +582,6 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 		}
 	}
 
-	ralphDir := l.cfg.Dirs.RalphDir
-
 	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
 	buildStatus := runVerifyBuild(ctx, runVerifyBuildParams{
 		verifyBuild: l.cfg.VerifyBuild,
@@ -602,7 +600,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	headBefore := l.git.HeadRev()
-	rawLogPath := filepath.Join(ralphDir, "raw.log")
+	rawLogPath := filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "raw.log")
 	logStart := fileLineCount(rawLogPath)
 
 	attemptContext := l.attemptContext(taskID, nextTask)

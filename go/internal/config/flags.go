@@ -600,6 +600,21 @@ var Flags = []FlagDef{
 		},
 		Read: func(cfg *Config) string { return cfg.FixEscalationModel },
 	},
+	{
+		Help:      "Days to retain session logs in the stable log directory (0 = keep forever)",
+		Default:   "30",
+		ConfigKey: "log_retention_days",
+		Kind:      KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.LogRetentionDays = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.LogRetentionDays) },
+	},
 }
 
 var (

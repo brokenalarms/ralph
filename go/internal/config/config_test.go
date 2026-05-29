@@ -1150,4 +1150,30 @@ func TestModelCeilingCLIOverridesToML(t *testing.T) {
 	}
 }
 
+// Proves AC4 of ralph-55ww: log_retention_days is configurable via config.toml
+// and defaults to 30. Zero disables pruning.
+func TestLogRetentionDays(t *testing.T) {
+	cfg, _ := Parse(nil)
+	if cfg.LogRetentionDays != 30 {
+		t.Errorf("LogRetentionDays default = %d, want 30", cfg.LogRetentionDays)
+	}
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("log_retention_days = 90\n"), 0o644)
+
+	cfg, _ = Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+	if cfg.LogRetentionDays != 90 {
+		t.Errorf("LogRetentionDays = %d, want 90 from config file", cfg.LogRetentionDays)
+	}
+
+	os.WriteFile(tomlPath, []byte("log_retention_days = 0\n"), 0o644)
+	cfg, _ = Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+	if cfg.LogRetentionDays != 0 {
+		t.Errorf("LogRetentionDays = %d, want 0 (disabled)", cfg.LogRetentionDays)
+	}
+}
+
 

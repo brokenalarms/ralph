@@ -263,20 +263,20 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	planFile := filepath.Join(ralphDir, "plan.md")
 
 	// Should not panic or error.
-	printSummary(config.Config{ProjectDir: dir}, gm, st, backend, ralphDir, planFile, log)
+	printSummary(config.Config{ProjectDir: dir}, gm, st, backend, ralphDir, ralphDir, planFile, log)
 }
 
-// Verifies initRalphDir creates the .ralph directory and log files.
+// Verifies initRalphDir creates the .ralph directory and reflections subdirectory.
+// Log files are managed separately by runMain in the stable LogDir.
 func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
-	logFile := filepath.Join(ralphDir, "loop.log")
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	cfg := config.Config{ProjectDir: dir}
 
 	log := logging.New(nil)
-	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d", exitCode)
@@ -288,8 +288,8 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	if _, err := os.Stat(ralphDir); os.IsNotExist(err) {
 		t.Error(".ralph directory should exist")
 	}
-	if _, err := os.Stat(logFile); os.IsNotExist(err) {
-		t.Error("log file should exist")
+	if _, err := os.Stat(filepath.Join(ralphDir, "reflections")); os.IsNotExist(err) {
+		t.Error("reflections directory should exist")
 	}
 }
 
@@ -356,7 +356,6 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	logFile := filepath.Join(ralphDir, "loop.log")
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
@@ -366,7 +365,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue, got exit code %d", exitCode)
@@ -516,7 +515,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
+	cleanup(cfg, gm, st, backend, ralphDir, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
 
 	status, _ := st.Read("status")
 	if status != "stopped" {
@@ -540,7 +539,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, false, log)
+	cleanup(cfg, gm, st, backend, ralphDir, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, false, log)
 
 	status, _ := st.Read("status")
 	if status != "completed" {
@@ -571,7 +570,7 @@ func TestCleanup_ClearsCLIConfig(t *testing.T) {
 	log := logging.New(nil)
 	c := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(c, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
+	cleanup(c, gm, st, backend, ralphDir, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
 
 	// cli_config must be cleared.
 	cfg, err := st.LoadCLIConfig()
@@ -624,7 +623,6 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	logFile := filepath.Join(ralphDir, "loop.log")
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
@@ -634,7 +632,7 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir, Wait: true}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d — --wait should auto-reset", exitCode)
@@ -649,13 +647,51 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	}
 }
 
+// Proves AC1 of ralph-55ww: loop.log and raw.log in the stable LogDir survive
+// a "run fresh" that wipes .ralph — they are outside ralphDir so RemoveAll
+// does not touch them.
+func TestLogsInStableLogDirSurviveRalphDirRecreation(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	// Simulate the stable log dir being a sibling of .ralph (not inside it).
+	logDir := filepath.Join(dir, "stable-logs")
+	os.MkdirAll(logDir, 0o755)
+
+	loopLog := filepath.Join(logDir, "loop.log")
+	rawLog := filepath.Join(logDir, "raw.log")
+	if err := os.WriteFile(loopLog, []byte("session 1 output\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rawLog, []byte(`{"type":"assistant"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate "run fresh": wipe .ralph entirely (what initRalphDir does).
+	if err := os.RemoveAll(ralphDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Logs must survive because they live in logDir, not ralphDir.
+	if _, err := os.Stat(loopLog); os.IsNotExist(err) {
+		t.Error("loop.log should survive .ralph recreation")
+	}
+	if _, err := os.Stat(rawLog); os.IsNotExist(err) {
+		t.Error("raw.log should survive .ralph recreation")
+	}
+	content, _ := os.ReadFile(loopLog)
+	if string(content) != "session 1 output\n" {
+		t.Errorf("loop.log content should be intact, got %q", string(content))
+	}
+}
+
 // Verifies that without --wait, initRalphDir blocks on the interactive
 // prompt and exits 0 when context is cancelled (simulating no user input).
 func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	logFile := filepath.Join(ralphDir, "loop.log")
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
@@ -668,7 +704,7 @@ func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, exitCode := initRalphDir(ctx, &cfg, ralphDir, logFile, stateFile, log)
+	_, exitCode := initRalphDir(ctx, &cfg, ralphDir, stateFile, log)
 
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0 (prompt cancelled), got %d", exitCode)
@@ -1001,7 +1037,7 @@ func TestHandleTmuxAttach_RefusesInsideTmux(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Config{ProjectDir: dir}
 
-	code := handleTmuxAttach(cfg, "/usr/local/bin/ralph", dir, 0, log)
+	code := handleTmuxAttach(cfg, "/usr/local/bin/ralph", dir, dir, 0, log)
 
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
