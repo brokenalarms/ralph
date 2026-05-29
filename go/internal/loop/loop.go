@@ -670,6 +670,17 @@ iterLoop:
 				_ = l.taskBackend.SetMetadata(task.id, "branch", "")
 			}
 		}
+		if resumeResult.ShipFailedAfterPush {
+			shipErrStr := "unknown Ship error"
+			if resumeResult.ShipErr != nil {
+				shipErrStr = resumeResult.ShipErr.Error()
+			}
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+				"Task %s: Ship failed after pushed commits on branch %s: %s — Manual recovery: retry Ship manually after the gh issue resolves, or close the branch's PR if one was created",
+				task.id, branch, shipErrStr)
+			l.state.Write("status", "halted_ship_failed_with_pushed_work")
+			break iterLoop
+		}
 		if resumeResult.Handled {
 			l.onResumeDone(ctx, task.id, task.title, resumeResult)
 			l.git.TagTaskEnd(task.id)
