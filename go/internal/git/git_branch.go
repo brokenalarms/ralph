@@ -19,7 +19,7 @@ type BranchTaskMeta struct {
 // it (or the default branch if no stack exists). Called once on startup before
 // the first iteration, before any task-specific branch setup.
 func (r *repo) SyncWorktreeBase(ctx context.Context, completedBranches []string) error {
-	setStackHead(r, completedBranches)
+	setStackHead(ctx, r, completedBranches)
 	r.stackHeadResolved = true
 	if r.prevBranch == "" {
 		if len(completedBranches) > 0 {
@@ -49,7 +49,7 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 	if r.stackHeadResolved {
 		r.stackHeadResolved = false
 	} else {
-		setStackHead(r, meta.CompletedBranches)
+		setStackHead(ctx, r, meta.CompletedBranches)
 	}
 
 	baseRef := "origin/" + r.detectDefaultBranch()
@@ -97,7 +97,7 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 // does not, but main has the squashed commit the branch lacks). BranchIsAheadOfMain
 // returns false for diverged branches, so the stale branch is rejected and the
 // next task starts from main instead.
-func setStackHead(r *repo, completedBranches []string) {
+func setStackHead(ctx context.Context, r *repo, completedBranches []string) {
 	r.prevBranch = ""
 	if len(completedBranches) == 0 {
 		return
@@ -108,7 +108,7 @@ func setStackHead(r *repo, completedBranches []string) {
 		return
 	}
 
-	openBranches, err := r.ListOpenPRBranches()
+	openBranches, err := r.ListOpenPRBranches(ctx)
 	if err != nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — ListOpenPRBranches error: %v", err)
 		return

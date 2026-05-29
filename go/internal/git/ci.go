@@ -125,7 +125,7 @@ func (r *repo) isInfrastructureFailure(ctx context.Context, prNumber int) bool {
 	if gh == nil || !gh.Available() {
 		return false
 	}
-	steps, err := gh.GetJobStepCount(nwo, prNumber)
+	steps, err := gh.GetJobStepCount(ctx, nwo, prNumber)
 	if err != nil {
 		return false
 	}
@@ -219,12 +219,14 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 	nwo := NWOFromRemote(repoURL)
 	gh := r.github
 
-	fetch := gh.ListChecks
+	fetch := func(prNumber int, repoURL string) ([]CICheckResult, error) {
+		return gh.ListChecks(ctx, prNumber, repoURL)
+	}
 
 	// When required status checks are configured on the base branch, filter to
 	// only those checks. Non-required checks (deploy previews, tag workflows)
 	// must not gate merging — only branch-protection-required checks count.
-	if requiredChecks, err := gh.GetRequiredChecks(nwo, r.baseBranch); err == nil && len(requiredChecks) > 0 {
+	if requiredChecks, err := gh.GetRequiredChecks(ctx, nwo, r.baseBranch); err == nil && len(requiredChecks) > 0 {
 		required := make(map[string]bool, len(requiredChecks))
 		for _, c := range requiredChecks {
 			required[c] = true

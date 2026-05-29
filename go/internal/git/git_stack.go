@@ -192,8 +192,8 @@ func (r *repo) RebaseBranchOntoRemote(ctx context.Context, branch, baseBranch st
 
 // MergeStackPR merges the PR with the given number using opts and returns the
 // full result — merged / conflict / blocked / failed / message.
-func (r *repo) MergeStackPR(prNumber int, opts MergeOpts) MergeResult {
-	return r.github.MergePR(prNumber, r.RemoteURL(), opts)
+func (r *repo) MergeStackPR(ctx context.Context, prNumber int, opts MergeOpts) MergeResult {
+	return r.github.MergePR(ctx, prNumber, r.RemoteURL(), opts)
 }
 
 // ResetBranchToRemote fetches origin/<branch> and updates the local branch ref

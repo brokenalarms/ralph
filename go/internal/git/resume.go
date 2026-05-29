@@ -88,12 +88,12 @@ func (r *repo) buildPRLink(prNumber int) *logging.Link {
 
 // findExistingPR returns any PR number (open, closed, or merged) for the given task.
 // Checks external-ref first, then finds any PR for the branch.
-func (r *repo) findExistingPR(meta ResumeTaskMeta) (int, bool) {
+func (r *repo) findExistingPR(ctx context.Context, meta ResumeTaskMeta) (int, bool) {
 	if num := parsePRNumber(meta.ExternalRef); num != 0 {
 		return num, true
 	}
 	if meta.Branch != "" {
-		if num, _, _, err := r.FindPRForBranch(meta.Branch); err == nil && num != 0 {
+		if num, _, _, err := r.FindPRForBranch(ctx, meta.Branch); err == nil && num != 0 {
 			return num, true
 		}
 	}
@@ -108,7 +108,7 @@ func (r *repo) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeT
 		return ResumeTaskResult{}, nil
 	}
 
-	prNumber, found := r.findExistingPR(meta)
+	prNumber, found := r.findExistingPR(ctx, meta)
 	var prURLToStore string
 	if found {
 		// When found via branch (no existing external-ref), capture the URL for the loop to persist.
@@ -185,7 +185,7 @@ func (r *repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTask
 
 	default:
 		// PR is open — Ship already attempted merge if AutoMerge was set.
-		if ok, reason := r.PRChainIsHealthy(prNumber); !ok {
+		if ok, reason := r.PRChainIsHealthy(ctx, prNumber); !ok {
 			r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "chain unhealthy: %s — re-running agent", reason)
 			return ResumeTaskResult{PRNumber: prNumber}, nil
 		}

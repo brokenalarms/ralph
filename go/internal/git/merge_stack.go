@@ -43,7 +43,7 @@ func (r *repo) MergeStack(ctx context.Context, opts MergeStackOpts) (MergeStackR
 		return MergeStackResult{}, fmt.Errorf("uncommitted changes in %s — commit or stash before merging", r.projectDir)
 	}
 
-	stack := r.collectStack(opts.TopPR)
+	stack := r.collectStack(ctx, opts.TopPR)
 	if len(stack.prs) == 0 {
 		return MergeStackResult{}, fmt.Errorf("no open PRs found starting from #%s", opts.TopPR)
 	}
@@ -124,7 +124,7 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 		if i < len(prs)-1 {
 			nextPR := prs[i+1]
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Retargeting PR #%d base to %s...", nextPR.number, defaultBranch)
-			if err := r.github.EditPRBase(nextPR.number, repoURL, defaultBranch); err != nil {
+			if err := r.github.EditPRBase(ctx, nextPR.number, repoURL, defaultBranch); err != nil {
 				return merged, fmt.Errorf("failed to retarget PR #%d base to %s: %w", nextPR.number, defaultBranch, err)
 			}
 		}
@@ -137,12 +137,12 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 		}
 
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%d...", pr.number)
-		result := r.MergeStackPR(pr.number, mergeOpts)
+		result := r.MergeStackPR(ctx, pr.number, mergeOpts)
 		if !result.Merged {
 			// Retarget was set before the merge attempt; roll it back since the
 			// parent branch still exists (only deleted on successful merge).
 			if i < len(prs)-1 {
-				if rbErr := r.github.EditPRBase(prs[i+1].number, repoURL, pr.head); rbErr != nil {
+				if rbErr := r.github.EditPRBase(ctx, prs[i+1].number, repoURL, pr.head); rbErr != nil {
 					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 						"Warning: failed to roll back PR #%d base to %s after merge failure: %v",
 						prs[i+1].number, pr.head, rbErr)
@@ -169,8 +169,8 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 	return merged, nil
 }
 
-func (r *repo) collectStack(topPR string) stackResult {
-	allPRs, err := r.github.ListAllPRs(r.projectDir)
+func (r *repo) collectStack(ctx context.Context, topPR string) stackResult {
+	allPRs, err := r.github.ListAllPRs(ctx, r.projectDir)
 	if err != nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to list PRs: %v", err)
 		return stackResult{}

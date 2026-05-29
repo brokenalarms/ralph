@@ -192,7 +192,7 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 	for {
 		attempts++
 
-		diff, diffSource := l.fetchVerifyDiff(p.taskID, p.headBefore)
+		diff, diffSource := l.fetchVerifyDiff(p.ctx, p.taskID, p.headBefore)
 
 		llmResult, _ := l.verifier.LLMVerify(verifier.LLMVerifyOpts{
 			Ctx:          p.ctx,
@@ -241,8 +241,8 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 // Prefers the PR diff (which covers prior iterations) and falls back to
 // the current iteration diff. Returns empty strings when neither is
 // available — LLMVerifyPR treats that as a no-op pass.
-func (l *Loop) fetchVerifyDiff(taskID, headBefore string) (string, string) {
-	if diff := l.git.PRDiffForTask(taskID); diff != "" {
+func (l *Loop) fetchVerifyDiff(ctx context.Context, taskID, headBefore string) (string, string) {
+	if diff := l.git.PRDiffForTask(ctx, taskID); diff != "" {
 		return diff, "PR"
 	}
 	if diff := l.git.DiffFull(headBefore, "HEAD"); diff != "" {

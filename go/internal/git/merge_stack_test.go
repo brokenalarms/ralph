@@ -211,7 +211,7 @@ func TestMergeStack_SinglePRSuccess(t *testing.T) {
 		t.Errorf("expected 1 total, got %d", result.TotalPRs)
 	}
 	// Verify the PR is actually merged in the world (observable via the interface).
-	pr, _ := gh.GetPR("owner/repo", 42)
+	pr, _ := gh.GetPR(context.Background(), "owner/repo", 42)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 42 to be merged in the world, got state=%v", pr)
 	}
@@ -243,7 +243,7 @@ func TestMergeStack_InfraFailureProceeds(t *testing.T) {
 	if result.MergedCount != 1 {
 		t.Errorf("expected 1 merged, got %d", result.MergedCount)
 	}
-	pr, _ := gh.GetPR("owner/repo", 1)
+	pr, _ := gh.GetPR(context.Background(), "owner/repo", 1)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 1 merged despite infra CI failure, got state=%v", pr)
 	}
@@ -271,7 +271,7 @@ func TestMergeStack_SkipCIWaitMergesWithoutPolling(t *testing.T) {
 	if result.MergedCount != 1 {
 		t.Errorf("expected 1 merged, got %d", result.MergedCount)
 	}
-	pr, _ := gh.GetPR("owner/repo", 1)
+	pr, _ := gh.GetPR(context.Background(), "owner/repo", 1)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 1 merged when SkipCIWait, got state=%v", pr)
 	}
@@ -314,7 +314,7 @@ func TestMergeStack_StackInfraFailureAllMerge(t *testing.T) {
 	}
 	for i := 0; i < 7; i++ {
 		num := 670 + i
-		pr, _ := gh.GetPR("owner/repo", num)
+		pr, _ := gh.GetPR(context.Background(), "owner/repo", num)
 		if pr == nil || pr.State != PRStateMerged {
 			t.Errorf("expected PR #%d merged, got state=%v", num, pr)
 		}
@@ -416,7 +416,7 @@ func TestMergeStack_AdminMergeOnCIInfraFailureProceedsWithAdmin(t *testing.T) {
 	if result.MergedCount != 1 {
 		t.Errorf("expected 1 merged, got %d", result.MergedCount)
 	}
-	pr, _ := gh.GetPR("owner/repo", 1)
+	pr, _ := gh.GetPR(context.Background(), "owner/repo", 1)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 1 merged via admin override, got state=%v", pr)
 	}
@@ -488,7 +488,7 @@ func TestMergeStack_AdminFlagNoEffectOnRealFailure(t *testing.T) {
 		t.Errorf("expected 'CI failed' error, got: %v", err)
 	}
 	// Verify the PR was NOT merged — admin flag must have no effect on real failures.
-	pr, _ := gh.GetPR("owner/repo", 1)
+	pr, _ := gh.GetPR(context.Background(), "owner/repo", 1)
 	if pr != nil && pr.State == PRStateMerged {
 		t.Errorf("PR must not be merged when CI failure is real (non-zero job steps)")
 	}
@@ -528,7 +528,7 @@ func TestMergeStack_RetargetsNextPRBaseBeforeMerge(t *testing.T) {
 
 	// After merge, PR#2 and PR#3 must have been retargeted to main before their
 	// parent was merged — observable by checking the base in the stub's world.
-	pr2, _ := gh.GetPR("owner/repo", 2)
+	pr2, _ := gh.GetPR(context.Background(), "owner/repo", 2)
 	if pr2 == nil || pr2.BaseRef != "main" {
 		t.Errorf("expected PR#2 base to be 'main' (retargeted before PR#1 merged), got %q", func() string {
 			if pr2 == nil {
@@ -537,7 +537,7 @@ func TestMergeStack_RetargetsNextPRBaseBeforeMerge(t *testing.T) {
 			return pr2.BaseRef
 		}())
 	}
-	pr3, _ := gh.GetPR("owner/repo", 3)
+	pr3, _ := gh.GetPR(context.Background(), "owner/repo", 3)
 	if pr3 == nil || pr3.BaseRef != "main" {
 		t.Errorf("expected PR#3 base to be 'main' (retargeted before PR#2 merged), got %q", func() string {
 			if pr3 == nil {
@@ -577,7 +577,7 @@ func TestMergeStack_RollsBackRetargetOnMergeFailure(t *testing.T) {
 
 	// PR#2 base must be restored to "pr1" (PR#1's head branch, which still exists
 	// since the merge failed), not left pointing to main.
-	pr2, _ := gh.GetPR("owner/repo", 2)
+	pr2, _ := gh.GetPR(context.Background(), "owner/repo", 2)
 	got := "<nil>"
 	if pr2 != nil {
 		got = pr2.BaseRef

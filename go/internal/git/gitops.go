@@ -30,13 +30,13 @@ type Ops interface {
 	SetBranchRenamed(v bool)
 
 	// PR operations — delegated to GitHub internally.
-	FindOpenPRForBranch(branch string) (int, error)
-	GetPRState(prNumber int) (PRState, error)
-	ListOpenPRBranches() ([]string, error)
-	GetPRBase(prNumber int) string
-	FindPRForBranch(branch string) (number int, title, url string, err error)
-	PRChainIsHealthy(prNumber int) (bool, string)
-	PRDiffForTask(taskID string) string
+	FindOpenPRForBranch(ctx context.Context, branch string) (int, error)
+	GetPRState(ctx context.Context, prNumber int) (PRState, error)
+	ListOpenPRBranches(ctx context.Context) ([]string, error)
+	GetPRBase(ctx context.Context, prNumber int) string
+	FindPRForBranch(ctx context.Context, branch string) (number int, title, url string, err error)
+	PRChainIsHealthy(ctx context.Context, prNumber int) (bool, string)
+	PRDiffForTask(ctx context.Context, taskID string) string
 
 	// SetKnownPRNumber stores a known PR number so merge/PR operations
 	// skip the FindOpenPR lookup.
@@ -55,7 +55,7 @@ type Ops interface {
 	RemoteURL() string
 	DetectDefaultBranch() string
 	RecentChangedFiles(n int) string
-	GetCIFailureLog(prNumber int) string
+	GetCIFailureLog(ctx context.Context, prNumber int) string
 
 	// Branch lifecycle.
 	SyncWorktreeBase(ctx context.Context, completedBranches []string) error
@@ -87,15 +87,15 @@ type Ops interface {
 	// DetectActiveReviewers queries the repo's installed GitHub Apps and returns
 	// the subset that are in the Known reviewer registry. For Copilot it also
 	// checks rulesets to set the correct polling timeout.
-	DetectActiveReviewers() ([]Reviewer, error)
+	DetectActiveReviewers(ctx context.Context) ([]Reviewer, error)
 	// PollReview polls for a review from the given bot username on the given PR.
 	// Returns nil without error when timeout expires before a review arrives.
-	PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
+	PollReview(ctx context.Context, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
 	// ReplyToAndResolveComments replies to each review comment and resolves its
 	// thread via the GitHub GraphQL API. Called after a fix is pushed so review
 	// threads are closed in one step alongside the code change. Errors are
 	// non-fatal — the fix was already pushed successfully.
-	ReplyToAndResolveComments(prNumber int, comments []ReviewComment) error
+	ReplyToAndResolveComments(ctx context.Context, prNumber int, comments []ReviewComment) error
 
 	// ResumeTask checks whether prior work exists for the task (open PR, merged PR,
 	// remote branch) and resolves it. The loop passes task metadata extracted from
@@ -128,7 +128,7 @@ type Ops interface {
 
 	// GitHub availability and PR listing.
 	GitHubAvailable() bool
-	ListAllPRs(workDir string) ([]PRInfo, error)
+	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
 
 }
 
@@ -144,67 +144,70 @@ func (r *repo) IsBranchRenamed() bool     { return r.branchRenamed }
 func (r *repo) SetBranchRenamed(v bool)   { r.branchRenamed = v }
 
 // FindOpenPRForBranch finds an open PR for the given branch.
-func (r *repo) FindOpenPRForBranch(branch string) (int, error) {
+func (r *repo) FindOpenPRForBranch(ctx context.Context, branch string) (int, error) {
 	gh := r.github
 	if !gh.Available() {
 		return 0, nil
 	}
-	return gh.FindOpenPR(branch, r.RemoteURL())
+	return gh.FindOpenPR(ctx, branch, r.RemoteURL())
 }
 
 // GetPRState returns the state (OPEN/CLOSED/MERGED) of a PR.
-func (r *repo) GetPRState(prNumber int) (PRState, error) {
+func (r *repo) GetPRState(ctx context.Context, prNumber int) (PRState, error) {
 	gh := r.github
 	if !gh.Available() {
 		return "", nil
 	}
-	pr, err := gh.GetPR(NWOFromRemote(r.RemoteURL()), prNumber)
+	pr, err := gh.GetPR(ctx, NWOFromRemote(r.RemoteURL()), prNumber)
 	if err != nil {
 		return "", err
+	}
+	if pr == nil {
+		return "", nil
 	}
 	return pr.State, nil
 }
 
 // ListOpenPRBranches returns branch names that have open PRs.
-func (r *repo) ListOpenPRBranches() ([]string, error) {
+func (r *repo) ListOpenPRBranches(ctx context.Context) ([]string, error) {
 	gh := r.github
 	repoURL := r.RemoteURL()
 	if repoURL == "" || !gh.Available() {
 		return nil, nil
 	}
-	return gh.ListOpenPRBranches(repoURL)
+	return gh.ListOpenPRBranches(ctx, repoURL)
 }
 
 // GetPRBase returns the base branch of a PR.
-func (r *repo) GetPRBase(prNumber int) string {
+func (r *repo) GetPRBase(ctx context.Context, prNumber int) string {
 	gh := r.github
 	if !gh.Available() {
 		return ""
 	}
-	pr, err := gh.GetPR(NWOFromRemote(r.RemoteURL()), prNumber)
-	if err != nil {
+	pr, err := gh.GetPR(ctx, NWOFromRemote(r.RemoteURL()), prNumber)
+	if err != nil || pr == nil {
 		return ""
 	}
 	return pr.BaseRef
 }
 
 // FindPRForBranch finds any PR (open or closed) for the given branch.
-func (r *repo) FindPRForBranch(branch string) (int, string, string, error) {
+func (r *repo) FindPRForBranch(ctx context.Context, branch string) (int, string, string, error) {
 	gh := r.github
 	if !gh.Available() {
 		return 0, "", "", nil
 	}
-	return gh.FindPR(branch, r.RemoteURL())
+	return gh.FindPR(ctx, branch, r.RemoteURL())
 }
 
 // PRChainIsHealthy checks that the PR's head branch exists on the remote
 // and hasn't been merged into main already.
-func (r *repo) PRChainIsHealthy(prNumber int) (bool, string) {
+func (r *repo) PRChainIsHealthy(ctx context.Context, prNumber int) (bool, string) {
 	gh := r.github
 	if !gh.Available() {
 		return false, "gh CLI not available"
 	}
-	pr, _ := gh.GetPR(NWOFromRemote(r.RemoteURL()), prNumber)
+	pr, _ := gh.GetPR(ctx, NWOFromRemote(r.RemoteURL()), prNumber)
 	headBranch := ""
 	if pr != nil {
 		headBranch = pr.HeadRef
@@ -224,29 +227,29 @@ func (r *repo) PRChainIsHealthy(prNumber int) (bool, string) {
 
 // DetectActiveReviewers queries the repo's installed GitHub Apps and returns
 // the subset matching the Known reviewer registry.
-func (r *repo) DetectActiveReviewers() ([]Reviewer, error) {
+func (r *repo) DetectActiveReviewers(ctx context.Context) ([]Reviewer, error) {
 	gh := r.github
 	nwo := NWOFromRemote(r.RemoteURL())
 	if nwo == "" {
 		return nil, nil
 	}
-	return gh.DetectActiveReviewers(nwo)
+	return gh.DetectActiveReviewers(ctx, nwo)
 }
 
 // PollReview polls for a review from the given bot username on the given PR.
-func (r *repo) PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
+func (r *repo) PollReview(ctx context.Context, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
 	gh := r.github
 	nwo := NWOFromRemote(r.RemoteURL())
 	if nwo == "" {
 		return nil, nil
 	}
-	return gh.PollReview(nwo, botUsername, prNumber, timeout)
+	return gh.PollReview(ctx, nwo, botUsername, prNumber, timeout)
 }
 
 // ReplyToAndResolveComments replies to each review comment and resolves its
 // thread. Errors from individual reply/resolve calls are logged but do not
 // stop processing — the fix was already pushed.
-func (r *repo) ReplyToAndResolveComments(prNumber int, comments []ReviewComment) error {
+func (r *repo) ReplyToAndResolveComments(ctx context.Context, prNumber int, comments []ReviewComment) error {
 	nwo := NWOFromRemote(r.RemoteURL())
 	if nwo == "" {
 		return nil
@@ -260,7 +263,7 @@ func (r *repo) ReplyToAndResolveComments(prNumber int, comments []ReviewComment)
 	if len(commentIDs) == 0 {
 		return nil
 	}
-	threadIDs, err := r.github.FetchReviewThreadIDs(nwo, prNumber, commentIDs)
+	threadIDs, err := r.github.FetchReviewThreadIDs(ctx, nwo, prNumber, commentIDs)
 	if err != nil {
 		return fmt.Errorf("fetching review thread IDs: %w", err)
 	}
@@ -269,11 +272,11 @@ func (r *repo) ReplyToAndResolveComments(prNumber int, comments []ReviewComment)
 		if c.ID == 0 {
 			continue
 		}
-		if replyErr := r.github.ReplyToReviewComment(nwo, prNumber, c.ID, replyBody); replyErr != nil {
+		if replyErr := r.github.ReplyToReviewComment(ctx, nwo, prNumber, c.ID, replyBody); replyErr != nil {
 			fmt.Printf("reply to review comment %d: %v\n", c.ID, replyErr)
 		}
 		if threadID, ok := threadIDs[c.ID]; ok {
-			if resolveErr := r.github.ResolveReviewThread(threadID); resolveErr != nil {
+			if resolveErr := r.github.ResolveReviewThread(ctx, threadID); resolveErr != nil {
 				fmt.Printf("resolve review thread for comment %d: %v\n", c.ID, resolveErr)
 			}
 		}
@@ -282,16 +285,16 @@ func (r *repo) ReplyToAndResolveComments(prNumber int, comments []ReviewComment)
 }
 
 // PRDiffForTask searches for a PR matching the task ID and returns its diff.
-func (r *repo) PRDiffForTask(taskID string) string {
+func (r *repo) PRDiffForTask(ctx context.Context, taskID string) string {
 	gh := r.github
 	if !gh.Available() {
 		return ""
 	}
-	prNumber, err := gh.SearchPR(r.workDir, taskID)
+	prNumber, err := gh.SearchPR(ctx, r.workDir, taskID)
 	if err != nil || prNumber == 0 {
 		return ""
 	}
-	diff, err := gh.PRDiff(r.RemoteURL(), prNumber)
+	diff, err := gh.PRDiff(ctx, r.RemoteURL(), prNumber)
 	if err != nil {
 		return ""
 	}
@@ -304,6 +307,6 @@ func (r *repo) GitHubAvailable() bool {
 }
 
 // ListAllPRs returns all PRs (open and closed) for the repo.
-func (r *repo) ListAllPRs(workDir string) ([]PRInfo, error) {
-	return r.github.ListAllPRs(workDir)
+func (r *repo) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
+	return r.github.ListAllPRs(ctx, workDir)
 }

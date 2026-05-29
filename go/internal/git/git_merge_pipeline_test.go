@@ -135,7 +135,7 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 	}
 
 	// Verify merge did NOT happen — PR remains open in the world.
-	pr, _ := gh.GetPR("", 42)
+	pr, _ := gh.GetPR(context.Background(), "", 42)
 	if pr == nil || pr.State != PRStateOpen {
 		t.Errorf("expected PR 42 to remain open after conflict, got state=%v", pr)
 	}
@@ -251,7 +251,7 @@ func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	prs, _ := gh.ListAllPRs("")
+	prs, _ := gh.ListAllPRs(context.Background(), "")
 	if len(prs) != 0 {
 		t.Errorf("CreatePR must not be called when branch has no commits ahead of main; world has PRs: %+v", prs)
 	}
@@ -646,7 +646,7 @@ func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
 		t.Fatal("expected error when CI times out (PR must be left open)")
 	}
 	// PR must not have been merged — still open in the world.
-	pr, _ := gh.GetPR("", 102)
+	pr, _ := gh.GetPR(context.Background(), "", 102)
 	if pr == nil || pr.State != PRStateOpen {
 		t.Errorf("expected PR 102 to remain open after CI timeout, got state=%v", pr)
 	}
@@ -679,7 +679,7 @@ func TestCreatePR_StackedPRTargetsParentBranch(t *testing.T) {
 	}
 
 	// The newly-created PR should target the parent branch, not main.
-	pr, _ := gh.GetPR("", prNum)
+	pr, _ := gh.GetPR(context.Background(), "", prNum)
 	if pr == nil {
 		t.Fatal("expected PR to exist in fake world")
 	}
@@ -711,7 +711,7 @@ func TestCreatePR_NonStackedTargetsMain(t *testing.T) {
 		t.Fatalf("CreatePR: %v", err)
 	}
 
-	pr, _ := gh.GetPR("", prNum)
+	pr, _ := gh.GetPR(context.Background(), "", prNum)
 	if pr == nil {
 		t.Fatal("expected PR to exist in fake world")
 	}
@@ -998,7 +998,7 @@ func TestAutoMerge_StackedPR_WaitsForBase(t *testing.T) {
 	}
 
 	// PR must remain open — no merge attempted when base PR hasn't merged.
-	pr, _ := gh.GetPR("", 150)
+	pr, _ := gh.GetPR(context.Background(), "", 150)
 	if pr == nil || pr.State != PRStateOpen {
 		t.Errorf("expected PR 150 to remain open (base PR not merged), got state=%v", pr)
 	}
@@ -1143,7 +1143,7 @@ func TestAutoMerge_CIAlreadyPassing_SkipsPushAndMergesDirectly(t *testing.T) {
 	}
 
 	// PR is merged in the world — the SUT drove the state transition.
-	pr, _ := gh.GetPR("", 77)
+	pr, _ := gh.GetPR(context.Background(), "", 77)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 77 to be merged via fast path, got state=%v", pr)
 	}
@@ -1312,7 +1312,7 @@ func TestAutoMerge_AdminMergeOnCIInfraFailure_MergesWithAdmin(t *testing.T) {
 	if !merged {
 		t.Error("expected merged=true when Admin bypass used for infra-only CI failure")
 	}
-	pr, _ := gh.GetPR("test/repo", 42)
+	pr, _ := gh.GetPR(context.Background(), "test/repo", 42)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 42 merged via admin override, got state=%v", pr)
 	}
@@ -1368,7 +1368,7 @@ func TestAutoMerge_AdminMergeOnCIInfraFailure_NotSet_BlockedNotBypassed(t *testi
 	if merged {
 		t.Error("expected merged=false when branch protection not bypassed")
 	}
-	pr, _ := gh.GetPR("test/repo", 43)
+	pr, _ := gh.GetPR(context.Background(), "test/repo", 43)
 	if pr != nil && pr.State == PRStateMerged {
 		t.Error("PR must not be merged when admin flag is not set")
 	}
@@ -1421,7 +1421,7 @@ func TestAutoMerge_AdminMergeOnCIInfraFailure_NoEffectOnRealFailure(t *testing.T
 	if !errors.As(err, &ciErr) {
 		t.Fatalf("expected CIFailureError for real test failure regardless of flag, got: %v", err)
 	}
-	pr, _ := gh.GetPR("test/repo", 44)
+	pr, _ := gh.GetPR(context.Background(), "test/repo", 44)
 	if pr != nil && pr.State == PRStateMerged {
 		t.Error("PR must not be merged when CI failure is real (non-zero job steps)")
 	}
