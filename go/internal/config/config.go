@@ -201,8 +201,12 @@ func Parse(args []string) (Config, error) {
 	return cfg, nil
 }
 
-// Validate checks for invalid flag combinations.
+// Validate checks for invalid flag combinations and required configuration.
+// Call this after LoadConfigFile so that base_branch set in config.toml is visible.
 func (c *Config) Validate() error {
+	if c.BaseBranch == "" {
+		return fmt.Errorf("base branch not set: provide --base-branch, RALPH_BASE_BRANCH env, or base_branch in config.toml")
+	}
 	if c.Evolve {
 		if !c.AutoMerge {
 			return fmt.Errorf("--evolve requires --auto-merge")

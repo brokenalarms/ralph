@@ -138,11 +138,6 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 
 	absDir, _ := filepath.Abs(sub.Dir)
 
-	if err := cfg.Validate(); err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
-		return 1
-	}
-
 	if !git.IsGitRepo(absDir) {
 		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", absDir)
 		return 1
@@ -155,8 +150,18 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	}
 	cfg.ProjectDir = repoRoot
 
-	scriptPath, _ := os.Executable()
+	// Load config file before Validate so base_branch set in config.toml is visible.
+	// LoadConfigFile is a no-op when the file does not exist; initRalphDir creates it
+	// and loads it again later (idempotent — CLI-set values are not overwritten).
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
+	_ = cfg.LoadConfigFile(filepath.Join(ralphDir, "config.toml"))
+
+	if err := cfg.Validate(); err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
+		return 1
+	}
+
+	scriptPath, _ := os.Executable()
 
 	existingPID, err := pidfile.Check(filepath.Join(ralphDir, "loop.pid"))
 	if err != nil {
