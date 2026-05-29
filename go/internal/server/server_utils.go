@@ -90,9 +90,13 @@ func readTaskIDFromStateFile(statePath string) string {
 	if json.Unmarshal(data, &raw) != nil {
 		return ""
 	}
-	v, ok := raw["last_task_id"]
+	v, ok := raw["current_task_id"]
 	if !ok {
-		return ""
+		// Backwards compat: old state files written by bash ralph use last_task_id.
+		v, ok = raw["last_task_id"]
+		if !ok {
+			return ""
+		}
 	}
 	var id string
 	if json.Unmarshal(v, &id) != nil {

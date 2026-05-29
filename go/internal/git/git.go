@@ -790,7 +790,7 @@ func (r *repo) PrepareForNextTask(nextTaskID, baseRef string) {
 
 	lastTaskID := ""
 	if r.state != nil {
-		lastTaskID, _ = r.state.Read("last_task_id")
+		lastTaskID, _ = r.state.Read("current_task_id")
 	}
 	if nextTaskID == "" || lastTaskID == "" || nextTaskID != lastTaskID {
 		r.gitCmdErr(r.workDir, "checkout", ".")

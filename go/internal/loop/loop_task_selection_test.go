@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/git"
@@ -9,6 +10,21 @@ import (
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
+
+// phasedBackend overrides GetState to return a configurable phase per task ID.
+// All other methods delegate to the embedded TrackingBackend (and through it,
+// MutableBackend.GetExternalRef, StubBackend defaults).
+type phasedBackend struct {
+	testutil.TrackingBackend
+	phases map[string]string
+}
+
+func (b *phasedBackend) GetState(taskID, key string) (string, error) {
+	if key == "phase" {
+		return b.phases[taskID], nil
+	}
+	return "", nil
+}
 
 // newTestLoopForSelection builds a minimal Loop for testing selectNextTask.
 func newTestLoopForSelection(t *testing.T, backend *testutil.StubBackend) (*Loop, string) {
@@ -240,5 +256,68 @@ func TestSelectNextTask_NoResumeIDOnSubsequentIterations(t *testing.T) {
 
 	if backend.ResumeIDSet != "" {
 		t.Errorf("expected no SetResumeTaskID call on iteration > 0, got %q", backend.ResumeIDSet)
+	}
+}
+
+// TestSelectNextTask_HaltsOnInconsistentResumeState reproduces the sharpe-68w
+// scenario: the loop resumes with current_task_id pointing to a bead whose
+// phase=verified and whose PR is already merged, but CloseTask is rejected by
+// a dependency block. The loop must halt with
+// status=halted_inconsistent_resume_state on iteration 0.
+func TestSelectNextTask_HaltsOnInconsistentResumeState(t *testing.T) {
+	closeErr := fmt.Errorf("cannot close sharpe-68w: blocked by open issues [sharpe-8i2] (use --force to override)")
+	backend := &phasedBackend{
+		TrackingBackend: testutil.TrackingBackend{
+			MutableBackend: testutil.MutableBackend{
+				StubBackend: testutil.StubBackend{
+					Remaining: 1,
+					Total:     1,
+					NextID:    "sharpe-8i2",
+					NextTask:  "Dependent task",
+				},
+				ExternalRefs: map[string]string{
+					"sharpe-68w": "https://github.com/owner/repo/pull/42",
+				},
+			},
+			CloseErr: closeErr,
+		},
+		phases: map[string]string{"sharpe-68w": "verified"},
+	}
+
+	dir, st := setupTestDir(t)
+	l := &Loop{
+		cfg: Config{
+			MaxIterations: 10,
+			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
+		},
+		state: st,
+		git: git.NewStub(git.StubRepoConfig{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RemoteURL:  "https://github.com/owner/repo.git",
+			GitHub: git.StubGitHubConfig{
+				Available: true,
+				PRs:       []git.StubPR{{Number: 42, State: git.PRStateMerged}},
+			},
+		}),
+		logger:      logging.New(nil),
+		taskBackend: backend,
+	}
+
+	// Seed a resume target pointing to the inconsistent bead.
+	st.Write("current_task_id", "sharpe-68w")
+
+	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  0,
+		maxIterations: 10,
+		completedIDs:  map[string]bool{},
+	})
+
+	if action != actionDone {
+		t.Fatalf("expected actionDone on inconsistent resume, got %v", action)
+	}
+	status, _ := st.Read("status")
+	if status != "halted_inconsistent_resume_state" {
+		t.Errorf("expected status halted_inconsistent_resume_state, got %q", status)
 	}
 }

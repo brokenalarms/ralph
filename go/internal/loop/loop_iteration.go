@@ -242,6 +242,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 					closeReason := fmt.Sprintf("Fixed in %s (already merged)", prRef)
 					_ = l.taskBackend.CloseTask(p.taskID, closeReason)
 					l.persistCompleted(p.taskID, true)
+					l.state.ClearCurrentTask()
 					l.git.TagTaskEnd(p.taskID)
 					if p.notify {
 						notify.TaskMerged(p.taskID, p.nextTask, time.Now())
@@ -272,6 +273,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			} else {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 				l.persistCompleted(p.taskID, false)
+				l.state.ClearCurrentTask()
 			}
 		}
 		l.git.TagTaskEnd(p.taskID)
@@ -428,6 +430,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			} else {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 				l.persistCompleted(p.taskID, false)
+				l.state.ClearCurrentTask()
 			}
 			l.git.TagTaskEnd(p.taskID)
 			return completeTaskOut{action: signalComplete, ct: &ct, prNumber: prNumber}
@@ -469,6 +472,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		} else {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 			l.persistCompleted(p.taskID, merged)
+			l.state.ClearCurrentTask()
 		}
 	}
 

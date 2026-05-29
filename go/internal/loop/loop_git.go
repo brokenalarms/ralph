@@ -75,6 +75,7 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 	if result.AlreadyMerged {
 		l.clearAttempts()
 		l.state.RecordCompletedTask(taskID, taskTitle)
+		l.state.ClearCurrentTask()
 	}
 	stateReason := "ralph: PR open or stacked"
 	if merged {
@@ -95,6 +96,7 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 		if err := l.state.AddCompletedTask(taskID, merged); err != nil {
 			l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
 		}
+		l.state.ClearCurrentTask()
 	}
 }
 
@@ -142,7 +144,7 @@ func (l *Loop) markReviewAddressed(taskID, botUsername string) {
 // the loop exits or enters wait mode. lastTaskMerged prevents a double-merge
 // when the signal handler already merged the task.
 func (l *Loop) flushUnpushedWork(ctx context.Context, lastTaskMerged bool) {
-	taskID, _ := l.state.Read("last_task_id")
+	taskID, _ := l.state.Read("current_task_id")
 	taskDesc, _ := l.state.Read("last_task")
 	merged, err := l.git.FlushUnpushedWork(ctx, taskID, taskDesc, l.cfg.AutoMerge && !lastTaskMerged)
 	if err != nil {

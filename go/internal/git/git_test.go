@@ -1070,12 +1070,12 @@ func TestSyncWorktreeBase_StackDrain_ConflictingWIPDiscarded(t *testing.T) {
 }
 
 // PrepareForNextTask discards uncommitted changes when switching to a different
-// task (last_task_id differs from nextTaskID), so stale files don't leak across tasks.
+// task (current_task_id differs from nextTaskID), so stale files don't leak across tasks.
 func TestPrepareForNextTask_CleansOnTaskSwitch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
-	_ = state.Write("last_task_id", "ralph-aaa")
+	_ = state.Write("current_task_id", "ralph-aaa")
 
 	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -1113,12 +1113,12 @@ func TestPrepareForNextTask_CleansOnTaskSwitch(t *testing.T) {
 }
 
 // PrepareForNextTask preserves uncommitted changes when resuming the same task
-// (last_task_id matches nextTaskID), so in-progress work survives crash/restart.
+// (current_task_id matches nextTaskID), so in-progress work survives crash/restart.
 func TestPrepareForNextTask_PreservesChangesWhenResumingSameTask(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
-	_ = state.Write("last_task_id", "ralph-aaa")
+	_ = state.Write("current_task_id", "ralph-aaa")
 
 	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {

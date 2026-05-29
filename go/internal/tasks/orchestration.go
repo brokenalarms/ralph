@@ -33,13 +33,13 @@ func Poll(b Backend, skippedIDs []string) (bool, error) {
 
 // Next prepares the backend with resume and skip state, then returns the
 // next task. Pass a non-empty resumeID only on the first iteration so a
-// paused session picks up where it left off. Returns a zero TaskInfo when
-// no task is available.
+// paused session picks up where it left off. An empty resumeID explicitly
+// clears any previously-set resume target so subsequent iterations start
+// fresh from the priority queue. Returns a zero TaskInfo when no task is
+// available.
 func Next(b Backend, resumeID string, skippedIDs []string) (TaskInfo, error) {
 	b.SetSkippedIDs(skippedIDs)
-	if resumeID != "" {
-		b.SetResumeTaskID(resumeID)
-	}
+	b.SetResumeTaskID(resumeID)
 	return b.GetNextTaskInfo()
 }
 

@@ -362,6 +362,7 @@ func (l *Loop) skipTask(id, reason string) (bool, string) {
 	if err := l.taskBackend.SkipTask(id, reason); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
 	}
+	l.state.ClearCurrentTask()
 	if err := l.state.AddSkippedTask(id); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to persist skip for %s: %v", id, err)
 	}

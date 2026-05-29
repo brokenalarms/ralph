@@ -378,8 +378,8 @@ func TestWritePlanWatcher_BD_ReadsCurrentTaskFromState(t *testing.T) {
 	if strings.Contains(content, "bd list --status in_progress") {
 		t.Error("plan watcher must not use bd list --status in_progress — loop never sets that status")
 	}
-	if !strings.Contains(content, "jq -r '.last_task_id // empty'") {
-		t.Error("plan watcher should read current task ID from state.json via jq")
+	if !strings.Contains(content, "jq -r '.current_task_id // .last_task_id // empty'") {
+		t.Error("plan watcher should read current task ID from state.json via jq (current_task_id with last_task_id fallback)")
 	}
 	if !strings.Contains(content, "jq -r '.last_task // empty'") {
 		t.Error("plan watcher should read current task title from state.json via jq")

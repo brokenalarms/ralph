@@ -29,14 +29,15 @@ type CompletedTaskEntry struct {
 // implementation stores numbers as JSON numbers and strings as JSON strings,
 // and we must preserve that behavior for compatibility.
 type State struct {
-	Iteration              int    `json:"iteration"`
-	Status                 string `json:"status"`
-	StartedAt              string `json:"started_at,omitempty"`
-	LastTask               string `json:"last_task,omitempty"`
-	WorktreeDir            string `json:"worktree_dir,omitempty"`
-	WorktreeBranch         string `json:"worktree_branch,omitempty"`
-	TaskBackend            string `json:"task_backend,omitempty"`
-	MaxIterations      int `json:"max_iterations"`
+	Iteration      int    `json:"iteration"`
+	Status         string `json:"status"`
+	StartedAt      string `json:"started_at,omitempty"`
+	LastTask       string `json:"last_task,omitempty"`
+	CurrentTaskID  string `json:"current_task_id,omitempty"`
+	WorktreeDir    string `json:"worktree_dir,omitempty"`
+	WorktreeBranch string `json:"worktree_branch,omitempty"`
+	TaskBackend    string `json:"task_backend,omitempty"`
+	MaxIterations  int    `json:"max_iterations"`
 	LastTestResult string `json:"last_test_result,omitempty"`
 	LastTestTime   string `json:"last_test_time,omitempty"`
 	CompletedTasks []CompletedTaskEntry `json:"completed_tasks,omitempty"`
@@ -94,12 +95,15 @@ func (s *State) UnmarshalJSON(data []byte) error {
 
 	knownKeys := map[string]bool{
 		"iteration": true, "status": true, "started_at": true,
-		"last_task": true, "worktree_dir": true, "worktree_branch": true,
+		"last_task": true, "current_task_id": true, "worktree_dir": true, "worktree_branch": true,
 		"task_backend": true, "max_iterations": true,
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
 		"completed_tasks": true,
 		"skipped_tasks":   true,
 		"pushed_branches": true,
+		// backwards compat: old state files written with last_task_id are read
+		// into CurrentTaskID; the field is never written back as last_task_id.
+		"last_task_id": true,
 	}
 
 	alias.Overflow = nil
@@ -109,6 +113,17 @@ func (s *State) UnmarshalJSON(data []byte) error {
 				alias.Overflow = make(map[string]json.RawMessage)
 			}
 			alias.Overflow[k] = v
+		}
+	}
+
+	// Backwards compat: if last_task_id exists in the raw JSON and
+	// current_task_id was not set by the alias unmarshal, copy it.
+	if alias.CurrentTaskID == "" {
+		if v, ok := raw["last_task_id"]; ok {
+			var id string
+			if json.Unmarshal(v, &id) == nil {
+				alias.CurrentTaskID = id
+			}
 		}
 	}
 
@@ -208,8 +223,19 @@ func (st *Store) BeginIteration(taskID, taskTitle string, iteration int) {
 	s.Iteration = iteration
 	s.Status = "running"
 	s.LastTask = taskTitle
-	setField(&s, "last_task_id", taskID)
+	s.CurrentTaskID = taskID
 	st.Save(s)
+}
+
+// ClearCurrentTask removes current_task_id from state, signalling that no
+// task is actively in-flight. Call at every terminal task transition.
+func (st *Store) ClearCurrentTask() error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	s.CurrentTaskID = ""
+	return st.Save(s)
 }
 
 // Init initializes state with config values. Creates the file if missing.
@@ -392,6 +418,9 @@ func getField(s State, key string) string {
 		return s.StartedAt
 	case "last_task":
 		return s.LastTask
+	case "current_task_id", "last_task_id":
+		// Both names read from CurrentTaskID for backwards compat.
+		return s.CurrentTaskID
 	case "worktree_dir":
 		return s.WorktreeDir
 	case "worktree_branch":
@@ -429,6 +458,11 @@ func setField(s *State, key, value string) {
 		s.StartedAt = value
 	case "last_task":
 		s.LastTask = value
+	case "current_task_id", "last_task_id":
+		// Both names write to CurrentTaskID; state is always serialized as
+		// current_task_id. last_task_id is kept as a write alias during the
+		// one-release backwards-compat window.
+		s.CurrentTaskID = value
 	case "worktree_dir":
 		s.WorktreeDir = value
 	case "worktree_branch":

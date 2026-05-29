@@ -2,7 +2,10 @@ package loop
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
@@ -110,7 +113,14 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 	// retries on the same ID. Let the backend pick by priority instead.
 	var resumeID string
 	if p.runIteration == 0 {
-		resumeID, _ = l.state.Read("last_task_id")
+		resumeID, _ = l.state.Read("current_task_id")
+		if resumeID != "" {
+			if action, ok := l.validateResumeState(ctx, resumeID, waited); !ok {
+				return taskContext{}, action, waited
+			}
+			// Re-read after potential clear by validateResumeState.
+			resumeID, _ = l.state.Read("current_task_id")
+		}
 	}
 	skippedIDs, _ := l.state.GetSkippedTasks()
 	taskInfo, _ := tasks.Next(l.taskBackend, resumeID, skippedIDs)
@@ -135,7 +145,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		return l.selectNextTaskInner(ctx, p, attempts+1, waited)
 	}
 
-	lastID, _ := l.state.Read("last_task_id")
+	lastID, _ := l.state.Read("current_task_id")
 	lastTask, _ := l.state.Read("last_task")
 	changed := isNewTask(lastID, lastTask, taskID, nextTask)
 	return taskContext{
@@ -144,4 +154,55 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		title:   nextTask,
 		changed: changed,
 	}, actionProceed, waited
+}
+
+// validateResumeState checks whether a resumed task is genuinely resumable.
+// If the bead has phase=verified AND an external-ref pointing to a merged PR
+// AND is still open/in_progress, the loop attempts to close it. If the close
+// is rejected by a dependency block, the loop halts with
+// status=halted_inconsistent_resume_state rather than silently retrying
+// (which was the bug that wasted 50 iterations on sharpe-68w).
+//
+// Returns (actionDone, false) if the caller should stop (halt or close
+// succeeded and resumeID is cleared), or (_, true) if the task is genuinely
+// resumable and iteration should continue normally.
+func (l *Loop) validateResumeState(ctx context.Context, resumeID string, waited bool) (loopAction, bool) {
+	phase, _ := l.taskBackend.GetState(resumeID, "phase")
+	if phase != "verified" {
+		return actionProceed, true
+	}
+	externalRef, _ := l.taskBackend.GetExternalRef(resumeID)
+	prNum := parsePRNumber(externalRef)
+	if prNum == 0 {
+		return actionProceed, true
+	}
+	prState, err := l.git.GetPRState(prNum)
+	if err != nil || prState != git.PRStateMerged {
+		return actionProceed, true
+	}
+
+	// Phase=verified + PR merged + bead still open: inconsistent state.
+	// Attempt close — if it succeeds, clear and continue fresh selection.
+	// If dep-blocked, halt with all diagnostic context.
+	closeReason := fmt.Sprintf("Fixed in %s (recovered from inconsistent resume state)", externalRef)
+	closeErr := l.taskBackend.CloseTask(resumeID, closeReason)
+	if closeErr == nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed stale in-flight task %s (phase=verified, PR #%d merged)", resumeID, prNum)
+		l.state.ClearCurrentTask()
+		return actionProceed, true
+	}
+
+	// Close failed — extract dep blockers and halt.
+	blockers := tasks.ParseDependencyBlock(closeErr)
+	var blockerStr string
+	if len(blockers) > 0 {
+		blockerStr = strings.Join(blockers, ", ")
+	} else {
+		blockerStr = closeErr.Error()
+	}
+	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error},
+		"Task %s: phase=%s, PR #%d merged — bead not closed; close blocked by [%s]. Manual recovery: bd close %s --force --reason 'dep block cleared'",
+		resumeID, phase, prNum, blockerStr, resumeID)
+	l.state.Write("status", "halted_inconsistent_resume_state")
+	return actionDone, false
 }
