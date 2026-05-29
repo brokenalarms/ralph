@@ -129,6 +129,9 @@ type MergeResult struct {
 	Blocked bool
 	// Conflict is true when there are merge conflicts.
 	Conflict bool
+	// MergedSHA is the commit SHA produced by the squash-merge, populated
+	// when Merged=true. Empty when the response body cannot be parsed.
+	MergedSHA string
 }
 
 // gitHub abstracts GitHub CLI operations. Unexported — the production
@@ -388,7 +391,7 @@ func (g *ghCLI) MergePR(ctx context.Context, prNumber int, repoURL string, opts 
 func classifyMergeStatus(output string, err error) MergeResult {
 	statusCode := parseHTTPStatus(output)
 	if err == nil || statusCode == 200 {
-		return MergeResult{Merged: true, Message: "merged"}
+		return MergeResult{Merged: true, Message: "merged", MergedSHA: parseMergedSHA(output)}
 	}
 	msg := parseAPIMessage(output)
 	switch statusCode {
@@ -399,6 +402,24 @@ func classifyMergeStatus(output string, err error) MergeResult {
 	default:
 		return MergeResult{Message: msg}
 	}
+}
+
+// parseMergedSHA extracts the "sha" field from a GitHub squash-merge API
+// response body (the part after the HTTP header block in --include output).
+func parseMergedSHA(output string) string {
+	body := output
+	if idx := strings.Index(output, "\r\n\r\n"); idx > 0 {
+		body = output[idx+4:]
+	} else if idx := strings.Index(output, "\n\n"); idx > 0 {
+		body = output[idx+2:]
+	}
+	var resp struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(body)), &resp); err == nil {
+		return resp.SHA
+	}
+	return ""
 }
 
 // parseHTTPStatus extracts the status code from the first line of
