@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -520,5 +521,39 @@ func TestPlanWatcher_SignalPath(t *testing.T) {
 	expectedSignal := dir + "/.plan-refresh"
 	if !strings.Contains(content, expectedSignal) {
 		t.Errorf("plan watcher missing signal path %q", expectedSignal)
+	}
+}
+
+// Verifies that sessionExists passes '='+name as the tmux target, preventing
+// tmux's lenient prefix matching from resolving a session name to a different
+// session (e.g. 'sharpe-loop' matching 'sharpe').
+func TestSessionExists_ExactMatch(t *testing.T) {
+	var captured string
+	orig := execHasSession
+	execHasSession = func(target string) error {
+		captured = target
+		return errors.New("no session")
+	}
+	defer func() { execHasSession = orig }()
+
+	sessionExists("sharpe-loop")
+
+	if captured != "=sharpe-loop" {
+		t.Errorf("sessionExists passed -t %q, want %q", captured, "=sharpe-loop")
+	}
+}
+
+// Verifies that InsideTmux returns true when the TMUX env var is set,
+// and false when it is absent — enabling nesting detection before any
+// tmux command runs.
+func TestInsideTmux(t *testing.T) {
+	t.Setenv("TMUX", "/private/tmp/tmux-501/default,69145,0")
+	if !InsideTmux() {
+		t.Error("InsideTmux should return true when TMUX env var is set")
+	}
+
+	t.Setenv("TMUX", "")
+	if InsideTmux() {
+		t.Error("InsideTmux should return false when TMUX env var is empty")
 	}
 }

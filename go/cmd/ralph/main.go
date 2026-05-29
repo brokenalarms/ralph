@@ -514,6 +514,11 @@ func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.
 // directly without creating a new one. Otherwise create a new session whose
 // loop pane tails the log.
 func handleTmuxAttach(cfg config.Config, scriptPath string, ralphDir string, existingPID int, log *logging.Logger) int {
+	if tmux.InsideTmux() {
+		log.Emit(logging.Opts{Level: logging.Error}, "ralph attach must be run from outside tmux (you are inside session %s). Detach (Ctrl-b d) and run ralph attach from your shell.", os.Getenv("TMUX"))
+		return 1
+	}
+
 	if !tmux.Available() {
 		log.Emit(logging.Opts{Level: logging.Error}, "tmux not found on PATH")
 		return 1
