@@ -287,3 +287,37 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 		t.Errorf("expected stored branch %q, got %q", "ralph/ralph-abc-my-task", branch)
 	}
 }
+
+// TestSetStackHead_SilentAfterRunStartClear tests the stale-stack-head fix:
+// at run start ClearCompletedTasks makes completedBranches() return nil, so
+// setStackHead must not emit 'No stacked parents — <prior-run-branch>'.
+//
+// The first sub-test confirms the scenario is real: the stale branch IS
+// logged when passed directly. The second sub-test confirms the fix: nil
+// completedBranches (the post-ClearCompletedTasks state) produces no log.
+func TestSetStackHead_SilentAfterRunStartClear(t *testing.T) {
+	staleBranch := "ralph/sharpe-0tt6-sharpe-pipeline-dissolve-analysis"
+
+	t.Run("stale branch logs without clear", func(t *testing.T) {
+		log := &testLog{}
+		r := newRepoForTest(Config{Logger: log}, nil)
+		setStackHead(context.Background(), r, []string{staleBranch})
+		if !log.contains("No stacked parents") {
+			t.Errorf("expected 'No stacked parents' when stale branch is passed uncleared, got: %v", log.messages)
+		}
+	})
+
+	t.Run("nil completedBranches after clear is silent", func(t *testing.T) {
+		log := &testLog{}
+		r := newRepoForTest(Config{Logger: log}, nil)
+		setStackHead(context.Background(), r, nil)
+		for _, msg := range log.messages {
+			if strings.Contains(msg, "No stacked parents") {
+				t.Errorf("should not emit 'No stacked parents' after run-start clear, got: %s", msg)
+			}
+			if strings.Contains(msg, staleBranch) {
+				t.Errorf("stale branch should not appear in logs after clear, got: %s", msg)
+			}
+		}
+	})
+}

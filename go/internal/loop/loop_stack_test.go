@@ -76,6 +76,40 @@ func TestLoop_ShipSucceeded_RecordsPushedBranch(t *testing.T) {
 	}
 }
 
+// After run-start ClearCompletedTasks, completedBranches returns nil even when
+// a stale CompletedTask entry from a prior run with a known branch exists in
+// state. Without the clear, legacyCompletedBranches returns the stale branch
+// and setStackHead logs 'No stacked parents — <stale-branch> has no open PR'.
+func TestLoop_CompletedBranches_NilAfterRunStartClear(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	_ = st.AddCompletedTask("stale-ralph-xyz", true)
+
+	st.ClearPushedBranches()
+	_ = st.ClearCompletedTasks()
+
+	backend := &testutil.MutableBackend{
+		Metadata: map[string]map[string]string{
+			"stale-ralph-xyz": {"branch": "ralph/stale-ralph-xyz-prior-run"},
+		},
+	}
+	cfg := Config{
+		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir},
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir}),
+		TaskBackend: backend,
+		Logger:      logging.New(nil),
+	})
+
+	branches := l.completedBranches()
+	if len(branches) != 0 {
+		t.Errorf("completedBranches() should return nil after ClearCompletedTasks, got %v", branches)
+	}
+}
+
 // completedBranches reads from state.GetPushedBranches() when it is non-empty,
 // returning branches in chronological order (oldest first). This is the primary
 // source for stack head detection.
@@ -111,3 +145,44 @@ func TestLoop_CompletedBranches_UsesPushedBranchesFromState(t *testing.T) {
 	}
 }
 
+// TestLoop_LegacyFallback_ReturnsCurrentRunBranch proves AC3: the legacy
+// completedBranches fallback still returns branches for tasks completed
+// within a single run after the run-start ClearCompletedTasks. Clearing at
+// run start does not break mid-run stack detection — AddCompletedTask
+// repopulates CompletedTasks as tasks finish, and legacyCompletedBranches
+// reads those entries correctly.
+func TestLoop_LegacyFallback_ReturnsCurrentRunBranch(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	st.ClearPushedBranches()
+	_ = st.ClearCompletedTasks()
+
+	_ = st.AddCompletedTask("current-task-abc", true)
+
+	backend := &testutil.MutableBackend{
+		Metadata: map[string]map[string]string{
+			"current-task-abc": {"branch": "ralph/current-task-abc-fix-thing"},
+		},
+	}
+	cfg := Config{
+		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir},
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir}),
+		TaskBackend: backend,
+		Logger:      logging.New(nil),
+	})
+
+	branches := l.completedBranches()
+	found := false
+	for _, b := range branches {
+		if b == "ralph/current-task-abc-fix-thing" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("legacy fallback should return current-run branch after clear+AddCompletedTask, got %v", branches)
+	}
+}
