@@ -50,8 +50,8 @@ import (
 // git_stack.go (RebaseBranchOntoRemote) — FIXED: all checkout/rebase/push
 //   now run in a temp worktree; only fetch and worktree/branch ops remain in projectDir
 //
-// git_stack.go (ResetBranchToRemote) — FIXED: checkout + reset replaced with
-//   fetch + update-ref (plumbing only, no working-tree mutation)
+// git_stack.go (ResetBranchToRemote) — checkout-aware: uses merge --ff-only
+//   when branch is checked out (worktree update), update-ref otherwise
 
 // RebaseStackOpts configures a RebaseStack call.
 type RebaseStackOpts struct {
@@ -196,10 +196,21 @@ func (r *repo) MergeStackPR(ctx context.Context, prNumber int, opts MergeOpts) M
 	return r.github.MergePR(ctx, prNumber, r.RemoteURL(), opts)
 }
 
-// ResetBranchToRemote fetches origin/<branch> and updates the local branch ref
-// via git update-ref — no checkout, no working-tree mutation in projectDir.
-// Used after each PR merge to sync the local default branch with the remote state.
+// ResetBranchToRemote fetches origin/<branch> and syncs the local branch ref.
+// When <branch> is currently checked out in projectDir, it fast-forwards the
+// working tree via merge --ff-only to keep HEAD, index, and worktree in sync.
+// When not checked out, it updates only the ref via update-ref (no worktree
+// mutation). If fast-forward is not possible (diverged branch), a warning is
+// logged and projectDir is left untouched.
 func (r *repo) ResetBranchToRemote(ctx context.Context, branch string) {
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
+	current, _ := r.run().Run(ctx, r.projectDir, "symbolic-ref", "--short", "HEAD")
+	if current == branch {
+		if err := r.gitCmdErrCtx(ctx, r.projectDir, "merge", "--ff-only", "origin/"+branch); err != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+				"ResetBranchToRemote: cannot fast-forward %s to origin/%s — leaving projectDir untouched", branch, branch)
+		}
+		return
+	}
 	r.gitCmdCtx(ctx, r.projectDir, "update-ref", "refs/heads/"+branch, "origin/"+branch)
 }
