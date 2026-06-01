@@ -111,15 +111,21 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 			if ciErr != nil {
 				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling error: %v", ciErr)
 			}
-			if ciStatus == CIFailed {
+			if ctx.Err() != nil {
+				return merged, fmt.Errorf("merge interrupted while waiting for CI on PR #%d: %w", pr.number, ctx.Err())
+			}
+			switch ciStatus {
+			case CIPassed:
+				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Success}, "CI passed for PR #%d", pr.number)
+			case CIFailed:
 				if r.isInfrastructureFailure(ctx, pr.number) {
 					isInfra = true
 					r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI failure on PR #%d is infrastructure-only (zero job steps) — proceeding with merge", pr.number)
 				} else {
 					return merged, fmt.Errorf("CI failed on PR #%d", pr.number)
 				}
-			} else {
-				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Success}, "CI passed for PR #%d", pr.number)
+			default: // CIPending — poll timeout or interrupt
+				return merged, fmt.Errorf("CI did not complete for PR #%d (status pending) — refusing to merge unverified PR: %v", pr.number, ciErr)
 			}
 		}
 
