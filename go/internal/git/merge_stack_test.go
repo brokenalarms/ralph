@@ -790,6 +790,100 @@ func TestMergeStack_CancelContextDuringCIDoesNotMerge(t *testing.T) {
 	}
 }
 
+// runMergeStack must abort before starting any PR iteration when the context is
+// already cancelled and SkipCIWait is true. Without the top-of-loop ctx.Err()
+// check the SkipCIWait path has no cancellation guard and proceeds to merge.
+func TestMergeStack_PreCancelledContextSkipCIWaitAbortsBeforeFirstPR(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen},
+			{Number: 2, Branch: "pr2", Base: "pr1", State: PRStateOpen},
+		},
+	})
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel before MergeStack is called
+
+	result, err := repo.MergeStack(ctx, MergeStackOpts{TopPR: "2", SkipCIWait: true})
+	if err == nil {
+		t.Fatal("expected interrupted error, got nil")
+	}
+	if !strings.Contains(err.Error(), "interrupted") {
+		t.Errorf("expected 'interrupted' in error, got: %v", err)
+	}
+	if result.MergedCount != 0 {
+		t.Errorf("expected 0 merged, got %d", result.MergedCount)
+	}
+	for _, num := range []int{1, 2} {
+		pr, _ := gh.GetPR(context.Background(), "owner/repo", num)
+		if pr != nil && pr.State == PRStateMerged {
+			t.Errorf("PR #%d must not be merged when context is pre-cancelled", num)
+		}
+	}
+}
+
+// cancelOnFirstMergeGH wraps a gitHub and cancels the given context after the
+// first successful MergePR call. Used to simulate Ctrl-C arriving between
+// iterations — after the first PR merges, the context is dead before the next
+// iteration starts.
+type cancelOnFirstMergeGH struct {
+	gitHub
+	cancel context.CancelFunc
+	merged int
+}
+
+func (g *cancelOnFirstMergeGH) MergePR(ctx context.Context, prNumber int, repoURL string, opts MergeOpts) MergeResult {
+	result := g.gitHub.MergePR(ctx, prNumber, repoURL, opts)
+	if result.Merged {
+		g.merged++
+		if g.merged == 1 {
+			g.cancel()
+		}
+	}
+	return result
+}
+
+// runMergeStack must not start the next PR iteration when the context is
+// cancelled between iterations. Uses SkipCIWait=true so there is no AwaitCI
+// guard to catch the cancellation — only the top-of-loop ctx.Err() check can
+// prevent the second PR from being merged with a dead context.
+func TestMergeStack_ContextCancelledBetweenIterationsStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	inner := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen},
+			{Number: 2, Branch: "pr2", Base: "pr1", State: PRStateOpen},
+		},
+	})
+	gh := &cancelOnFirstMergeGH{gitHub: inner, cancel: cancel}
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+	)
+
+	result, err := repo.MergeStack(ctx, MergeStackOpts{TopPR: "2", SkipCIWait: true})
+	if err == nil {
+		t.Fatal("expected interrupted error after first merge, got nil")
+	}
+	if !strings.Contains(err.Error(), "interrupted") {
+		t.Errorf("expected 'interrupted' in error, got: %v", err)
+	}
+	// First PR should be merged; second must not.
+	if result.MergedCount != 1 {
+		t.Errorf("expected 1 merged (first PR), got %d", result.MergedCount)
+	}
+	pr2, _ := gh.GetPR(context.Background(), "owner/repo", 2)
+	if pr2 != nil && pr2.State == PRStateMerged {
+		t.Error("PR #2 must not be merged when context cancelled after first merge")
+	}
+}
+
 // initBareRepoIn initializes a git repo with one commit in the given directory.
 func initBareRepoIn(t *testing.T, dir string) {
 	t.Helper()
