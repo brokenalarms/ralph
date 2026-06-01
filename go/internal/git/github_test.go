@@ -706,6 +706,64 @@ func TestListOpenPRBranches_Paginates(t *testing.T) {
 	}
 }
 
+// SearchPR forces GET so gh api sends -f fields as URL query parameters instead
+// of a POST body. The search/issues endpoint is GET-only: POST returns HTTP 404.
+// The query uses space-separated qualifiers so gh's URL-encoding produces valid
+// GitHub search syntax ('+' would be percent-encoded to %2B and break parsing).
+func TestSearchPR_ForcesGETAndSpaceSeparatedQuery(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	gitPath := filepath.Join(bin, "git")
+	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ghPath := filepath.Join(bin, "gh")
+	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '42'\n"
+	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	_, err := g.SearchPR(context.Background(), bin, "my-task-id")
+	if err != nil {
+		t.Fatalf("SearchPR returned error: %v", err)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+
+	if !strings.Contains(invocation, "--method GET") && !strings.Contains(invocation, "-X GET") {
+		t.Errorf("SearchPR must force GET method (--method GET or -X GET), got: %q", invocation)
+	}
+	if strings.Contains(invocation, "my-task-id+repo:") {
+		t.Errorf("SearchPR must not use '+'-joined qualifiers in q= value (breaks under GET encoding), got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "my-task-id repo:owner/repo type:pr") {
+		t.Errorf("SearchPR must use space-separated qualifiers in q= value, got: %q", invocation)
+	}
+}
+
+// PRDiffForTask returns a non-empty diff when SearchPR finds a matching PR,
+// proving fetchVerifyDiff can select the PR diff branch on resumed tasks.
+func TestPRDiffForTask_ReturnsDiffWhenPRFound(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available:      true,
+		SearchPRResult: 42,
+		PRDiffOutput:   "diff --git a/file.go b/file.go\n+added line",
+	})
+	repo := newRepoForTest(Config{BaseBranch: "main"}, gh)
+
+	diff := repo.PRDiffForTask(context.Background(), "my-task-id")
+	if diff == "" {
+		t.Error("PRDiffForTask must return a non-empty diff when SearchPR finds a matching PR")
+	}
+	if !strings.Contains(diff, "+added line") {
+		t.Errorf("PRDiffForTask returned unexpected diff: %q", diff)
+	}
+}
+
 // SearchPR uses gh api search/issues instead of gh pr list --search,
 // finding a PR by task ID and returning its number.
 func TestSearchPR_UsesGhAPI(t *testing.T) {

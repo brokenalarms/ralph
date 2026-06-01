@@ -762,8 +762,8 @@ func (g *ghCLI) SearchPR(ctx context.Context, workDir, query string) (int, error
 	if nwo == "" {
 		return 0, fmt.Errorf("cannot determine owner/repo from remote URL")
 	}
-	q := fmt.Sprintf("%s+repo:%s+type:pr", query, nwo)
-	out, err := g.runGHCmd(ctx, []string{"api", "search/issues", "-f", "q=" + q, "--jq", ".items[0].number // empty"})
+	q := fmt.Sprintf("%s repo:%s type:pr", query, nwo)
+	out, err := g.runGHCmd(ctx, []string{"api", "--method", "GET", "search/issues", "-f", "q=" + q, "--jq", ".items[0].number // empty"})
 	if err != nil {
 		return 0, fmt.Errorf("gh api search failed: %w", err)
 	}
