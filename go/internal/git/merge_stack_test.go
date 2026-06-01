@@ -884,6 +884,66 @@ func TestMergeStack_ContextCancelledBetweenIterationsStops(t *testing.T) {
 	}
 }
 
+// cancelAndFailMergeGH wraps a gitHub: MergePR cancels the context and returns
+// not-merged (simulating Ctrl-C arriving mid-merge); EditPRBase checks ctx.Err()
+// and returns an error when the context is cancelled (simulating the real GitHub
+// HTTP client's behaviour — the real client fails on a dead context).
+type cancelAndFailMergeGH struct {
+	gitHub
+	cancel context.CancelFunc
+}
+
+func (g *cancelAndFailMergeGH) MergePR(_ context.Context, _ int, _ string, _ MergeOpts) MergeResult {
+	g.cancel()
+	return MergeResult{Merged: false, Message: "context canceled mid-merge"}
+}
+
+func (g *cancelAndFailMergeGH) EditPRBase(ctx context.Context, prNumber int, repoURL, base string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return g.gitHub.EditPRBase(ctx, prNumber, repoURL, base)
+}
+
+// After a merge fails because the parent context was cancelled mid-merge, the
+// retarget rollback of the next PR's base must use a fresh context so it completes
+// even though the parent context is dead. Without the fix, the rollback fails with
+// "context canceled" and PR#2's base is left pointing at main — which causes
+// collectStackFromPRs to orphan the unmerged PR on the next 'ralph merge' resume.
+func TestMergeStack_RollbackUseFreshContextOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	inner := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen},
+			{Number: 2, Branch: "pr2", Base: "pr1", State: PRStateOpen},
+		},
+	})
+	gh := &cancelAndFailMergeGH{gitHub: inner, cancel: cancel}
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+	)
+
+	// Context is live at call time. MergePR will cancel it and return not-merged,
+	// simulating Ctrl-C mid-merge. The rollback must use a fresh context to succeed.
+	_, err := repo.MergeStack(ctx, MergeStackOpts{TopPR: "2", SkipCIWait: true})
+	if err == nil {
+		t.Fatal("expected error after cancelled merge, got nil")
+	}
+
+	// PR#2's base must be restored to "pr1" (PR#1's head branch, which still exists
+	// since the merge failed), not left pointing at main.
+	pr2, _ := gh.GetPR(context.Background(), "owner/repo", 2)
+	got := "<nil>"
+	if pr2 != nil {
+		got = pr2.BaseRef
+	}
+	if got != "pr1" {
+		t.Errorf("expected PR#2 base rolled back to 'pr1' after cancelled merge, got %q", got)
+	}
+}
+
 // initBareRepoIn initializes a git repo with one commit in the given directory.
 func initBareRepoIn(t *testing.T, dir string) {
 	t.Helper()
