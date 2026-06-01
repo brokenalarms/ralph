@@ -70,9 +70,10 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 
 	ralphDir := filepath.Join(projectDir, ".ralph")
 	gm := git.New(git.Config{
-		WorkDir:  projectDir,
-		RalphDir: ralphDir,
-		Logger:   log,
+		WorkDir:    projectDir,
+		RalphDir:   ralphDir,
+		BaseBranch: git.RemoteDefaultBranch(projectDir),
+		Logger:     log,
 	})
 	if !gm.GitHubAvailable() {
 		log.Emit(logging.Opts{Level: logging.Error}, "gh CLI not available")

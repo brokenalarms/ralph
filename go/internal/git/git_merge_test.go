@@ -1230,6 +1230,42 @@ func TestFlushUnpushedWork_SkipsWhenNoBranchAndNotAheadOfMain(t *testing.T) {
 // Ship must refuse to create a PR when the resolved base branch is neither
 // cfg.BaseBranch nor the active stack parent — prevents orphaned PRs targeting
 // a stale/wrong branch (the sharpe 2026-05-28 failure scenario).
+// RemoteDefaultBranch reads the repo's default branch from origin/HEAD so
+// ralph merge can populate cfg.BaseBranch without an explicit flag. Before this
+// fix, handleMerge left BaseBranch empty and the base-branch guard refused every
+// merge ("resolved base \"main\" is neither cfg.BaseBranch (\"\") ...").
+func TestRemoteDefaultBranch_ReadsOriginHead(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	if got := RemoteDefaultBranch(project); got != "main" {
+		t.Errorf("expected origin/HEAD default branch \"main\", got %q", got)
+	}
+}
+
+func TestRemoteDefaultBranch_FallsBackToMainWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	run(t, "git", "init", "-b", "trunk", dir)
+	// No origin remote configured, so refs/remotes/origin/HEAD is unset.
+	if got := RemoteDefaultBranch(dir); got != "main" {
+		t.Errorf("expected fallback \"main\" when origin/HEAD is unset, got %q", got)
+	}
+}
+
+// With BaseBranch populated from RemoteDefaultBranch (the merge-command path),
+// assertValidBase accepts the detected default and still rejects a mismatched
+// stack base — the guard keeps its anti-stale value.
+func TestAssertValidBase_MergeStyleDetectedDefault(t *testing.T) {
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project", BaseBranch: "main", Logger: discardLog{}},
+		nil,
+	)
+	if err := repo.assertValidBase("main"); err != nil {
+		t.Errorf("expected nil when stack base matches detected default, got %v", err)
+	}
+	if err := repo.assertValidBase("develop"); err == nil {
+		t.Error("expected guard error when stack base differs from detected default branch")
+	}
+}
+
 func TestShip_RejectsUnexpectedBase(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)

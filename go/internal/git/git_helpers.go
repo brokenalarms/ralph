@@ -83,6 +83,21 @@ func IsGitRepo(dir string) bool {
 	return gitCmdErr(dir, "rev-parse", "--git-dir") == nil
 }
 
+// RemoteDefaultBranch reads the repository's default branch from the local
+// git remote HEAD (refs/remotes/origin/HEAD). It falls back to "main" when the
+// symbolic ref is unset. Unlike the loop's commit/PR-creation path — which
+// requires an explicit --base-branch and must never guess a target — ralph
+// merge only pulls already-merged PRs into the local default branch, so
+// detecting that branch from git is the correct, flag-free behavior.
+func RemoteDefaultBranch(dir string) string {
+	out := gitOutput(dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	out = strings.TrimSpace(strings.TrimPrefix(out, "origin/"))
+	if out == "" {
+		return "main"
+	}
+	return out
+}
+
 // RepoRoot returns the absolute path of the root of the git repository
 // containing dir. Returns an error if dir is not inside a git repository.
 func RepoRoot(dir string) (string, error) {
