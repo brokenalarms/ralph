@@ -201,6 +201,9 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	st.Write("started_at", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
 	st.ClearPushedBranches()
+	if err := st.ClearCompletedTasks(); err != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "ClearCompletedTasks: %v", err)
+	}
 
 	// Construct the verifier module. Verifier holds no module references —
 	// it exposes stateless operations that Loop orchestrates. See
