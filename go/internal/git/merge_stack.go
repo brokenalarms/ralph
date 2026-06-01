@@ -157,8 +157,12 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 		if !result.Merged {
 			// Retarget was set before the merge attempt; roll it back since the
 			// parent branch still exists (only deleted on successful merge).
+			// Use a fresh context: if the merge failed because ctx was cancelled,
+			// the rollback must still complete to avoid orphaning the next PR.
 			if i < len(prs)-1 {
-				if rbErr := r.github.EditPRBase(ctx, prs[i+1].number, repoURL, pr.head); rbErr != nil {
+				rbCtx, cancelRb := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancelRb()
+				if rbErr := r.github.EditPRBase(rbCtx, prs[i+1].number, repoURL, pr.head); rbErr != nil {
 					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 						"Warning: failed to roll back PR #%d base to %s after merge failure: %v",
 						prs[i+1].number, pr.head, rbErr)
