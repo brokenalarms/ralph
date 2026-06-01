@@ -344,6 +344,28 @@ func (l *Loop) SessionTasks() []CompletedTask {
 	return l.completedTasks
 }
 
+// emitTaskSummary prints a clean single-task completion block immediately
+// when a task finishes, so each task's outcome is visible as it happens
+// rather than accumulated into a session dump.
+func emitTaskSummary(ct CompletedTask, log *logging.Logger) {
+	fmt.Println()
+	log.Phase("=== TASK COMPLETE ===")
+	log.Emit(logging.Opts{}, "Task:  %s", ct.ID)
+	if ct.Title != "" {
+		log.Emit(logging.Opts{}, "Issue: %s", ct.Title)
+	}
+	if ct.Summary != "" {
+		log.Emit(logging.Opts{}, "Fix:   %s", ct.Summary)
+	}
+	if ct.PRNum != 0 || ct.PRURL != "" {
+		pr := fmt.Sprintf("PR #%d", ct.PRNum)
+		if ct.PRURL != "" {
+			pr = ct.PRURL
+		}
+		log.Emit(logging.Opts{}, "PR:    %s", pr)
+	}
+}
+
 // skipTask sets the task back to open in bd, records the reason as a comment,
 // and adds the ID to both the backend's in-memory skip set and the state.json
 // skipped_tasks list so it stays excluded from future selection.
@@ -734,6 +756,7 @@ iterLoop:
 			})
 			if out.ct != nil {
 				sessionTasks = append(sessionTasks, *out.ct)
+				emitTaskSummary(*out.ct, l.logger)
 			}
 			if out.merged {
 				lastTaskMerged = true
