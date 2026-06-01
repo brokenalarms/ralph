@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCollectStackFromPRs_BottomUpOrder(t *testing.T) {
@@ -722,6 +723,70 @@ func TestMergeStack_RejectsUnexpectedBase(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "base branch guard") {
 		t.Errorf("expected 'base branch guard' in error, got: %v", err)
+	}
+}
+
+// runMergeStack must not merge a PR when CI times out (AwaitCI returns CIPending).
+// A pending-at-timeout result must return an error and leave the PR unmerged.
+// This prevents unverified PRs from landing when the CI poll deadline expires.
+func TestMergeStack_CIPendingTimeoutDoesNotMerge(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs:       []StubPR{{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen}},
+		// Pending check — CI has not resolved; AwaitCI will return CIPending on timeout.
+		Checks: map[int][]CICheckResult{1: {{Name: "ci", State: "PENDING", Bucket: "pending"}}},
+	})
+	repo := newRepoForTest(
+		Config{
+			ProjectDir:    t.TempDir(),
+			BaseBranch:    "main",
+			Logger:        discardLog{},
+			CIPollTimeout: 1 * time.Millisecond, // expires immediately, forcing CIPending
+		},
+		gh,
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
+	if err == nil {
+		t.Fatal("expected error when CI times out (CIPending), got nil")
+	}
+	if result.MergedCount != 0 {
+		t.Errorf("expected 0 merged on CI timeout, got %d", result.MergedCount)
+	}
+	pr, _ := gh.GetPR(context.Background(), "owner/repo", 1)
+	if pr != nil && pr.State == PRStateMerged {
+		t.Error("PR must not be merged when CI is pending at timeout")
+	}
+}
+
+// runMergeStack must abort immediately when the context is canceled during CI polling.
+// A pre-canceled context must cause AwaitCI to return CIPending with "interrupted",
+// and runMergeStack must return an error without merging any PR.
+func TestMergeStack_CancelContextDuringCIDoesNotMerge(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs:       []StubPR{{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen}},
+		// Pending check — CI not resolved; AwaitCI sees canceled context.
+		Checks: map[int][]CICheckResult{1: {{Name: "ci", State: "PENDING", Bucket: "pending"}}},
+	})
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so CI polling sees a done context immediately
+
+	result, err := repo.MergeStack(ctx, MergeStackOpts{TopPR: "1"})
+	if err == nil {
+		t.Fatal("expected error when context is canceled during CI polling, got nil")
+	}
+	if result.MergedCount != 0 {
+		t.Errorf("expected 0 merged on canceled context, got %d", result.MergedCount)
+	}
+	pr, _ := gh.GetPR(context.Background(), "owner/repo", 1)
+	if pr != nil && pr.State == PRStateMerged {
+		t.Error("PR must not be merged when context is canceled during CI wait")
 	}
 }
 
