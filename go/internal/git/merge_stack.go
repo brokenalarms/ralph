@@ -84,6 +84,10 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 	merged := 0
 	repoURL := r.RemoteURL()
 	for i, pr := range prs {
+		if ctx.Err() != nil {
+			return merged, fmt.Errorf("ralph merge interrupted after %d/%d PRs — re-run 'ralph merge %d' to resume: %w",
+				merged, len(prs), prs[len(prs)-1].number, ctx.Err())
+		}
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%d (%d/%d)", pr.number, merged+1, len(prs))
 
 		var pushedAt time.Time
