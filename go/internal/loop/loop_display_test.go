@@ -945,6 +945,90 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 	}
 }
 
+// Proves completing two tasks in one process emits two separate
+// === TASK COMPLETE === blocks immediately when each task finishes, not one
+// accumulated dump at the end.
+func TestLoop_EmitsPerTaskSummaryForEachCompletedTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    2,
+			Completed:    0,
+			Total:        2,
+			NextTask:     "first task",
+			NextID:       "ralph-t1",
+			BackendLabel: "beads",
+		},
+	}
+
+	callCount := 0
+	runner := &stubRunner{
+		result: claude.Result{SignalDetected: true, Summary: "implemented the fix"},
+		onRun: func() {
+			callCount++
+			backend.Lock()
+			if callCount == 1 {
+				backend.NextID = "ralph-t2"
+				backend.NextTask = "second task"
+				backend.Completed = 1
+				backend.Remaining = 1
+			} else {
+				backend.Completed = 2
+				backend.Remaining = 0
+			}
+			backend.Unlock()
+		},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	out := logBuf.String()
+	count := strings.Count(out, "TASK COMPLETE")
+	if count != 2 {
+		t.Errorf("expected 2 TASK COMPLETE blocks (one per task), got %d\noutput:\n%s", count, out)
+	}
+	if !strings.Contains(out, "ralph-t1") {
+		t.Errorf("expected first task ID ralph-t1 in output\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "ralph-t2") {
+		t.Errorf("expected second task ID ralph-t2 in output\noutput:\n%s", out)
+	}
+	pos1 := strings.Index(out, "ralph-t1")
+	pos2 := strings.Index(out, "ralph-t2")
+	if pos1 < 0 || pos2 < 0 || pos1 >= pos2 {
+		t.Errorf("expected first task block before second task block in output\noutput:\n%s", out)
+	}
+}
+
 // onResumeDone sends no notifications when Notify is disabled — neither TaskCompleted nor TaskMerged.
 func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 	dir, st := setupTestDir(t)

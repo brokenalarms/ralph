@@ -276,16 +276,13 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		log.Emit(logging.Opts{Level: logging.Error}, "Execution failed: %v", err)
 	}
 
-	sessionTasks := execLoop.SessionTasks()
-
 	if status, _ := st.Read("status"); status == "evolve_restart" {
-		printSessionSummary(sessionTasks, log)
 		if err := evolveRestart(cfg.ProjectDir, scriptPath, cfg.BaseBranch, args, log); err != nil {
 			log.Emit(logging.Opts{Level: logging.Error}, "Evolve restart failed: %v", err)
 		}
 	}
 
-	cleanup(cfg, gm, st, backend, ralphDir, logDir, planFile, scriptPath, args, sessionTasks, interrupted, log)
+	cleanup(cfg, gm, st, backend, ralphDir, logDir, planFile, scriptPath, args, interrupted, log)
 	return 0
 }
 
@@ -386,7 +383,7 @@ func initTaskBackend(cfg config.Config, promptsDir, ralphDir string, log *loggin
 }
 
 // cleanup generates resume script, prints summary, and removes unused worktrees.
-func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, logDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
+func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, logDir, planFile, scriptPath string, args []string, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
 
 	// Clear cli_config so stale flags don't persist across manual restarts.
@@ -411,7 +408,6 @@ func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backe
 	}
 
 	generateResumeScript(cfg, ralphDir, scriptPath, args, log)
-	printSessionSummary(sessionTasks, log)
 	printSummary(cfg, gm, st, backend, ralphDir, logDir, planFile, log)
 }
 
@@ -442,41 +438,6 @@ exec "%s" loop%s
 
 	os.WriteFile(resumePath, []byte(content), 0o755)
 	log.Emit(logging.Opts{}, "Resume script: %s", resumePath)
-}
-
-// printSessionSummary shows what was accomplished this session: each completed
-// task with its bead ID, title, agent summary, and PR reference.
-func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
-	if len(tasks) == 0 {
-		return
-	}
-	fmt.Println()
-	log.Phase("=== SESSION WORK ===")
-	for _, t := range tasks {
-		label := t.ID
-		if label == "" {
-			label = t.Title
-		}
-		if t.Title != "" && t.ID != "" {
-			log.Emit(logging.Opts{}, "%s: %s", t.ID, t.Title)
-		} else {
-			log.Emit(logging.Opts{}, "%s", label)
-		}
-		if t.Summary != "" {
-			log.Emit(logging.Opts{}, "  Fix: %s", t.Summary)
-		}
-		if t.PRNum != 0 {
-			pr := fmt.Sprintf("PR #%d", t.PRNum)
-			if t.PRURL != "" {
-				pr = t.PRURL
-			}
-			if t.PRTitle != "" {
-				log.Emit(logging.Opts{}, "  %s: %s", pr, t.PRTitle)
-			} else {
-				log.Emit(logging.Opts{}, "  %s", pr)
-			}
-		}
-	}
 }
 
 // printSummary displays the end-of-run summary.
