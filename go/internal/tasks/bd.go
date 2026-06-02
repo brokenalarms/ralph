@@ -198,6 +198,12 @@ func (b *BD) Init() error {
 		_ = err
 	}
 
+	// Disable bd's git-push backup: since .beads is gitignored, the backup's
+	// git add always fails. The gitignore decision and this disable are the same decision.
+	if err := b.ensureBackupGitPushDisabled(); err != nil {
+		log.Printf("bd: ensureBackupGitPushDisabled: %v", err)
+	}
+
 	// Pin dolt.port and export.path so they survive reboots and export tasks.
 	if err := b.ensureDoltPort(); err != nil {
 		log.Printf("bd: ensureDoltPort: %v", err)
@@ -278,6 +284,18 @@ func (b *BD) ensureTasksExport() error {
 		return nil
 	}
 	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "export.path", "../beads-tasks.jsonl")
+	return err
+}
+
+func (b *BD) ensureBackupGitPushDisabled() error {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "config", "get", "backup.git-push")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(out, "not set in config.yaml") {
+		return nil
+	}
+	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "backup.git-push", "false")
 	return err
 }
 
