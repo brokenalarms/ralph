@@ -2,14 +2,7 @@
   "name": "ralph",
   "version": "0.1.601",
   "description": "Autonomous Claude Code task iteration loop with HTTP control plane",
-  "main": "server.js",
-  "bin": {
-    "ralph": "./ralph.sh",
-    "ralph-server": "./server.js"
-  },
   "scripts": {
-    "start": "node server.js",
-    "loop": "bash ralph.sh",
     "ralph:verify": "cd go && go test -count=1 ./...",
     "ralph:post-task": "./scripts/sync-and-build.sh"
   },
