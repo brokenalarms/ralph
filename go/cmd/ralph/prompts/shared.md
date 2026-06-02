@@ -49,5 +49,5 @@ But don't clean up for the sake of it. Don't extract one-line helpers used once.
 
 ### Housekeeping
 - Specs are design documents describing features for a contextless agent — not task lists or fix lists. Never create spec files containing lists of small fixes; those belong in the plan.
-- When a spec is fully complete, move it from `specs/` to `specs/completed/`.
+- When a spec is fully complete, move it from `docs/specs/` to `docs/specs/done/`.
 - Don't add status reports, "Done" sections, or temporal comments — commit history is the record.
