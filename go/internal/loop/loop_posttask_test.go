@@ -419,8 +419,8 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	}
 }
 
-// runPostTask logs a clear message at startup when no ralph:post-task script
-// is found in package.json and no --post-task CLI flag is set.
+// runPostTask logs a message naming both the ralph:post-task npm script and
+// ralph-post-task Makefile target when neither is configured.
 func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -441,10 +441,7 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 		Ship:               git.ShipResult{PRNumber: 10, Merged: true},
 		MergeRetrySucceeds: true,
 	})
-	cfg :=
-
-		// No PostTask CLI flag and no package.json — must log "skipping post-task".
-		Config{
+	cfg := Config{
 			Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 			MaxIterations: 1,
 			CallsPerHour:  80,
@@ -474,8 +471,8 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 	l.postTaskAndMaybeEvolve(context.Background(), "ralph-npt", out.prNumber, out.merged)
 
 	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "No post_task config and no ralph:post-task script found in package.json — skipping post-task") {
-		t.Errorf("expected 'skipping post-task' log message, got: %s", logOutput)
+	if !strings.Contains(logOutput, "No post_task config and no ralph:post-task npm script or ralph-post-task Makefile target found — skipping post-task") {
+		t.Errorf("expected 'skipping post-task' log message mentioning both npm script and Makefile target, got: %s", logOutput)
 	}
 }
 
