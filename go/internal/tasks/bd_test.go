@@ -1821,6 +1821,46 @@ func TestBD_EnsureTasksExport_NoOpWhenAlreadySet(t *testing.T) {
 	}
 }
 
+// Proves: ensureBackupGitPushDisabled sets backup.git-push=false when key is unset.
+func TestBD_EnsureBackupGitPushDisabled_SetsWhenUnset(t *testing.T) {
+	var setCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "backup.git-push" {
+			return "backup.git-push is not set in config.yaml", nil
+		}
+		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "backup.git-push" && args[3] == "false" {
+			setCalled = true
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureBackupGitPushDisabled()
+	if !setCalled {
+		t.Error("expected bd config set backup.git-push false to be called when key is unset")
+	}
+}
+
+// Proves: ensureBackupGitPushDisabled is a no-op when backup.git-push is already set.
+func TestBD_EnsureBackupGitPushDisabled_NoOpWhenAlreadySet(t *testing.T) {
+	var setCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "backup.git-push" {
+			return "false", nil
+		}
+		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "backup.git-push" {
+			setCalled = true
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureBackupGitPushDisabled()
+	if setCalled {
+		t.Error("expected bd config set backup.git-push NOT to be called when key is already set")
+	}
+}
+
 // Proves: IsReady returns true when all deps are closed.
 func TestBD_IsReady_AllDepsClosed(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
