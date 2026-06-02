@@ -209,7 +209,7 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 		}
 	}
 	if script == "" {
-		p.logger.Emit(logging.Opts{Domain: "post-task"}, "No post_task config and no ralph:post-task script found in package.json — skipping post-task")
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "No post_task config and no ralph:post-task npm script or ralph-post-task Makefile target found — skipping post-task")
 		return
 	}
 	prStr := strconv.Itoa(prNumber)
