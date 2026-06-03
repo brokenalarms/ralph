@@ -3,6 +3,8 @@ package git
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -214,6 +216,25 @@ func TestManager_GitCmdErr_PropagatesError(t *testing.T) {
 	err := repo.gitCmdErr(repo.workDir, "push", "-u", "origin", "feature")
 	if err == nil || err.Error() != "push rejected" {
 		t.Errorf("expected 'push rejected', got %v", err)
+	}
+}
+
+// execRunner.Run includes git's stderr in the returned error on non-zero exit,
+// so callers see the real "fatal: ..." message instead of bare "exit status N".
+func TestExecRunner_Run_IncludesStderrInError(t *testing.T) {
+	dir := t.TempDir()
+	initCmd := exec.Command("git", "init", dir)
+	if err := initCmd.Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+
+	r := &execRunner{}
+	_, err := r.Run(context.Background(), dir, "cat-file", "-t", "invalid-sha-that-does-not-exist-abc123")
+	if err == nil {
+		t.Fatal("expected error from cat-file on invalid sha, got nil")
+	}
+	if !strings.Contains(err.Error(), "fatal:") {
+		t.Errorf("expected error to contain git stderr (fatal: ...), got: %v", err)
 	}
 }
 
