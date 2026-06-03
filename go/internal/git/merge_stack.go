@@ -181,6 +181,7 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 		}
 		merged++
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "PR #%d merged (%d/%d)", pr.number, merged, len(prs))
+		r.RemoveWorktreeForBranch(pr.head)
 
 		// Guard 2: assert merged SHA is an ancestor of origin/<baseBranch>.
 		if ancestorErr := r.assertMergedAncestor(result.MergedSHA); ancestorErr != nil {
