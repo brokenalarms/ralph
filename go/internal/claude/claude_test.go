@@ -2531,3 +2531,41 @@ func TestRun_DetectsNoCodeNeededSignalAfterExit(t *testing.T) {
 		t.Errorf("Summary = %q, want %q", result.Summary, "confirmed not a bug")
 	}
 }
+
+// Verifies that the agent subprocess environment includes the project venv bin on
+// PATH when .venv/bin exists in the workdir, enabling bare `python`, `pytest`,
+// `ruff` commands to resolve to the project venv without explicit activation.
+func TestBuildAgentEnv_PrependsvenvBin(t *testing.T) {
+	dir := t.TempDir()
+	venvBin := filepath.Join(dir, ".venv", "bin")
+	if err := os.MkdirAll(venvBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	env := buildAgentEnv(dir)
+	if env == nil {
+		t.Fatal("expected non-nil env when .venv/bin exists")
+	}
+
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "PATH=") {
+			pathVal := strings.TrimPrefix(entry, "PATH=")
+			parts := filepath.SplitList(pathVal)
+			if len(parts) == 0 || parts[0] != venvBin {
+				t.Errorf("first PATH entry = %q, want %q", parts[0], venvBin)
+			}
+			return
+		}
+	}
+	t.Error("no PATH entry found in returned env")
+}
+
+// Verifies that buildAgentEnv returns nil when no .venv/bin directory exists,
+// so the agent subprocess inherits the parent environment unchanged.
+func TestBuildAgentEnv_NoVenv(t *testing.T) {
+	dir := t.TempDir()
+	env := buildAgentEnv(dir)
+	if env != nil {
+		t.Errorf("expected nil env when no .venv/bin exists, got %v", env)
+	}
+}

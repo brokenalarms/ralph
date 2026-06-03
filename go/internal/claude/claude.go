@@ -291,6 +291,25 @@ func UserInputMessage(content string) string {
 	return fmt.Sprintf(`{"type":"user_input_text","content":%s}`, string(escaped))
 }
 
+// buildAgentEnv returns an environment for the agent subprocess with the
+// project's .venv/bin prepended to PATH if that directory exists in workDir.
+// Returns nil (inherit parent environment unchanged) when no .venv/bin is found.
+func buildAgentEnv(workDir string) []string {
+	venvBin := filepath.Join(workDir, ".venv", "bin")
+	if info, err := os.Stat(venvBin); err != nil || !info.IsDir() {
+		return nil
+	}
+	env := os.Environ()
+	for i, entry := range env {
+		if strings.HasPrefix(entry, "PATH=") {
+			env[i] = "PATH=" + venvBin + string(filepath.ListSeparator) + strings.TrimPrefix(entry, "PATH=")
+			return env
+		}
+	}
+	env = append(env, "PATH="+venvBin)
+	return env
+}
+
 // Run spawns a Claude process, polls for signal files, and returns when the
 // process exits or a completion signal is detected. Mirrors ralph.sh run_claude.
 func (r *Runner) Run(cfg RunConfig) (Result, error) {
@@ -339,6 +358,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		args = append(args, "-p", cfg.Prompt)
 		cmd = exec.Command("claude", args...)
 		cmd.Dir = cfg.WorkDir
+		cmd.Env = buildAgentEnv(cfg.WorkDir)
 		cmd.Stdin = nil
 		cmd.Stdout = rawLog
 		cmd.Stderr = rawLog
