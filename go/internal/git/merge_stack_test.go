@@ -944,6 +944,98 @@ func TestMergeStack_RollbackUseFreshContextOnCancellation(t *testing.T) {
 	}
 }
 
+// After a successful merge in runMergeStack, the local worktree dir for the
+// merged branch is removed and the local branch ref is deleted.
+func TestMergeStack_RemovesLocalWorktreeAndBranchAfterMerge(t *testing.T) {
+	worktreeDir := "/fake/worktree/path"
+	porcelain := "worktree " + worktreeDir + "\nHEAD abc123\nbranch refs/heads/feature\n"
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs:       []StubPR{{Number: 42, Branch: "feature", Base: "main", State: PRStateOpen}},
+		Checks:    map[int][]CICheckResult{42: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
+	})
+	runner := newStubRunner().On("worktree list --porcelain", porcelain, nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "42"})
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+	if result.MergedCount != 1 {
+		t.Errorf("expected 1 merged, got %d", result.MergedCount)
+	}
+	if !runner.CalledWith("worktree", "remove", "--force", worktreeDir) {
+		t.Error("expected git worktree remove --force to be called for the merged branch's worktree")
+	}
+	if !runner.CalledWith("branch", "-D", "feature") {
+		t.Error("expected git branch -D to be called to delete the merged branch ref")
+	}
+}
+
+// RemoveWorktreeForBranch must not remove the projectDir worktree even when
+// findWorktreeForBranch returns projectDir as the branch's worktree.
+func TestRemoveWorktreeForBranch_DoesNotRemoveProjectDir(t *testing.T) {
+	projectDir := t.TempDir()
+	porcelain := "worktree " + projectDir + "\nHEAD abc123\nbranch refs/heads/feature\n"
+
+	runner := newStubRunner().On("worktree list --porcelain", porcelain, nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: projectDir, BaseBranch: "main", Logger: discardLog{}},
+		nil,
+		withRunner(runner),
+	)
+
+	repo.RemoveWorktreeForBranch("feature")
+
+	if runner.CalledWith("worktree", "remove", "--force", projectDir) {
+		t.Error("RemoveWorktreeForBranch must never remove the projectDir worktree")
+	}
+	if !runner.CalledWith("branch", "-D", "feature") {
+		t.Error("expected git branch -D feature to be called for the local branch ref")
+	}
+}
+
+// When worktree removal fails for one merged PR, the remaining stack merges
+// must still proceed and complete successfully.
+func TestMergeStack_WorktreeCleanupFailureDoesNotAbortStack(t *testing.T) {
+	worktreeDir := "/fake/worktree/pr1"
+	porcelain := "worktree " + worktreeDir + "\nHEAD abc123\nbranch refs/heads/pr1\n"
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen},
+			{Number: 2, Branch: "pr2", Base: "pr1", State: PRStateOpen},
+		},
+		Checks: map[int][]CICheckResult{
+			1: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+			2: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		},
+	})
+	runner := newStubRunner().
+		On("worktree list --porcelain", porcelain, nil).
+		On("worktree remove", "", fmt.Errorf("worktree remove failed"))
+
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "2"})
+	if err != nil {
+		t.Fatalf("expected both PRs to merge despite worktree cleanup failure, got: %v", err)
+	}
+	if result.MergedCount != 2 {
+		t.Errorf("expected 2 merged despite cleanup failure, got %d", result.MergedCount)
+	}
+}
+
 // initBareRepoIn initializes a git repo with one commit in the given directory.
 func initBareRepoIn(t *testing.T, dir string) {
 	t.Helper()

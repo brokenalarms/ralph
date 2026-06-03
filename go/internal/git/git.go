@@ -884,6 +884,24 @@ func (r *repo) RemoveWorktree() {
 	r.gitCmd(r.projectDir, "branch", "-D", r.worktreeBranch)
 }
 
+// RemoveWorktreeForBranch removes the local worktree directory checked out on
+// branch and deletes the local branch ref. Best-effort: logs a warning on
+// failure and never aborts the caller. r.projectDir's own worktree is never
+// removed.
+func (r *repo) RemoveWorktreeForBranch(branch string) {
+	worktreeDir := r.findWorktreeForBranch(r.projectDir, branch)
+	if worktreeDir != "" && worktreeDir != r.projectDir {
+		if err := r.gitCmdErr(r.projectDir, "worktree", "remove", "--force", worktreeDir); err != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+				"Failed to remove worktree %s for branch %s: %v", worktreeDir, branch, err)
+		}
+	}
+	if err := r.gitCmdErr(r.projectDir, "branch", "-D", branch); err != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+			"Failed to delete local branch %s: %v", branch, err)
+	}
+}
+
 // TagTaskStart creates a lightweight git tag marking the start of a task iteration.
 // The tag name is task/{taskID}/start when a backend ID is available,
 // or task/{seq}-{slug}/start derived from the current branch name.
