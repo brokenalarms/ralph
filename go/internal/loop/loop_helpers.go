@@ -29,6 +29,17 @@ func (l *Loop) binaryHashChanged() bool {
 	return !bytes.Equal(l.startupBinaryHash, current)
 }
 
+// teardownWorktree removes the loop's worktree after a task is complete and
+// its work is on the remote. The git module's RemoveWorktree clears the on-disk
+// worktree, deletes the local branch, and empties the worktree state markers so
+// the next startup does not attempt to resume a gone directory.
+func (l *Loop) teardownWorktree() {
+	l.git.RemoveWorktree()
+	if err := l.state.ClearCurrentTask(); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ClearCurrentTask after teardown: %v", err)
+	}
+}
+
 // postTaskAndMaybeEvolve runs the post-task hook unconditionally, then checks
 // whether the binary changed (when cfg.Evolve is true). Returns signalEvolve
 // if the binary hash changed, signalSkipped otherwise. Called from exactly two

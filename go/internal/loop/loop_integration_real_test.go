@@ -7,12 +7,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -1654,5 +1656,232 @@ func TestIntegrationReal_SetStackHead_TopOpenButNotAhead_StartsFromMain(t *testi
 	countAhead := gitOutputAt(t, workDir, "rev-list", "--count", "origin/main..origin/"+branchB)
 	if countAhead != "1" {
 		t.Errorf("origin/%s is %s commit(s) ahead of origin/main, want 1", branchB, countAhead)
+	}
+}
+
+// TestIntegrationReal_WorktreeScopedToTask_TeardownAfterMerge proves the
+// per-task worktree lifecycle: after a task merges, the worktree directory is
+// removed from disk and the worktree_dir marker is cleared in state.json. The
+// second task receives a fresh worktree at a different path.
+//
+// Ordering: create (Init) → task1 run → task1 merge → teardown (marker
+// cleared, directory gone) → task2 SetupWorktree (new dir) → task2 run →
+// loop exits.
+func TestIntegrationReal_WorktreeScopedToTask_TeardownAfterMerge(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+
+	// Two tasks: task1 runs, merges, teardown happens. Task2 runs in a fresh worktree.
+	var (
+		mu          sync.Mutex
+		workDirs    []string // work dirs passed to runner per iteration
+		task1Done   bool
+	)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    2,
+				Total:        2,
+				NextTask:     "task one",
+				NextID:       "ralph-wt1",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			{Number: 11, Base: "main", State: git.PRStateOpen},
+			{Number: 12, Base: "main", State: git.PRStateOpen},
+		},
+	}
+
+	logger := logging.New(nil)
+	// Init creates the initial worktree; the loop will use SetupWorktree to
+	// create a second one after task1 tears down the first.
+	gm, initialWorkDir := withWorktree(t, setup, ghCfg, logger)
+
+	// Use the same ralphDir for both the git module and the state store so
+	// state writes from RemoveWorktree are visible via st.Load().
+	st := state.NewStore(setup.ralphDir)
+	st.Init(5)
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    initialWorkDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 4,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+	}
+
+	runner := &stubRunner{
+		onRunCfg: func(rc claude.RunConfig) {
+			mu.Lock()
+			workDirs = append(workDirs, rc.WorkDir)
+			isFirst := len(workDirs) == 1
+			mu.Unlock()
+			// Ensure git identity in the (possibly fresh) worktree.
+			gitCmd(t, rc.WorkDir, "git", "config", "user.name", "test")
+			gitCmd(t, rc.WorkDir, "git", "config", "user.email", "test@test")
+			fname := "task2.txt"
+			if isFirst {
+				fname = "task1.txt"
+			}
+			os.WriteFile(filepath.Join(rc.WorkDir, fname), []byte("work\n"), 0o644)
+			gitCmd(t, rc.WorkDir, "git", "add", fname)
+			gitCmd(t, rc.WorkDir, "git", "commit", "-m", "agent: "+fname)
+			backend.Lock()
+			if !task1Done {
+				task1Done = true
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task two"
+				backend.NextID = "ralph-wt2"
+			} else {
+				backend.Completed = 2
+				backend.Remaining = 0
+			}
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("loop.Run: %v", err)
+	}
+
+	// Observable 1: two agent invocations happened (both tasks ran).
+	mu.Lock()
+	invocations := len(workDirs)
+	mu.Unlock()
+
+	if invocations < 2 {
+		t.Fatalf("expected 2 agent invocations, got %d", invocations)
+	}
+
+	// Observable 2: no worktree directories exist under .ralph/worktrees/ after
+	// the loop completes. Each completed task tears down its own worktree, so
+	// all are gone by the time the loop exits.
+	worktreesDir := filepath.Join(setup.ralphDir, "worktrees")
+	entries, _ := os.ReadDir(worktreesDir)
+	var remainingWorktrees []string
+	for _, e := range entries {
+		if e.IsDir() {
+			remainingWorktrees = append(remainingWorktrees, e.Name())
+		}
+	}
+	if len(remainingWorktrees) != 0 {
+		t.Errorf("expected no worktree directories after all tasks complete, found: %v", remainingWorktrees)
+	}
+
+	// Observable 3: state.json worktree_dir is empty after both tasks complete.
+	finalState, err := st.Load()
+	if err != nil {
+		t.Fatalf("st.Load: %v", err)
+	}
+	if finalState.WorktreeDir != "" {
+		t.Errorf("state.WorktreeDir = %q, want empty after all tasks complete", finalState.WorktreeDir)
+	}
+
+	// Observable 4: both beads were closed.
+	backend.CloseMu.Lock()
+	closed := append([]string{}, backend.ClosedIDs...)
+	backend.CloseMu.Unlock()
+	if len(closed) != 2 {
+		t.Errorf("expected 2 closed beads, got %d: %v", len(closed), closed)
+	}
+}
+
+// TestIntegrationReal_WorktreePreservedOnInterrupt proves that a mid-task
+// interrupt (context cancellation) leaves the worktree directory on disk and
+// worktree_dir in state.json intact — the on-disk state IS the resume state,
+// so the next run resumes via the marker with no inference.
+func TestIntegrationReal_WorktreePreservedOnInterrupt(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Total:        1,
+				NextTask:     "interrupted task",
+				NextID:       "ralph-intr",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	ghCfg := git.StubGitHubConfig{Available: true}
+	logger := logging.New(nil)
+	gm, initialWorkDir := withWorktree(t, setup, ghCfg, logger)
+
+	st := state.NewStore(setup.ralphDir)
+	st.Init(5)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    initialWorkDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 4,
+		CallsPerHour:  80,
+	}
+
+	// Cancel the context during the agent run, before it signals completion.
+	runner := &stubRunner{
+		onRun: func() {
+			cancel()
+		},
+		result: claude.Result{SignalDetected: false},
+	}
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+	})
+	l.runner = runner
+
+	_ = l.Run(ctx)
+
+	// Observable 1: the worktree directory still exists on disk.
+	if _, err := os.Stat(initialWorkDir); err != nil {
+		t.Errorf("worktree %q should still exist after interrupt (resume state), got: %v", initialWorkDir, err)
+	}
+
+	// Observable 2: worktree_dir marker is still set in state.json.
+	finalState, err := st.Load()
+	if err != nil {
+		t.Fatalf("st.Load: %v", err)
+	}
+	if finalState.WorktreeDir == "" {
+		t.Errorf("state.WorktreeDir is empty after interrupt — marker must be preserved for resume")
 	}
 }

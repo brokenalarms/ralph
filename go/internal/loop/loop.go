@@ -578,6 +578,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	var sessionTasks []CompletedTask
 	var currentTaskID string
 	var consecutiveSkipCount int
+	var worktreeNeedsSetup bool
 	st, _ := l.state.Load()
 	iteration := st.Iteration
 
@@ -615,6 +616,20 @@ iterLoop:
 
 		// Retry counters are local variables inside runVerifyPipeline, so
 		// they are naturally scoped per-iteration — no reset needed.
+
+		// ── Worktree setup: recreate after task teardown ──
+		if worktreeNeedsSetup {
+			if err := l.git.SetupWorktree(ctx); err != nil {
+				if ctx.Err() != nil {
+					l.state.Write("status", "stopped")
+					break
+				}
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "SetupWorktree failed: %v", err)
+				l.state.Write("status", "error")
+				break
+			}
+			worktreeNeedsSetup = false
+		}
 
 		// ── Branch setup ──
 		if task.changed || !l.git.IsBranchRenamed() {
@@ -741,8 +756,9 @@ iterLoop:
 		consecutiveSkipCount = 0
 
 		// ── Complete task (post-signal pipeline) ──
+		var out completeTaskOut
 		if agentRun.result.SignalDetected {
-			out := l.completeTask(ctx, completeTaskParams{
+			out = l.completeTask(ctx, completeTaskParams{
 				result:            agentRun.result,
 				headBefore:        agentRun.prep.headBefore,
 				workDir:           agentRun.prep.workDir,
@@ -774,12 +790,18 @@ iterLoop:
 				}
 			}
 			if out.action == signalSkipped {
+				l.teardownWorktree()
+				worktreeNeedsSetup = true
 				l.state.WriteRunBranch("")
 				continue
 			}
 			// signalComplete: fall through to tagTaskEnd
 		}
 		l.git.TagTaskEnd(task.id)
+		if out.merged || out.prNumber > 0 {
+			l.teardownWorktree()
+			worktreeNeedsSetup = true
+		}
 		l.state.WriteRunBranch("")
 		currentTaskID = ""
 	}

@@ -382,7 +382,7 @@ func initTaskBackend(cfg config.Config, promptsDir, ralphDir string, log *loggin
 	return bd, nil
 }
 
-// cleanup generates resume script, prints summary, and removes unused worktrees.
+// cleanup generates the resume script and prints a run summary.
 func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, logDir, planFile, scriptPath string, args []string, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
 
@@ -395,16 +395,6 @@ func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backe
 		log.Emit(logging.Opts{Level: logging.Warn}, "Session interrupted — cleaning up")
 		log.Emit(logging.Opts{}, "Writing interrupted state to bead...")
 		st.Write("status", "stopped")
-	}
-
-	// Remove unused worktree (branch still named /next = no work committed).
-	if gm.GetWorktreeBranch() != "" &&
-		strings.HasSuffix(gm.GetWorktreeBranch(), "/next") &&
-		gm.GetWorkDir() != cfg.ProjectDir {
-		if interrupted {
-			log.Emit(logging.Opts{}, "Cleaning up worktree %s...", gm.GetWorktreeBranch())
-			gm.RemoveWorktree()
-		}
 	}
 
 	generateResumeScript(cfg, ralphDir, scriptPath, args, log)
