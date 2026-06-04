@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -30,7 +32,6 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -75,7 +76,6 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	llmCalls := 0
 	logger := logging.New(nil)
@@ -126,7 +126,6 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	var modelsUsed []string
 	llmCalls := 0
@@ -190,7 +189,6 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		Dirs:                  workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:         5,
 		CallsPerHour:          80,
-		VerifyDir:             dir,
 		VerifyModel:           customFirst,
 		VerifyEscalationModel: customEscalation,
 	}
@@ -253,7 +251,6 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	fixAgentSpawned := false
 	llmCalls := 0
@@ -311,7 +308,6 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	var capturedPrompt string
 	rejectionMsg := "function foo() ignores the error return from bar()"
@@ -370,7 +366,6 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -415,7 +410,6 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	// With no PR diff and no iteration diff, LLMVerifyPR short-circuits
 	// to NoDiff=true without invoking QueryFn.
@@ -472,7 +466,6 @@ func TestOnSignal_PriorIterationCommits_Proceeds(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -520,7 +513,6 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -677,7 +669,6 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	l := New(cfg, Modules{
 		State:       st,
@@ -908,3 +899,61 @@ func TestFixModelEscalation_DefaultModels(t *testing.T) {
 // cfg.DiffFilesBetweenResult regardless of args, and RevertFilesToRef has
 // no call-tracking. Out-of-scope revert logic is a real-git behavior and
 // belongs in Phase D integration with a real rebase+checkout cycle.
+
+// Proves the verify gate (post-signal and pre-iteration) uses l.git.GetWorkDir()
+// — the live per-task worktree — not cfg.Dirs.ProjectDir. When the worktree has
+// a passing verify script and projectDir has a failing one, the gate must pass.
+func TestVerifyGate_RunsInWorktreeNotProjectDir(t *testing.T) {
+	projectDir := t.TempDir()
+	worktreeDir := t.TempDir()
+	ralphDir := filepath.Join(projectDir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	// projectDir has a FAILING ralph-verify target.
+	os.WriteFile(filepath.Join(projectDir, "Makefile"), []byte("ralph-verify:\n\t@false\n"), 0o644)
+	// worktreeDir has a PASSING ralph-verify target — the live worktree is green.
+	os.WriteFile(filepath.Join(worktreeDir, "Makefile"), []byte("ralph-verify:\n\t@true\n"), 0o644)
+
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	// Git stub: GetWorkDir() returns worktreeDir (the live per-task worktree).
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:       projectDir,
+		WorkDir:          worktreeDir,
+		HeadRev:          "abc123",
+		LogOnelineResult: "abc123 some prior commit",
+	})
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: projectDir,
+			WorkDir:    worktreeDir,
+			RalphDir:   ralphDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TestTimeout:   5 * time.Second,
+	}
+	logger := logging.New(nil)
+	vrf := verifier.New(verifier.Config{
+		ProjectDir:  projectDir,
+		TestTimeout: 5 * time.Second,
+	}, logger, nil, &stubQuerier{fn: func(_ context.Context, _, _, _ string) (string, error) {
+		return "YES: looks good", nil
+	}})
+
+	l := New(cfg, Modules{
+		State:    st,
+		Git:      gm,
+		Logger:   logger,
+		Verifier: vrf,
+	})
+
+	// runSimpleVerifyCompletion is the post-signal gate path. It must use
+	// l.git.GetWorkDir() (worktreeDir = green), not projectDir (red).
+	passed, reason := l.runSimpleVerifyCompletion(context.Background(), "different-sha")
+	if !passed {
+		t.Fatalf("verify gate should pass when worktree tests pass — got failure: %s", reason)
+	}
+}

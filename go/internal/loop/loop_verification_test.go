@@ -739,7 +739,6 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -873,7 +872,6 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				},
 				MaxIterations: 1,
 				CallsPerHour:  80,
-				VerifyDir:     dir,
 			}
 			reply := tt.queryReply
 			l := New(cfg, Modules{
@@ -937,7 +935,6 @@ func TestRun_ConfigVerifyBypassesStartupGate(t *testing.T) {
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
-		VerifyDir:     dir,
 		Verify:        "true",
 		MaxIterations: 1,
 		CallsPerHour:  80,

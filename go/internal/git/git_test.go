@@ -1861,3 +1861,31 @@ func TestPrepareForNextTask_SetsUpstreamTracking_CustomBase(t *testing.T) {
 		t.Errorf("branch.ralph/next.merge = %q, want refs/heads/develop", merge)
 	}
 }
+
+// Proves assertWorktreeReady is the single enforcement point for the worktree
+// invariant. Init and InitTask call it; operational methods trust the invariant
+// and do not re-check workDir == projectDir.
+func TestAssertWorktreeReady_EnforcesInvariant(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("workDir empty", func(t *testing.T) {
+		r := newRepoForTest(Config{ProjectDir: dir, WorkDir: "", Logger: &testLog{}}, nil)
+		if err := r.assertWorktreeReady(); err == nil {
+			t.Error("expected error when workDir is empty")
+		}
+	})
+
+	t.Run("workDir equals projectDir", func(t *testing.T) {
+		r := newRepoForTest(Config{ProjectDir: dir, WorkDir: dir, Logger: &testLog{}}, nil)
+		if err := r.assertWorktreeReady(); err == nil {
+			t.Error("expected error when workDir == projectDir")
+		}
+	})
+
+	t.Run("valid worktree", func(t *testing.T) {
+		r := newRepoForTest(Config{ProjectDir: dir, WorkDir: dir + "/worktree", Logger: &testLog{}}, nil)
+		if err := r.assertWorktreeReady(); err != nil {
+			t.Errorf("expected no error for valid worktree, got: %v", err)
+		}
+	})
+}

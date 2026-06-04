@@ -99,7 +99,6 @@ func TestRunPreIterationTests_CancelledContext_SkipsTests(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	l := New(cfg, Modules{
 		State:        st,

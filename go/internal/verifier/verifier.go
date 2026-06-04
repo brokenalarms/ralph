@@ -52,9 +52,8 @@ type Runner interface {
 // fields, no module references. Per-call data (diffs, task metadata, etc.)
 // flows in through method arguments, not through Config.
 type Config struct {
-	VerifyDir             string
-	ProjectDir            string // project root used as fallback when ralph:verify is absent from VerifyDir
-	ConfigVerify          string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
+	ProjectDir   string
+	ConfigVerify string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string
 	VerifyEscalationModel string
 	FixModel              string // model for fix agents on attempt 1; defaults to ModelSonnet
@@ -148,7 +147,7 @@ func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, tim
 		}
 	}()
 
-	result := verify.RunTests(ctx, v.cfg.TestTimeout, v.cfg.ConfigVerify, dir, v.cfg.ProjectDir)
+	result := verify.RunTests(ctx, v.cfg.TestTimeout, v.cfg.ConfigVerify, dir)
 	elapsed := time.Since(start).Truncate(time.Millisecond)
 
 	switch {
@@ -434,7 +433,8 @@ func (v *Verifier) SpawnConflictFixAgent(in FixAgentSpawn, conflictDiff, beadDes
 
 // PreIterationInput holds inputs for RunPreIterationTests.
 type PreIterationInput struct {
-	Ctx context.Context
+	Ctx     context.Context
+	WorkDir string // live per-task worktree directory; empty skips pre-iteration tests
 }
 
 // PreIterationResult reports the outcome of pre-iteration checks. Loop uses
@@ -453,13 +453,13 @@ type PreIterationResult struct {
 // log progress and write test_result state without verifier reaching into
 // the state module.
 func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult {
-	if v.cfg.VerifyDir == "" {
+	if in.WorkDir == "" {
 		return PreIterationResult{}
 	}
 
 	out := PreIterationResult{}
 
-	tc := verify.DetectTestCommand(v.cfg.ConfigVerify, v.cfg.VerifyDir, v.cfg.ProjectDir)
+	tc := verify.DetectTestCommand(v.cfg.ConfigVerify, in.WorkDir)
 	if tc != nil {
 		source := "config.toml"
 		if v.cfg.ConfigVerify == "" {
@@ -475,7 +475,7 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
 	}
 	testStart := time.Now()
-	result := verify.RunTests(in.Ctx, v.cfg.TestTimeout, v.cfg.ConfigVerify, v.cfg.VerifyDir, v.cfg.ProjectDir)
+	result := verify.RunTests(in.Ctx, v.cfg.TestTimeout, v.cfg.ConfigVerify, in.WorkDir)
 	out.TestResult = result
 	out.TestElapsed = time.Since(testStart).Truncate(10 * time.Millisecond)
 
@@ -502,7 +502,7 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 	}
 
 	compileStart := time.Now()
-	compileResult := verify.CompileCheck(in.Ctx, v.cfg.CompileCheckTimeout, v.cfg.VerifyDir)
+	compileResult := verify.CompileCheck(in.Ctx, v.cfg.CompileCheckTimeout, in.WorkDir)
 	out.CompileResult = compileResult
 	out.CompileElapsed = time.Since(compileStart).Truncate(10 * time.Millisecond)
 
