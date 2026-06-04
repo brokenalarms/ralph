@@ -124,6 +124,7 @@ type Ops interface {
 	DeleteRemoteBranchByName(branch string) error
 
 	// Worktree lifecycle.
+	SetupWorktree(ctx context.Context) error
 	RemoveWorktree()
 
 	// GitHub availability and PR listing.

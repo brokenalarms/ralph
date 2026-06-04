@@ -388,10 +388,13 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 	return nil
 }
 
-// tryResumeWorktree attempts to reuse a stored worktree from a previous run.
-// Only restores the worktree path and state — no rebase or reset. The actual
-// branch setup happens later in checkoutExistingBranch once the task is known
-// and the correct base branch can be determined.
+// tryResumeWorktree resumes a worktree from a mid-task interrupt by reading
+// the worktree_dir marker from state.json. It succeeds only when the marker is
+// non-empty AND the directory exists on disk — no branch-name inference, no
+// /next suffix checks, no commit-count heuristics. RemoveWorktree clears the
+// marker at task completion, so a completed task never resumes here; only a
+// genuinely interrupted mid-task run has the marker present. The actual branch
+// setup happens later in checkoutExistingBranch once the task is known.
 func (r *repo) tryResumeWorktree() error {
 	if r.state == nil {
 		return fmt.Errorf("no state store")
@@ -878,10 +881,20 @@ func (r *repo) SquashToOneCommit(baseSHA, message string) error {
 	return r.gitCmdErr(r.workDir, "commit", "-m", message)
 }
 
-// RemoveWorktree force-removes a worktree and deletes its branch.
+// RemoveWorktree force-removes the loop's worktree, deletes its branch, and
+// clears the worktree state markers so the next startup does not resume a
+// gone directory.
 func (r *repo) RemoveWorktree() {
 	r.gitCmd(r.projectDir, "worktree", "remove", "--force", r.workDir)
 	r.gitCmd(r.projectDir, "branch", "-D", r.worktreeBranch)
+	if r.state != nil {
+		_ = r.state.Write("worktree_dir", "")
+		_ = r.state.Write("worktree_branch", "")
+		_ = r.state.Write("branch_renamed", "false")
+	}
+	r.workDir = r.projectDir
+	r.worktreeBranch = ""
+	r.branchRenamed = false
 }
 
 // RemoveWorktreeForBranch removes the local worktree directory checked out on
