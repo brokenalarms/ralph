@@ -69,7 +69,7 @@ func (r *repo) assertMergedAncestor(mergedSHA string) error {
 // Always uses --force-with-lease (safe — only forces if remote matches
 // last fetch). Squash ensures stacked PRs cascade cleanly on merge.
 func (r *repo) Push(ctx context.Context) error {
-	if r.worktreeBranch == "" || r.workDir == r.projectDir {
+	if r.worktreeBranch == "" {
 		return nil
 	}
 
@@ -632,7 +632,7 @@ func (r *repo) prTitle(taskID, taskDesc string) string {
 // back to rebase+push again. Returns typed errors (CIFailureError,
 // MergeConflictError) that callers can handle.
 func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
-	if r.worktreeBranch == "" || r.workDir == r.projectDir {
+	if r.worktreeBranch == "" {
 		return false, nil
 	}
 

@@ -30,7 +30,6 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -75,7 +74,6 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	llmCalls := 0
 	logger := logging.New(nil)
@@ -126,7 +124,6 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	var modelsUsed []string
 	llmCalls := 0
@@ -190,7 +187,6 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		Dirs:                  workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:         5,
 		CallsPerHour:          80,
-		VerifyDir:             dir,
 		VerifyModel:           customFirst,
 		VerifyEscalationModel: customEscalation,
 	}
@@ -253,7 +249,6 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	fixAgentSpawned := false
 	llmCalls := 0
@@ -311,7 +306,6 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	var capturedPrompt string
 	rejectionMsg := "function foo() ignores the error return from bar()"
@@ -370,7 +364,6 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -415,7 +408,6 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	// With no PR diff and no iteration diff, LLMVerifyPR short-circuits
 	// to NoDiff=true without invoking QueryFn.
@@ -472,7 +464,6 @@ func TestOnSignal_PriorIterationCommits_Proceeds(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -520,7 +511,6 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -677,7 +667,6 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	l := New(cfg, Modules{
 		State:       st,

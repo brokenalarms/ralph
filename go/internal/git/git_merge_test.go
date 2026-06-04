@@ -405,18 +405,37 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
 
 // AutoMergeCurrentBranch returns nil when WorkDir equals ProjectDir,
 // avoiding merging from the project dir itself.
-func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
-	repo := newRepoForTest(
+// The worktree invariant (workDir distinct from projectDir) is enforced in
+// exactly one place — assertWorktreeReady, the post-condition of Init/InitTask.
+// Operational methods (Push, AutoMerge, tagging, branch renames) no longer
+// re-check workDir == projectDir; they trust this invariant. This test pins the
+// single enforcement point rather than the old scattered per-operation no-ops.
+func TestAssertWorktreeReady_EnforcesInvariant(t *testing.T) {
+	// workDir == projectDir is an invariant violation — must be rejected.
+	bad := newRepoForTest(
 		Config{WorkDir: "/some/dir", ProjectDir: "/some/dir", BaseBranch: "main", Logger: &testLog{}},
 		nil,
-		withWorktreeBranch("ralph/project/01-some-task"),
 	)
-	merged, err := repo.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
+	if err := bad.assertWorktreeReady("test"); err == nil {
+		t.Error("expected invariant violation when workDir == projectDir, got nil")
 	}
-	if merged {
-		t.Error("expected merged=false when WorkDir == ProjectDir")
+
+	// empty workDir is also a violation.
+	empty := newRepoForTest(
+		Config{WorkDir: "", ProjectDir: "/some/dir", BaseBranch: "main", Logger: &testLog{}},
+		nil,
+	)
+	if err := empty.assertWorktreeReady("test"); err == nil {
+		t.Error("expected invariant violation when workDir is empty, got nil")
+	}
+
+	// A real worktree distinct from the project root satisfies the invariant.
+	ok := newRepoForTest(
+		Config{WorkDir: "/some/dir/worktree", ProjectDir: "/some/dir", BaseBranch: "main", Logger: &testLog{}},
+		nil,
+	)
+	if err := ok.assertWorktreeReady("test"); err != nil {
+		t.Errorf("expected nil for a distinct worktree, got %v", err)
 	}
 }
 

@@ -172,8 +172,19 @@ func (r *repo) Init(ctx context.Context) error {
 	// path distinct from the project root. If this fails, there's a bug in
 	// the setup paths above — bail out before any caller can spawn an agent
 	// at the wrong cwd.
+	return r.assertWorktreeReady("worktree setup")
+}
+
+// assertWorktreeReady is the single place the worktree invariant is enforced:
+// after setup, workDir must be a real path distinct from the project root.
+// Init and InitTask call it as their post-condition; every operational method
+// downstream (EnsureUpToDate, Push, tagging, branch renames) trusts the
+// invariant instead of re-checking workDir == projectDir. A failure here means
+// a bug in the setup paths — callers must treat it as fatal before spawning an
+// agent at the wrong cwd.
+func (r *repo) assertWorktreeReady(stage string) error {
 	if r.workDir == "" || r.workDir == r.projectDir {
-		return fmt.Errorf("worktree setup post-condition failed: workDir=%q projectDir=%q", r.workDir, r.projectDir)
+		return fmt.Errorf("%s post-condition failed: workDir=%q projectDir=%q", stage, r.workDir, r.projectDir)
 	}
 	return nil
 }
@@ -291,11 +302,8 @@ func (r *repo) InitTask(ctx context.Context) error {
 	if err := r.SetupTaskWorktree(ctx); err != nil {
 		return fmt.Errorf("task worktree setup failed: %w", err)
 	}
-	// Worktree invariant — see Init for rationale. Same check, same reason.
-	if r.workDir == "" || r.workDir == r.projectDir {
-		return fmt.Errorf("task worktree setup post-condition failed: workDir=%q projectDir=%q", r.workDir, r.projectDir)
-	}
-	return nil
+	// Worktree invariant — see assertWorktreeReady for rationale.
+	return r.assertWorktreeReady("task worktree setup")
 }
 
 // SetupTaskWorktree creates a per-instance git worktree for `ralph task`.
@@ -526,9 +534,6 @@ func (r *repo) validateStackParent(ctx context.Context) {
 // after auto-resolve, it aborts and returns an error — the caller decides
 // what to do (e.g. push anyway and let GitHub handle merge conflicts).
 func (r *repo) EnsureUpToDate(ctx context.Context) error {
-	if r.workDir == "" || r.workDir == r.projectDir {
-		return nil
-	}
 
 	// Re-validate the stack parent before every sync. The parent PR may have
 	// merged and been deleted since we last checked — see validateStackParent.
@@ -616,9 +621,6 @@ func (r *repo) EnsureUpToDate(ctx context.Context) error {
 // Returns an error if the rename fails — callers must abort the iteration.
 func (r *repo) RenameBranchForTask(taskDesc, taskID string) error {
 	if r.branchRenamed || r.worktreeBranch == "" || taskDesc == "" {
-		return nil
-	}
-	if r.workDir == r.projectDir {
 		return nil
 	}
 
@@ -788,7 +790,7 @@ func (r *repo) PrepareForNextTask(nextTaskID, baseRef string) {
 		_ = r.state.Write("branch_renamed", "false")
 	}
 
-	if r.workDir == r.projectDir || r.worktreeBranch == "" {
+	if r.worktreeBranch == "" {
 		return
 	}
 
@@ -942,9 +944,6 @@ func (r *repo) TagTaskEnd(taskID string) {
 // taskTag builds a tag name like task/{id}/{suffix}. Returns empty
 // string if there's not enough info to build a meaningful tag.
 func (r *repo) taskTag(taskID, suffix string) string {
-	if r.workDir == "" || r.workDir == r.projectDir {
-		return ""
-	}
 	if taskID != "" {
 		return fmt.Sprintf("task/%s/%s", taskID, suffix)
 	}

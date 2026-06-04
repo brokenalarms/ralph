@@ -161,7 +161,6 @@ type Config struct {
 	AgentEscalationModel  string // deprecated: no effect; cross-iteration escalation was removed in ralph-pg95
 	ModelCap              string // maximum model tier for all LLM calls; empty means no cap
 	Version               string
-	VerifyDir             string // project root where tests are run; empty disables verification
 	Verify                string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
@@ -548,8 +547,8 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.Verify, l.cfg.VerifyDir, l.cfg.Dirs.ProjectDir) == nil {
-		l.logger.Emit(logging.Opts{Level: logging.Warn}, "No ralph:verify script found in %s — add a \"ralph:verify\" script to package.json (or a make ralph-verify target) for test-based verification. Continuing with LLM verification only.", l.cfg.Dirs.ProjectDir)
+	if workDir := l.git.GetWorkDir(); workDir != "" && verify.DetectTestCommand(l.cfg.Verify, workDir) == nil {
+		l.logger.Emit(logging.Opts{Level: logging.Warn}, "No ralph:verify script found in %s — add a \"ralph:verify\" script to package.json (or a make ralph-verify target) for test-based verification. Continuing with LLM verification only.", workDir)
 	}
 
 	if err := l.connectivity.CheckGitHub(ctx); err != nil {

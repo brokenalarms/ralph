@@ -223,7 +223,6 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{

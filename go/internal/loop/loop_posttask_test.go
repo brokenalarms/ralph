@@ -894,7 +894,7 @@ func TestRunPostTask_PassesProjectDir(t *testing.T) {
 
 	runPostTask(context.Background(), runPostTaskParams{
 		postTask:    scriptPath,
-		worktreeDir: worktree,
+		workDir: worktree,
 		projectDir:  project,
 		logger:      logging.New(nil),
 	}, "ralph-test", 0, false)
@@ -923,7 +923,7 @@ func TestRunPostTask_RunsInWorktreeDir(t *testing.T) {
 
 	runPostTask(context.Background(), runPostTaskParams{
 		postTask:    scriptPath,
-		worktreeDir: worktree,
+		workDir: worktree,
 		projectDir:  project,
 		logger:      logging.New(nil),
 	}, "ralph-test", 0, true)
@@ -958,7 +958,7 @@ func TestRunPostTask_ConfigTOMLOverridesPackageJSON(t *testing.T) {
 
 	runPostTask(context.Background(), runPostTaskParams{
 		postTask:    cfgScript,
-		worktreeDir: dir,
+		workDir: dir,
 		projectDir:  dir,
 		logger:      logging.New(nil),
 	}, "ralph-test", 0, false)

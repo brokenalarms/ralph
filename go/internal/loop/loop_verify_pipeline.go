@@ -76,7 +76,7 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	}
 
 	// ── Test fix loop ──
-	testResult, _ := l.verifier.RunTests(p.ctx, l.cfg.VerifyDir)
+	testResult, _ := l.verifier.RunTests(p.ctx, l.git.GetWorkDir())
 	if testResult.ScriptMissing {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "No ralph:verify script — skipping test verification. Add a verify script for stronger guarantees.")
 	} else if !testResult.Passed {
@@ -86,7 +86,7 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	}
 
 	// ── Compile fix loop (post-tests) ──
-	if l.cfg.VerifyDir != "" {
+	if l.git.GetWorkDir() != "" {
 		if !l.runCompileFixLoop(spawn, taskAccept, maxTestFix) {
 			return false, ""
 		}
@@ -101,7 +101,7 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	// ── Final compile check ──
 	// Fix agents spawned during LLM verification may have introduced new
 	// build errors; re-check before accepting the signal.
-	if l.cfg.VerifyDir != "" {
+	if l.git.GetWorkDir() != "" {
 		if !l.runCompileFixLoop(spawn, taskAccept, maxTestFix) {
 			return false, ""
 		}
@@ -130,7 +130,7 @@ func (l *Loop) runTestFixLoop(spawn verifier.FixAgentSpawn, taskAccept, testDeta
 		}
 
 		l.logger.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after test fix agent...")
-		rerun, rerunElapsed := l.verifier.RunTests(spawn.Ctx, l.cfg.VerifyDir)
+		rerun, rerunElapsed := l.verifier.RunTests(spawn.Ctx, l.git.GetWorkDir())
 		if rerun.Passed {
 			l.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", rerunElapsed)
 			return true
@@ -144,7 +144,7 @@ func (l *Loop) runTestFixLoop(spawn verifier.FixAgentSpawn, taskAccept, testDeta
 // fix attempts. Returns true when compilation passes, false when attempts
 // are exhausted.
 func (l *Loop) runCompileFixLoop(spawn verifier.FixAgentSpawn, taskAccept string, maxAttempts int) bool {
-	compileResult := l.verifier.CompileCheck(spawn.Ctx, l.cfg.VerifyDir)
+	compileResult := l.verifier.CompileCheck(spawn.Ctx, l.git.GetWorkDir())
 	if compileResult.Passed {
 		l.logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
 		return true
@@ -167,7 +167,7 @@ func (l *Loop) runCompileFixLoop(spawn verifier.FixAgentSpawn, taskAccept string
 			return false
 		}
 
-		recheck := l.verifier.CompileCheck(spawn.Ctx, l.cfg.VerifyDir)
+		recheck := l.verifier.CompileCheck(spawn.Ctx, l.git.GetWorkDir())
 		if recheck.Passed {
 			l.logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed after fix agent")
 			return true
@@ -228,7 +228,7 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 		// while addressing LLM feedback, verification fails outright (no
 		// retry of the test fix loop here).
 		l.logger.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after fix agent...")
-		testResult, testElapsed := l.verifier.RunTests(p.ctx, l.cfg.VerifyDir)
+		testResult, testElapsed := l.verifier.RunTests(p.ctx, l.git.GetWorkDir())
 		if !testResult.Passed {
 			l.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests failed after fix agent (%s): %s", testElapsed, testResult.Reason)
 			return false, ""
@@ -292,7 +292,7 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 		return ""
 	}
 
-	result := l.verifier.RunPreIterationTests(verifier.PreIterationInput{Ctx: ctx})
+	result := l.verifier.RunPreIterationTests(verifier.PreIterationInput{Ctx: ctx, WorkDir: l.git.GetWorkDir()})
 	if result.TestResult.ScriptMissing {
 		return result.Message
 	}
@@ -313,7 +313,7 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 // runs a commit check, runs the test suite once, and writes last_test_result
 // and last_test_time to state. No fix agents, no LLM verification.
 func (l *Loop) runSimpleVerifyCompletion(ctx context.Context, headBefore string) (bool, string) {
-	if l.cfg.VerifyDir == "" {
+	if l.git.GetWorkDir() == "" {
 		return true, ""
 	}
 
@@ -327,7 +327,7 @@ func (l *Loop) runSimpleVerifyCompletion(ctx context.Context, headBefore string)
 		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits this iteration, but prior-iteration commits found ahead of origin/%s — proceeding", baseBranch)
 	}
 
-	testResult, _ := l.verifier.RunTests(ctx, l.cfg.VerifyDir)
+	testResult, _ := l.verifier.RunTests(ctx, l.git.GetWorkDir())
 	now := time.Now().Format(time.RFC3339)
 	if !testResult.Passed {
 		l.state.Write("last_test_result", "fail")

@@ -40,7 +40,6 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 		}}
 	}
 	return verifier.New(verifier.Config{
-		VerifyDir:             cfg.VerifyDir,
 		ProjectDir:            cfg.Dirs.ProjectDir,
 		ConfigVerify:          cfg.Verify,
 		VerifyModel:           cfg.VerifyModel,
@@ -242,7 +241,9 @@ func setupTestDir(t *testing.T) (string, *state.Store) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 	// Projects must have a ralph:verify script; create a passing Makefile target
-	// so tests with VerifyDir set don't fail at startup or verification.
+	// so the verify gate (which runs in the worktree dir) passes at startup and
+	// verification. Tests that set the stub git WorkDir to a separate dir put
+	// their own Makefile there.
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 	st := state.NewStore(ralphDir)
 	st.Init(5)

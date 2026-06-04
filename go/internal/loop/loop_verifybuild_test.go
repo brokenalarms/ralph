@@ -254,7 +254,6 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyBuild:   scriptPath,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{

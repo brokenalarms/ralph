@@ -406,6 +406,7 @@ func TestLoop_EvolveRestartsAfterMergeFailure(t *testing.T) {
 		TaskBackend:  backend,
 		Logger:       logger,
 		Verifier:     newTestVerifier(t, cfg, logger),
+		VerifyHook:   passingVerifyHook(),
 		Connectivity: onlineStubConnectivity(),
 		PostTaskHook: postTaskHook,
 		BinaryHasher: hasher,

@@ -516,15 +516,11 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 		l.postTaskHook.OnPostTask(ctx, taskID, prNumber, merged)
 		return
 	}
-	worktreeDir := l.cfg.VerifyDir
-	if worktreeDir == "" {
-		worktreeDir = l.cfg.Dirs.WorkDir
-	}
 	runPostTask(ctx, runPostTaskParams{
-		postTask:    l.cfg.PostTask,
-		worktreeDir: worktreeDir,
-		projectDir:  l.cfg.Dirs.ProjectDir,
-		logger:      l.logger,
+		postTask:   l.cfg.PostTask,
+		workDir:    l.git.GetWorkDir(),
+		projectDir: l.cfg.Dirs.ProjectDir,
+		logger:     l.logger,
 	}, taskID, prNumber, merged)
 }
 
@@ -585,7 +581,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
 	buildStatus := runVerifyBuild(ctx, runVerifyBuildParams{
 		verifyBuild: l.cfg.VerifyBuild,
-		worktreeDir: l.cfg.VerifyDir,
+		workDir:     l.git.GetWorkDir(),
 		projectDir:  l.cfg.Dirs.ProjectDir,
 		testTimeout: l.cfg.TestTimeout,
 		logger:      l.logger,

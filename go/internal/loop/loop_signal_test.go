@@ -56,7 +56,6 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	l := New(cfg, Modules{
 		State:       st,
@@ -129,7 +128,6 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	fixAgentCalled := false
 	l := New(cfg, Modules{
@@ -198,7 +196,6 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	llmCalls := 0
 	fixAgentCalled := false
@@ -288,7 +285,6 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	l := New(cfg, Modules{
 		State:       st,

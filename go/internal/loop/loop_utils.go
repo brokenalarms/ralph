@@ -133,7 +133,7 @@ func checkGitHubConnectivity(ctx context.Context) error {
 
 type runVerifyBuildParams struct {
 	verifyBuild string
-	worktreeDir string
+	workDir     string
 	projectDir  string
 	testTimeout time.Duration
 	logger      *logging.Logger
@@ -142,10 +142,10 @@ type runVerifyBuildParams struct {
 // runVerifyBuild executes the verify-build script if configured. Uses the
 // verify_build config/CLI value first; falls back to detecting a
 // ralph:verify-build npm script or ralph-verify-build Makefile target
-// (worktree then project root). Runs in the project directory with a timeout
-// matching the test suite timeout. Returns empty string if the script passes
-// or is not configured. Returns a build failure message (stdout+stderr) if
-// the script exits non-zero.
+// (worktree then project root). Runs in the worktree (the task's working
+// directory) with a timeout matching the test suite timeout. Returns empty
+// string if the script passes or is not configured. Returns a build failure
+// message (stdout+stderr) if the script exits non-zero.
 func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
 	if ctx.Err() != nil {
 		return ""
@@ -156,7 +156,7 @@ func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
 		script = p.verifyBuild
 		p.logger.Emit(logging.Opts{Domain: "build"}, "Using verify_build config: %s", script)
 	} else {
-		tc := verify.DetectVerifyBuild(p.worktreeDir, p.projectDir)
+		tc := verify.DetectVerifyBuild(p.workDir, p.projectDir)
 		if tc != nil {
 			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
 			p.logger.Emit(logging.Opts{Domain: "build"}, "Detected ralph:verify-build script: %s (in %s)", script, tc.Dir)
@@ -168,7 +168,7 @@ func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
 	ctx, cancel := context.WithTimeout(ctx, p.testTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
-	cmd.Dir = p.projectDir
+	cmd.Dir = p.workDir
 	p.logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", script)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -185,10 +185,10 @@ func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
 }
 
 type runPostTaskParams struct {
-	postTask    string
-	worktreeDir string
-	projectDir  string
-	logger      *logging.Logger
+	postTask   string
+	workDir    string
+	projectDir string
+	logger     *logging.Logger
 }
 
 // runPostTask executes the post-task script if configured. Uses the post_task
@@ -200,9 +200,9 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 	var script string
 	if p.postTask != "" {
 		script = p.postTask
-		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Using post_task config: %s (in %s)", script, p.worktreeDir)
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Using post_task config: %s (in %s)", script, p.workDir)
 	} else {
-		tc := verify.DetectPostTask(p.worktreeDir, p.projectDir)
+		tc := verify.DetectPostTask(p.workDir, p.projectDir)
 		if tc != nil {
 			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
 			p.logger.Emit(logging.Opts{Domain: "post-task"}, "Detected ralph:post-task script: %s (in %s)", script, tc.Dir)
@@ -214,7 +214,7 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 	}
 	prStr := strconv.Itoa(prNumber)
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
-	cmd.Dir = p.worktreeDir
+	cmd.Dir = p.workDir
 	cmd.Env = append(os.Environ(),
 		"RALPH_TASK_ID="+taskID,
 		"RALPH_PR_NUMBER="+prStr,

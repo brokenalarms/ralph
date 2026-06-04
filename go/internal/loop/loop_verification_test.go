@@ -180,9 +180,9 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	}
 }
 
-// Verifies that the default behavior (no VerifyDir set, no verifyFunc)
-// allows tasks to close without verification, preserving backwards
-// compatibility for projects that opt out.
+// Verifies the default fallback path (no verify hook): a signalled task runs
+// through the simple verify-completion path and closes when the worktree's
+// verify gate is satisfied.
 func TestLoop_NoVerificationByDefault(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -426,6 +426,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		TaskBackend:  backend,
 		Logger:       logger,
 		Verifier:     newTestVerifier(t, cfg, logger),
+		VerifyHook:   passingVerifyHook(),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -552,6 +553,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		TaskBackend:  backend,
 		Logger:       logger,
 		Verifier:     newTestVerifier(t, cfg, logger),
+		VerifyHook:   passingVerifyHook(),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -614,6 +616,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		TaskBackend:  backend,
 		Logger:       logger,
 		Verifier:     newTestVerifier(t, cfg, logger),
+		VerifyHook:   passingVerifyHook(),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -681,6 +684,7 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		TaskBackend:  backend,
 		Logger:       logger,
 		Verifier:     newTestVerifier(t, cfg, logger),
+		VerifyHook:   passingVerifyHook(),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -739,7 +743,6 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		VerifyDir:     dir,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -873,7 +876,6 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				},
 				MaxIterations: 1,
 				CallsPerHour:  80,
-				VerifyDir:     dir,
 			}
 			reply := tt.queryReply
 			l := New(cfg, Modules{
@@ -937,7 +939,6 @@ func TestRun_ConfigVerifyBypassesStartupGate(t *testing.T) {
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
-		VerifyDir:     dir,
 		Verify:        "true",
 		MaxIterations: 1,
 		CallsPerHour:  80,
