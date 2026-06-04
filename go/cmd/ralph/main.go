@@ -209,7 +209,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	// it exposes stateless operations that Loop orchestrates. See
 	// internal/verifier/verifier.go for the rationale.
 	vrf := verifier.New(verifier.Config{
-		VerifyDir:             dirs.WorkDir,
 		ProjectDir:            dirs.ProjectDir,
 		ConfigVerify:          cfg.Verify,
 		VerifyModel:           cfg.VerifyModel,
@@ -249,7 +248,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		AgentEscalationModel:     cfg.AgentEscalationModel,
 		ModelCap:                 modelCap(cfg),
 		Version:                  config.Version,
-		VerifyDir:                dirs.WorkDir,
 		VerifyModel:              cfg.VerifyModel,
 		VerifyEscalationModel:    cfg.VerifyEscalationModel,
 		FixModel:                 cfg.FixModel,

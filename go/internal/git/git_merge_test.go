@@ -403,23 +403,6 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
 	}
 }
 
-// AutoMergeCurrentBranch returns nil when WorkDir equals ProjectDir,
-// avoiding merging from the project dir itself.
-func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
-	repo := newRepoForTest(
-		Config{WorkDir: "/some/dir", ProjectDir: "/some/dir", BaseBranch: "main", Logger: &testLog{}},
-		nil,
-		withWorktreeBranch("ralph/project/01-some-task"),
-	)
-	merged, err := repo.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
-	}
-	if merged {
-		t.Error("expected merged=false when WorkDir == ProjectDir")
-	}
-}
-
 // AutoMergeCurrentBranch returns 0 and logs "No PR found" when no PR
 // exists for the branch, so an unpushed branch doesn't cause a failure.
 func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
