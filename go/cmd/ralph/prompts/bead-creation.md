@@ -292,6 +292,31 @@ Act based on what you find:
   dependency instead.
 - **Open** → modify freely.
 
+### Claim a bead before you work it yourself
+
+Before starting hands-on work on a bead — fixing it directly, or implementing a
+bead you just created — claim it so the autonomous loop cannot pick it up and
+duplicate your work. The loop polls `bd ready` continuously; an unclaimed open
+bead WILL be selected and worked in parallel, producing two implementations of
+the same task. (Real incident: a hand-authored fix and the loop's fix for the
+same bead collided, and one PR had to be discarded.)
+
+1. **Confirm it is free.** `bd show <id>` status = open, and `bd state <id>
+   phase` ≠ implementing. If the loop already holds it (status=in_progress or
+   phase=implementing), do NOT start — it is being worked right now. Pick a
+   different bead or coordinate with the user.
+2. **Claim it.** `bd update <id> --claim` (sets status=in_progress). A claimed
+   bead is excluded from `bd ready`, so the loop will not select it. This is the
+   only reliable guard: `phase` is advisory and is NOT honored by loop
+   selection; `status=in_progress` (via `--claim`) is what `bd ready` actually
+   excludes.
+3. **Release on abandon.** If you stop the work without merging, set it back:
+   `bd update <id> --status=open` so the loop can pick it up later.
+
+Never create a bead and then implement it yourself without claiming it first.
+This applies to every actor that shares the backend with the loop — the same
+check-then-claim sequence the loop itself should run on pickup.
+
 ### Referencing beads
 
 Before citing any bead as "this will be fixed by ralph-xyz", always verify

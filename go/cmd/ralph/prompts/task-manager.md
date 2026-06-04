@@ -63,7 +63,11 @@ first real message normally. Do not wait for an answer before continuing.
 Switch to this mode when the user explicitly asks you to fix something, or when
 an issue blocks the ralph loop from running at all. In this mode:
 
+- **Claim the bead first** (`bd update <id> --claim`) if the work corresponds to
+  a bead, so the loop does not pick it up and duplicate your work. See "Claim a
+  bead before you work it yourself" for the full check-then-claim sequence.
 - Read code, make targeted fixes, run tests, commit
+- Release the bead (`bd update <id> --status=open`) if you abandon it unmerged
 - Return to light triage mode when the fix is done
 
 ### Architectural refactoring
