@@ -204,6 +204,12 @@ func (b *BD) Init() error {
 		log.Printf("bd: ensureBackupGitPushDisabled: %v", err)
 	}
 
+	// Disable export git-add: the export path lives under .beads (gitignored),
+	// so every git add attempt fails. Dolt is the real sync backend.
+	if err := b.ensureExportGitAddDisabled(); err != nil {
+		log.Printf("bd: ensureExportGitAddDisabled: %v", err)
+	}
+
 	// Pin dolt.port and export.path so they survive reboots and export tasks.
 	if err := b.ensureDoltPort(); err != nil {
 		log.Printf("bd: ensureDoltPort: %v", err)
@@ -296,6 +302,18 @@ func (b *BD) ensureBackupGitPushDisabled() error {
 		return nil
 	}
 	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "backup.git-push", "false")
+	return err
+}
+
+func (b *BD) ensureExportGitAddDisabled() error {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "config", "get", "export.git-add")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) == "false" {
+		return nil
+	}
+	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "export.git-add", "false")
 	return err
 }
 
