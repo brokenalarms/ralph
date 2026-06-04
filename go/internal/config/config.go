@@ -81,6 +81,10 @@ type Config struct {
 	ConnectivityCheckTimeout time.Duration
 	InternetRestoreInterval  time.Duration
 
+	// AgentHeartbeatInterval emits an "Agent still working" line when the
+	// agent produces no visible output for this duration. Zero disables.
+	AgentHeartbeatInterval time.Duration
+
 	// AdminMergeOnCIInfraFailure enables admin-bypass of branch protection when
 	// CI failure is classified as infrastructure-only (zero job steps). Has no
 	// effect on real test failures.

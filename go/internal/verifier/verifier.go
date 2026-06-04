@@ -62,8 +62,9 @@ type Config struct {
 	ModelCap              string // maximum model tier ceiling from --model flag; empty means no cap
 	PromptsDir            string
 	RalphDir              string
-	IdleTimeout           time.Duration
-	FixMaxRunDuration     time.Duration
+	IdleTimeout            time.Duration
+	AgentHeartbeatInterval time.Duration
+	FixMaxRunDuration      time.Duration
 	TestTimeout           time.Duration
 	CompileCheckTimeout   time.Duration
 
@@ -555,9 +556,10 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 		Prompt:       prompt,
 		RawLog:       rawLogPath,
 		Signals:      v.cfg.Signals,
-		PollInterval:   2 * time.Second,
-		IdleTimeout:    v.cfg.IdleTimeout,
-		MaxRunDuration: v.cfg.FixMaxRunDuration,
+		PollInterval:           2 * time.Second,
+		IdleTimeout:            v.cfg.IdleTimeout,
+		AgentHeartbeatInterval: v.cfg.AgentHeartbeatInterval,
+		MaxRunDuration:         v.cfg.FixMaxRunDuration,
 		Model:          model,
 	})
 
