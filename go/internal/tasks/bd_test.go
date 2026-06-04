@@ -1861,6 +1861,98 @@ func TestBD_EnsureBackupGitPushDisabled_NoOpWhenAlreadySet(t *testing.T) {
 	}
 }
 
+// Proves: ensureExportGitAddDisabled sets export.git-add=false when key is unset.
+func TestBD_EnsureExportGitAddDisabled_SetsWhenUnset(t *testing.T) {
+	var setCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.git-add" {
+			return "export.git-add is not set in config.yaml", nil
+		}
+		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "export.git-add" && args[3] == "false" {
+			setCalled = true
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureExportGitAddDisabled()
+	if !setCalled {
+		t.Error("expected bd config set export.git-add false to be called when key is unset")
+	}
+}
+
+// Proves: ensureExportGitAddDisabled sets export.git-add=false when current value is true.
+func TestBD_EnsureExportGitAddDisabled_SetsWhenTrue(t *testing.T) {
+	var setCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.git-add" {
+			return "true", nil
+		}
+		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "export.git-add" && args[3] == "false" {
+			setCalled = true
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureExportGitAddDisabled()
+	if !setCalled {
+		t.Error("expected bd config set export.git-add false to be called when current value is true")
+	}
+}
+
+// Proves: ensureExportGitAddDisabled is a no-op when export.git-add is already false.
+func TestBD_EnsureExportGitAddDisabled_NoOpWhenFalse(t *testing.T) {
+	var setCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.git-add" {
+			return "false", nil
+		}
+		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "export.git-add" {
+			setCalled = true
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.ensureExportGitAddDisabled()
+	if setCalled {
+		t.Error("expected bd config set export.git-add NOT to be called when already false")
+	}
+}
+
+// Proves: Init calls ensureExportGitAddDisabled — a fake runner that tracks
+// config get/set for export.git-add confirms the call is issued on Init.
+func TestBD_Init_CallsEnsureExportGitAddDisabled(t *testing.T) {
+	var exportGitAddSetCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch args[0] {
+		case "count":
+			return "1", nil
+		case "config":
+			if len(args) >= 3 && args[1] == "get" && args[2] == "export.git-add" {
+				return "export.git-add is not set in config.yaml", nil
+			}
+			if len(args) >= 4 && args[1] == "set" && args[2] == "export.git-add" && args[3] == "false" {
+				exportGitAddSetCalled = true
+				return "", nil
+			}
+			_ = joined
+			return "not set in config.yaml", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	os.MkdirAll(filepath.Join(b.ProjectDir, ".beads"), 0755)
+	if err := b.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	if !exportGitAddSetCalled {
+		t.Error("Init must call ensureExportGitAddDisabled and issue config set export.git-add false when unset")
+	}
+}
+
 // Proves: IsReady returns true when all deps are closed.
 func TestBD_IsReady_AllDepsClosed(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
