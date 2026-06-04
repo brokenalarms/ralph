@@ -73,6 +73,10 @@ type RunConfig struct {
 	// If nil, signals are always accepted (legacy behavior).
 	OnSignal func(summary string) bool
 
+	// AgentHeartbeatInterval emits an "Agent still working" line when the
+	// agent produces no visible output for this duration. Zero disables.
+	AgentHeartbeatInterval time.Duration
+
 	// FeedbackFile is the path where the orchestrator writes feedback for
 	// the agent to read. Used to send test failure output back to the agent.
 	FeedbackFile string
@@ -540,6 +544,7 @@ func parseSystemStatusEvent(line string) string {
 // newLinesScan holds results from scanning newly appended raw log lines.
 type newLinesScan struct {
 	hasActivity             bool
+	lastText                string // last human-readable non-verbose-only line extracted this scan
 	isCompacting            bool
 	rlThrottled             bool
 	rlResetAt               time.Time
@@ -598,6 +603,9 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 		*lastOffset += int64(len(line)) + 1 // +1 for '\n'
 		if !result.hasActivity && isContentActivity(line) {
 			result.hasActivity = true
+		}
+		if text := extractStreamText(line); text != "" && !isVerboseOnlyLine(text) {
+			result.lastText = text
 		}
 		resetAt, throttled, warning, isUsingOverage, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
 		if ok {
@@ -658,8 +666,26 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	allowedTransitionLogged := false
 	nowOverageLogged := false
 	lastActivity := time.Now()
+	lastEmit := time.Now()
+	var latestText string
 	runStart := time.Now()
 	processDone := make(chan struct{})
+
+	// Clamp heartbeat to be shorter than the most restrictive idle timeout
+	// so a heartbeat always precedes any idle-timeout kill.
+	heartbeatInterval := cfg.AgentHeartbeatInterval
+	if heartbeatInterval > 0 && cfg.IdleTimeout > 0 {
+		minIdleTimeout := cfg.IdleTimeout
+		if cfg.IdleTimeoutProgress > 0 && cfg.IdleTimeoutProgress < minIdleTimeout {
+			minIdleTimeout = cfg.IdleTimeoutProgress
+		}
+		if heartbeatInterval >= minIdleTimeout {
+			heartbeatInterval = minIdleTimeout * 3 / 4
+			if heartbeatInterval < cfg.PollInterval {
+				heartbeatInterval = cfg.PollInterval
+			}
+		}
+	}
 
 	// Seed the log offset so we only scan lines written during this session.
 	var logOffset int64
@@ -711,7 +737,11 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				scan := scanNewLines(cfg.RawLog, &logOffset)
 				if scan.hasActivity {
 					lastActivity = time.Now()
+					lastEmit = time.Now()
 					activitySeen = true
+				}
+				if scan.lastText != "" {
+					latestText = scan.lastText
 				}
 				for _, status := range scan.statusEvents {
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model},
@@ -849,6 +879,17 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					TaskDesc:       readFirstLine(cfg.Signals.CurrentTask),
 					Summary:        summary,
 				}
+			}
+
+			// Emit heartbeat when agent has been quiet longer than heartbeatInterval.
+			if heartbeatInterval > 0 && time.Since(lastEmit) >= heartbeatInterval {
+				elapsed := time.Since(runStart).Truncate(time.Second)
+				msg := fmt.Sprintf("Agent still working (%s elapsed)", elapsed)
+				if latestText != "" {
+					msg += ": " + latestText
+				}
+				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "%s", msg)
+				lastEmit = time.Now()
 			}
 
 			// Check idle timeout.

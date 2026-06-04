@@ -2569,3 +2569,91 @@ func TestBuildAgentEnv_NoVenv(t *testing.T) {
 		t.Errorf("expected nil env when no .venv/bin exists, got %v", env)
 	}
 }
+
+// Verifies that when an agent produces no visible output for longer than
+// AgentHeartbeatInterval, the poll loop emits a "still working" heartbeat
+// line that includes the last human-readable text seen from the agent.
+func TestPoll_HeartbeatEmittedDuringQuietRun(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Write an agent text line shortly after poll starts (simulates agent output),
+	// then go quiet for longer than the heartbeat interval before completing.
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"Investigating the bug"}}`)
+		f.Close()
+		// Quiet for 300ms (> 100ms heartbeat interval) before signaling completion.
+		time.Sleep(300 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:                dir,
+		RalphDir:               dir,
+		Prompt:                 "echo test",
+		RawLog:                 rawLog,
+		Signals:                signals,
+		PollInterval:           50 * time.Millisecond,
+		AgentHeartbeatInterval: 100 * time.Millisecond,
+	}
+
+	runWithCommand(t, &runner, cfg, "sleep", "1")
+
+	var found bool
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Agent still working") && strings.Contains(msg, "Investigating the bug") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected heartbeat log with last text, logs were: %v", log.logs)
+	}
+}
+
+// Verifies that the heartbeat does not fire while the agent is actively
+// producing output — the timer resets on each activity scan.
+func TestPoll_NoHeartbeatDuringActiveOutput(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Write activity every 40ms (faster than the 120ms heartbeat interval),
+	// then complete. The heartbeat should never fire.
+	go func() {
+		for i := 0; i < 8; i++ {
+			time.Sleep(40 * time.Millisecond)
+			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"working"}}`)
+			f.Close()
+		}
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:                dir,
+		RalphDir:               dir,
+		Prompt:                 "echo test",
+		RawLog:                 rawLog,
+		Signals:                signals,
+		PollInterval:           50 * time.Millisecond,
+		AgentHeartbeatInterval: 120 * time.Millisecond,
+	}
+
+	runWithCommand(t, &runner, cfg, "sleep", "1")
+
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Agent still working") {
+			t.Errorf("unexpected heartbeat during active output: %s", msg)
+		}
+	}
+}

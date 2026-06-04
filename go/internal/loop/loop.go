@@ -182,6 +182,8 @@ type Config struct {
 	ConnectivityCheckTimeout time.Duration
 	InternetRestoreInterval  time.Duration
 
+	AgentHeartbeatInterval time.Duration
+
 	// ShipRetryBackoffs overrides the default retry delays for transient GitHub
 	// errors (default: 5s, 15s, 30s). Set to zero-duration slices in tests to
 	// avoid sleeping.
@@ -484,9 +486,10 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 		Model:               agentModel,
 		Signals:             l.signals,
 		PollInterval:        2 * time.Second,
-		IdleTimeout:         l.cfg.IdleTimeout,
-		IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
-		MaxRunDuration:      l.cfg.MaxRunDuration,
+		IdleTimeout:            l.cfg.IdleTimeout,
+		IdleTimeoutProgress:    l.cfg.IdleTimeoutProgress,
+		MaxRunDuration:         l.cfg.MaxRunDuration,
+		AgentHeartbeatInterval: l.cfg.AgentHeartbeatInterval,
 		OnSignal: func(summary string) bool {
 			// Stop the main runner before spawning fix-agent subprocesses
 			// inside runVerifyPipeline. The main agent session is wrapping

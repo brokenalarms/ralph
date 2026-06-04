@@ -601,6 +601,22 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.FixEscalationModel },
 	},
 	{
+		Help:      "Emit 'Agent still working' heartbeat at this interval during quiet agent runs (0 disables)",
+		Default:   "60s",
+		EnvVar:    "RALPH_AGENT_HEARTBEAT_INTERVAL",
+		ConfigKey: "agent_heartbeat_interval",
+		Kind:      KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.AgentHeartbeatInterval = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.AgentHeartbeatInterval.String() },
+	},
+	{
 		Help:      "Days to retain session logs in the stable log directory (0 = keep forever)",
 		Default:   "30",
 		ConfigKey: "log_retention_days",
