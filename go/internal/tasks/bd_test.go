@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/config"
 )
 
 // mockBD builds a CommandRunner that dispatches on bd subcommands.
@@ -1572,8 +1574,9 @@ func TestDefaultRunBD_NoLogPathSkipsWrite(t *testing.T) {
 	}
 }
 
-// Proves: ClaimTask calls bd update <id> --claim to set status=in_progress.
-func TestBD_ClaimTask_CallsUpdateClaim(t *testing.T) {
+// Proves: ClaimTask explicitly sets status=in_progress and pins the bead to the
+// loop's assignee (ralph-loop) — no reliance on --claim or BEADS_ACTOR.
+func TestBD_ClaimTask_SetsStatusAndPinsAssignee(t *testing.T) {
 	var capturedArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "update" {
@@ -1590,8 +1593,14 @@ func TestBD_ClaimTask_CallsUpdateClaim(t *testing.T) {
 		t.Fatal("expected update to be called")
 	}
 	joined := strings.Join(capturedArgs, " ")
-	if !strings.Contains(joined, "--claim") {
-		t.Errorf("expected --claim in update args, got: %v", capturedArgs)
+	if !strings.Contains(joined, "--status=in_progress") {
+		t.Errorf("expected --status=in_progress in update args, got: %v", capturedArgs)
+	}
+	if !strings.Contains(joined, "--assignee="+config.LoopAssignee) {
+		t.Errorf("expected --assignee=%s in update args, got: %v", config.LoopAssignee, capturedArgs)
+	}
+	if strings.Contains(joined, "--claim") {
+		t.Errorf("must not use --claim (implicit actor-based assignment), got: %v", capturedArgs)
 	}
 	if !strings.Contains(joined, "ralph-abc") {
 		t.Errorf("expected task ID in update args, got: %v", capturedArgs)
@@ -1625,7 +1634,7 @@ func TestBD_ClaimTask_ClaimedTaskExcludedFromGetNextIssue(t *testing.T) {
 		}
 		switch args[0] {
 		case "update":
-			if len(args) >= 3 && args[2] == "--claim" {
+			if strings.Contains(strings.Join(args, " "), "--status=in_progress") {
 				claimed = true
 				return "", nil
 			}

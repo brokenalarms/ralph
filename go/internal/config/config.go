@@ -23,6 +23,17 @@ const (
 	ModelOpus   = "opus"
 )
 
+// Bead assignee identities — the single source of truth for bead ownership.
+// The autonomous loop works ONLY beads assigned to LoopAssignee (its inbox) and
+// claims them explicitly as such. The task manager creates beads owned by
+// TaskAssignee (hidden from the loop) and releases them to the loop with
+// `bd update <id> --assignee=ralph-loop` once settled. The task-manager prompt
+// must use these same literal strings.
+const (
+	LoopAssignee = "ralph-loop"
+	TaskAssignee = "ralph-task"
+)
+
 // Config holds all CLI configuration matching ralph.sh's flag interface.
 type Config struct {
 	ProjectDir                 string

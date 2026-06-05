@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/config"
 )
 
 // ErrNeedsFallback signals that the bd backend is unavailable.
@@ -415,13 +417,17 @@ var bdReadyExcludeTypeArg = "--exclude-type=" + strings.Join(nonExecutableBDType
 
 // getNextIssue returns the highest-priority issue to work on. If a resume
 // task ID is set and that task is still open/in_progress, it is returned
-// directly. Otherwise falls through to bd ready.
+// directly. Otherwise falls through to bd ready, scoped to the loop's inbox
+// (assignee=config.LoopAssignee). A bead is invisible to the loop until
+// something explicitly hands it off with `bd update <id> --assignee=ralph-loop`,
+// which closes the create→pickup race: a freshly created (unassigned, or
+// task-manager-owned) bead is never in the inbox to be grabbed mid-triage.
 func (b *BD) getNextIssue() (bdIssue, error) {
 	if issue, ok := b.resumeTask(); ok {
 		return issue, nil
 	}
 
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg)
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--assignee="+config.LoopAssignee)
 	if err != nil {
 		return bdIssue{}, nil
 	}
@@ -618,7 +624,11 @@ func (b *BD) ClaimTask(id string) error {
 	if id == "" {
 		return nil
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--claim")
+	// Mark in-progress and pin ownership explicitly at the call site — no
+	// reliance on BEADS_ACTOR or `--claim`'s implicit "assign to you". Setting
+	// --assignee=ralph-loop keeps the bead in the loop's own inbox so a later
+	// skip→reopen stays selectable by `bd ready --assignee=ralph-loop`.
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--assignee="+config.LoopAssignee, "--status=in_progress")
 	return err
 }
 
