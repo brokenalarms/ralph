@@ -59,6 +59,11 @@ type Backend interface {
 	// open/in_progress, it is returned by GetNextTaskInfo.
 	SetResumeTaskID(id string)
 
+	// ClaimTask sets a task to status=in_progress via the canonical beads
+	// claim mechanism (bd update <id> --claim), removing it from bd ready
+	// so no other actor can select it concurrently.
+	ClaimTask(id string) error
+
 	// ReopenTask sets an in-progress task back to open status so it
 	// returns to the ready queue.
 	ReopenTask(id string) error

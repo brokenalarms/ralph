@@ -614,6 +614,14 @@ func ParseDependencyBlock(err error) []string {
 	return strings.Fields(m[1])
 }
 
+func (b *BD) ClaimTask(id string) error {
+	if id == "" {
+		return nil
+	}
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--claim")
+	return err
+}
+
 func (b *BD) ReopenTask(id string) error {
 	if id == "" {
 		return nil
