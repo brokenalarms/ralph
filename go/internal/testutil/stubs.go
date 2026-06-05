@@ -43,6 +43,7 @@ func (s *StubBackend) GetNextTaskInfo() (tasks.TaskInfo, error) {
 }
 func (s *StubBackend) HasTasks() (bool, error)        { return s.Total > 0, nil }
 func (s *StubBackend) CloseTask(string, string) error { return nil }
+func (s *StubBackend) ClaimTask(string) error         { return nil }
 func (s *StubBackend) SkipTask(id, reason string) error {
 	s.SkippedTask = id
 	s.SkipReason = reason

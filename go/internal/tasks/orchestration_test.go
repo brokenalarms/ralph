@@ -21,6 +21,7 @@ func (b *minimalBackend) GetNextTaskID() (string, error)            { return "",
 func (b *minimalBackend) GetNextTaskInfo() (TaskInfo, error)        { return b.nextInfo, nil }
 func (b *minimalBackend) HasTasks() (bool, error)                   { return false, nil }
 func (b *minimalBackend) CloseTask(string, string) error            { return nil }
+func (b *minimalBackend) ClaimTask(string) error                    { return nil }
 func (b *minimalBackend) SkipTask(string, string) error             { return nil }
 func (b *minimalBackend) ReopenTask(string) error                   { return nil }
 func (b *minimalBackend) SetState(_, _, _, _ string) error          { return nil }

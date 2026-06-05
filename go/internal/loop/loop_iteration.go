@@ -573,6 +573,11 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	if taskID != "" {
+		if err := l.taskBackend.ClaimTask(taskID); err != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ClaimTask %s: %v", taskID, err)
+		} else {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → in_progress (claimed)", taskID)
+		}
 		if err := l.taskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=implementing: %v", err)
 		}
