@@ -63,6 +63,11 @@ first real message normally. Do not wait for an answer before continuing.
 Switch to this mode when the user explicitly asks you to fix something, or when
 an issue blocks the ralph loop from running at all. In this mode:
 
+- **Keep the bead owned** — if the work corresponds to a bead, it must be
+  assigned to `ralph-task` (never released to `ralph-loop`), so the loop can't
+  pick it up and duplicate your work. Create it owned (`bd create -a=ralph-task`)
+  or, for a bead you're taking over, confirm it isn't already the loop's. See
+  "Bead ownership: create owned, release to the loop."
 - Read code, make targeted fixes, run tests, commit
 - Return to light triage mode when the fix is done
 

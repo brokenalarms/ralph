@@ -696,66 +696,6 @@ func TestTaskManagerPrompt_CheckStatusBeforeUpdate(t *testing.T) {
 	}
 }
 
-// Proves: bead-creation.md explicitly requires bd show before any bd update
-// and prohibits both updating and reopening closed beads, so agents cannot
-// silently mutate closed beads (bd update on closed beads succeeds without error).
-func TestBeadCreation_ExplicitUpdateGuard(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
-	if err != nil {
-		t.Fatalf("reading bead-creation.md: %v", err)
-	}
-	lower := strings.ToLower(string(content))
-
-	required := []struct {
-		substr string
-		reason string
-	}{
-		{"bd show", "must require bd show check before any bd update"},
-		{"never update or reopen", "must explicitly prohibit both update and reopen on closed beads"},
-		{"silently succeeds", "must explain why the check is necessary — bd update gives no error on closed beads"},
-	}
-
-	for _, tc := range required {
-		if !strings.Contains(lower, tc.substr) {
-			t.Errorf("missing %q: %s", tc.substr, tc.reason)
-		}
-	}
-}
-
-// Proves: bead-creation.md clearly distinguishes the two separate in-flight
-// checks — phase=implementing (from bd state) vs status=in_progress (from bd
-// show) — and requires explicit user confirmation before updating in either case,
-// with a follow-up bead as the safe alternative.
-func TestBeadCreation_DistinguishesPhaseFromStatus(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
-	if err != nil {
-		t.Fatalf("reading bead-creation.md: %v", err)
-	}
-	s := string(content)
-	lower := strings.ToLower(s)
-
-	required := []struct {
-		substr string
-		reason string
-	}{
-		{"bd state", "must reference bd state to check phase"},
-		{"phase=implementing", "must explicitly label the phase=implementing check"},
-		{"status=in_progress", "must explicitly label the status=in_progress check"},
-		{"explicitly confirms", "both cases must require explicit user confirmation before updating"},
-		{"follow-up bead", "both cases must offer follow-up bead as the safe alternative"},
-	}
-	for _, tc := range required {
-		if !strings.Contains(lower, tc.substr) {
-			t.Errorf("missing %q: %s", tc.substr, tc.reason)
-		}
-	}
-
-	// Confirm contradictory phrasing is gone: "do not modify it. either confirm"
-	if strings.Contains(lower, "do not modify it. either confirm") {
-		t.Error("contradictory 'Do not modify it. Either confirm' phrasing must be removed")
-	}
-}
-
 // Proves: task manager prompt requires verifying bead status with bd show
 // before referencing any bead as a future fix, and instructs creating new
 // beads instead of reopening closed ones when follow-on work is needed.

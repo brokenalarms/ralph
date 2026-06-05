@@ -160,41 +160,34 @@ Then **wait for the user's response** before moving on:
   priority, labels, type), echo the updated summary, and confirm again
 - **"expand"** → show the full untruncated description
 
-### Dependencies must be set at `bd create` time — never trailed afterward
+### Dependencies must be correct before you release beads to the loop
 
-When creating a chain or graph of related beads, dependencies MUST be passed
-via `--deps` on the `bd create` call itself. **Never** create the beads first
-and then add dependencies with `bd dep add` afterward — this opens a race
-window where every bead is briefly visible to `bd ready` as unblocked, and
-the loop polls continuously. If `bd ready` snapshots the chain during that
-window, it will pick a downstream bead and start working it before the
-upstream work exists.
+Because beads are created owned by `ralph-task` (see "Bead ownership"), they are
+invisible to the loop until released — so there is NO race during creation, and
+you may wire dependencies with `bd dep add` after creating the beads. What
+matters is that the dependency graph is correct **before** you assign any bead
+to `ralph-loop`. The loop's inbox (`bd ready --assignee=ralph-loop`) excludes
+blocked beads, so a downstream bead released with its dependency edges in place
+will not be worked until its blockers close.
 
 The rules:
 
-1. **Create in canonical execution order.** The first bead to be worked is
-   created first, then each subsequent bead with `--deps <previous-id>` on
-   its own `bd create` call. Never create the whole chain unblocked and then
-   thread deps in afterward.
-2. **Every non-root bead in a chain MUST have `--deps` on its create call.**
-   If a bead in a multi-bead plan has no `--deps` flag, that is a bug — the
-   bead is born ready and the loop may start it out of order.
-3. **`bd dep add` is for retrofitting deps onto pre-existing open beads only**
-   (e.g. when a new bead is discovered that should block an existing one).
-   It is NOT a substitute for `--deps` during chain creation. Using it for
-   chain creation is the race-window failure mode described above.
-4. **Graphs with multiple parents:** `--deps` accepts a comma-separated list
-   (`--deps=ralph-aaa,ralph-bbb`) — use that for fan-in. Still no trailing
-   `bd dep add`.
+1. **Wire the whole graph before releasing any node.** Create the beads (owned),
+   add every dependency edge, then release. A bead released without its blocking
+   deps in place is born ready in the loop's inbox and may be worked out of order.
+2. **`--deps` at create OR `bd dep add` before release are both fine** — the
+   owned phase removes the race that previously forced deps onto the create call.
+   Pass `--deps <id>` at create when the upstream id is already known; use
+   `bd dep add` while iterating when it isn't.
+3. **Release roots first, or release the whole wired graph at once** — either is
+   safe once the edges exist, because blocked beads stay out of the loop's inbox
+   until their upstreams close.
+4. **Graphs with multiple parents:** `--deps=ralph-aaa,ralph-bbb` or repeated
+   `bd dep add` — wire all edges before release.
 
-When the user approves a multi-bead plan, before issuing any `bd create`,
-write out the execution order and the dep edges explicitly so it is obvious
-which `--deps` flag goes on which create. Then execute the creates strictly
-in that order, each with its `--deps` baked in.
-
-The architecture-echo confirmation step (see above) must include this
-ordering and the `--deps` edges for any multi-bead plan, so the user signs
-off on the chain shape before any race window can open.
+The architecture-echo confirmation step (see above) must include the execution
+order and dependency edges for any multi-bead plan, so the user signs off on the
+chain shape before you release it to the loop.
 
 Reference functions and behaviors in bead descriptions, not line numbers.
 Lines shift between bead creation and agent execution — a reference like
@@ -272,25 +265,57 @@ Never show the raw bd command — only the echo-back.
 
 ### Updating beads
 
-Before any `bd update`, run two checks:
+Before any `bd update`, check the canonical `status` first, then ralph's
+`phase` for finer detail. `status` is the idiomatic beads ownership signal —
+it is what `bd ready` and other tooling respect; `phase` is a custom
+state dimension ralph layers on top, so it is supplementary, never a
+substitute for `status`.
 
-1. `bd show <id>` — verify the bead is not closed. `bd update` on a closed bead silently succeeds — there is no error to catch.
-2. `bd state <id> phase` — check whether the loop is actively working on it. A bead may still show `open` in `bd show` while `phase=implementing` — the phase field is the authoritative in-flight indicator.
+1. `bd show <id>` — read **`status`**:
+   - **closed** → never update or reopen. `bd update` on a closed bead silently
+     succeeds (no error to catch), so this check matters. Create a new bead
+     referencing the original instead — whether the fix was wrong, incomplete,
+     or follow-on work is needed.
+   - **in_progress** → claimed / being worked. Do not update without explicit
+     user confirmation; if unsure, create a follow-up bead with a dependency.
+   - **open** → free to modify, unless `phase` says otherwise (below).
+2. `bd state <id> phase` — ralph's sub-lifecycle *within* a worked task:
+   `implementing` = an agent is mid-iteration right now; `verified` = passed
+   verification, awaiting close.
 
-Act based on what you find:
+Treat **either** `status=in_progress` **or** `phase=implementing` as
+hands-off — both mean the bead is being worked, and a bead can show
+`status=open` while `phase=implementing`. But rely on `status` wherever it
+is the idiomatic signal: only `status=in_progress` (a claim) removes a bead
+from `bd ready`, so it is `status`, not `phase`, that decides whether the
+loop can still pick the bead up.
 
-- **Closed** (`bd show` status = closed) → never update or reopen closed beads.
-  Create a new bead and reference the original. This applies whether the fix
-  was wrong, incomplete, or follow-on work is needed.
-- **phase=implementing** (`bd state <id> phase` = implementing) → a loop agent
-  is actively working on this bead right now. Do not update it unless the user
-  explicitly confirms the change should go into the active iteration. If there
-  is any doubt, create a follow-up bead with a dependency on this one instead.
-- **status=in_progress** (`bd show` status = in_progress, phase ≠ implementing)
-  → the bead is claimed but no agent is mid-iteration. Do not update it without
-  explicit user confirmation. If unsure, create a follow-up bead with a
-  dependency instead.
-- **Open** → modify freely.
+### Bead ownership: create owned, release to the loop
+
+The autonomous loop works ONLY beads assigned to it (`ralph-loop` — its inbox).
+A bead is invisible to the loop until you explicitly hand it off, which closes
+the create→pickup race by construction: a freshly created bead is never in the
+loop's inbox, so the loop cannot grab it mid-triage no matter how fast it polls.
+(Real incident: a hand-authored fix and the loop's fix for the same bead
+collided and one PR had to be discarded — this model prevents it.)
+
+1. **Create owned, atomically.** Always create with your own assignee:
+   `bd create -a=ralph-task …`. The bead is born owned by you and hidden from
+   the loop. NEVER create-then-claim — the gap between the two commands is the
+   race. Atomic `-a` on create is the only safe way.
+2. **Iterate freely.** Add deps, split, refine, echo for review — all safe,
+   because the bead isn't `ralph-loop`-assigned, so the loop can't see it.
+3. **Release = hand off.** Once the bead is settled and its deps are confirmed,
+   assign it to the loop: `bd update <id> -a=ralph-loop`. This is the real
+   commit point — the echo-back confirmation gates THIS step, not the create.
+4. **Release is one-way.** Once a bead is the loop's, treat it as gone. If
+   follow-on work is needed, file a NEW bead — NEVER reclaim a released bead.
+   Reclaiming is the duplicate-work race in the other direction: you'd be
+   fighting the loop for a bead it already owns.
+
+**Self-work stays owned.** If you will do the bead yourself (hands-on fix),
+leave it assigned to `ralph-task` and never release it — do the work, ship the
+PR, and it closes on merge. No race, because it was never in the loop's inbox.
 
 ### Referencing beads
 
