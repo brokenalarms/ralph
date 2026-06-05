@@ -272,25 +272,30 @@ Never show the raw bd command — only the echo-back.
 
 ### Updating beads
 
-Before any `bd update`, run two checks:
+Before any `bd update`, check the canonical `status` first, then ralph's
+`phase` for finer detail. `status` is the idiomatic beads ownership signal —
+it is what `bd ready` and other tooling respect; `phase` is a custom
+state dimension ralph layers on top, so it is supplementary, never a
+substitute for `status`.
 
-1. `bd show <id>` — verify the bead is not closed. `bd update` on a closed bead silently succeeds — there is no error to catch.
-2. `bd state <id> phase` — check whether the loop is actively working on it. A bead may still show `open` in `bd show` while `phase=implementing` — the phase field is the authoritative in-flight indicator.
+1. `bd show <id>` — read **`status`**:
+   - **closed** → never update or reopen. `bd update` on a closed bead silently
+     succeeds (no error to catch), so this check matters. Create a new bead
+     referencing the original instead — whether the fix was wrong, incomplete,
+     or follow-on work is needed.
+   - **in_progress** → claimed / being worked. Do not update without explicit
+     user confirmation; if unsure, create a follow-up bead with a dependency.
+   - **open** → free to modify, unless `phase` says otherwise (below).
+2. `bd state <id> phase` — ralph's sub-lifecycle *within* a worked task:
+   `implementing` = an agent is mid-iteration right now; `verified` = passed
+   verification, awaiting close.
 
-Act based on what you find:
-
-- **Closed** (`bd show` status = closed) → never update or reopen closed beads.
-  Create a new bead and reference the original. This applies whether the fix
-  was wrong, incomplete, or follow-on work is needed.
-- **phase=implementing** (`bd state <id> phase` = implementing) → a loop agent
-  is actively working on this bead right now. Do not update it unless the user
-  explicitly confirms the change should go into the active iteration. If there
-  is any doubt, create a follow-up bead with a dependency on this one instead.
-- **status=in_progress** (`bd show` status = in_progress, phase ≠ implementing)
-  → the bead is claimed but no agent is mid-iteration. Do not update it without
-  explicit user confirmation. If unsure, create a follow-up bead with a
-  dependency instead.
-- **Open** → modify freely.
+Treat **either** `status=in_progress` **or** `phase=implementing` as
+hands-off — both mean the bead is being worked, and a bead can show
+`status=open` while `phase=implementing`. But rely on `status` wherever it
+is the idiomatic signal: only `status=in_progress` (a claim) removes a bead
+from `bd ready`, so it is `status`, not `phase`, that decides whether the
+loop can still pick the bead up.
 
 ### Claim a bead before you work it yourself
 
