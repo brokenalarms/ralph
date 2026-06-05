@@ -170,18 +170,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		}
 	}
 
-	if p.taskID != "" {
-		stateReason := "ralph: tests passed, commits present"
-		if p.result.NoCodeNeeded {
-			stateReason = "ralph: no code needed — verifier confirmed"
-		}
-		if err := l.taskBackend.SetState(p.taskID, "phase", "verified", stateReason); err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=verified: %v", err)
-		} else {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → verified", p.taskID)
-		}
-	}
-
 	l.clearAttempts()
 	l.state.RecordCompletedTask(p.taskID, p.nextTask)
 	l.state.TouchPlanFlash()

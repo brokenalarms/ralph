@@ -77,11 +77,6 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 		l.state.RecordCompletedTask(taskID, taskTitle)
 		l.state.ClearCurrentTask()
 	}
-	stateReason := "ralph: PR open or stacked"
-	if merged {
-		stateReason = "ralph: PR merged"
-	}
-	_ = l.taskBackend.SetState(taskID, "phase", "verified", stateReason)
 	if err := l.taskBackend.CloseTask(taskID, closeReason); err != nil {
 		skipReason := "close_failed"
 		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
