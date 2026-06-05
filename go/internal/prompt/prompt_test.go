@@ -610,33 +610,6 @@ func TestBuildTaskManagerPrompt_UnwieldyBeadDetection(t *testing.T) {
 	}
 }
 
-// Proves: task manager prompt instructs the LLM to query bd state for phase
-// tracking, challenge closes that skipped the verified phase, and set
-// phase=unverified when reopening falsely-closed tasks.
-func TestBuildTaskManagerPrompt_PhaseLifecycleTracking(t *testing.T) {
-	dir := promptsDir(t)
-	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
-	if err != nil {
-		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
-	}
-
-	required := []struct {
-		substr string
-		reason string
-	}{
-		{"bd state", "prompt should instruct querying bd state for phase"},
-		{"phase", "prompt should reference the phase dimension"},
-		{"verified", "prompt should reference the verified phase"},
-		{"set-state", "prompt should instruct using bd set-state to change phase"},
-	}
-
-	for _, tc := range required {
-		if !strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
-			t.Errorf("missing %q: %s", tc.substr, tc.reason)
-		}
-	}
-}
-
 // Proves: task manager prompt includes detailed screenshot handling instructions:
 // describe the visual issue, save with naming convention, and reference in bead.
 func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {

@@ -173,10 +173,9 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 // succeeded and resumeID is cleared), or (_, true) if the task is genuinely
 // resumable and iteration should continue normally.
 func (l *Loop) validateResumeState(ctx context.Context, resumeID string, waited bool) (loopAction, bool) {
-	phase, _ := l.taskBackend.GetState(resumeID, "phase")
-	if phase != "verified" {
-		return actionProceed, true
-	}
+	// A resumed task that already shipped a PR (external-ref set) may have been
+	// merged while the loop was down. Detect and reconcile that; otherwise let
+	// the iteration proceed (and re-verify) normally.
 	externalRef, _ := l.taskBackend.GetExternalRef(resumeID)
 	prNum := parsePRNumber(externalRef)
 	if prNum == 0 {
@@ -187,13 +186,13 @@ func (l *Loop) validateResumeState(ctx context.Context, resumeID string, waited 
 		return actionProceed, true
 	}
 
-	// Phase=verified + PR merged + bead still open: inconsistent state.
+	// PR merged + bead still open: inconsistent state.
 	// Attempt close — if it succeeds, clear and continue fresh selection.
 	// If dep-blocked, halt with all diagnostic context.
 	closeReason := fmt.Sprintf("Fixed in %s (recovered from inconsistent resume state)", externalRef)
 	closeErr := l.taskBackend.CloseTask(resumeID, closeReason)
 	if closeErr == nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed stale in-flight task %s (phase=verified, PR #%d merged)", resumeID, prNum)
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed stale in-flight task %s (PR #%d merged)", resumeID, prNum)
 		l.state.ClearCurrentTask()
 		return actionProceed, true
 	}
@@ -207,8 +206,8 @@ func (l *Loop) validateResumeState(ctx context.Context, resumeID string, waited 
 		blockerStr = closeErr.Error()
 	}
 	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error},
-		"Task %s: phase=%s, PR #%d merged — bead not closed; close blocked by [%s]. Manual recovery: bd close %s --force --reason 'dep block cleared'",
-		resumeID, phase, prNum, blockerStr, resumeID)
+		"Task %s: PR #%d merged — bead not closed; close blocked by [%s]. Manual recovery: bd close %s --force --reason 'dep block cleared'",
+		resumeID, prNum, blockerStr, resumeID)
 	l.state.Write("status", "halted_inconsistent_resume_state")
 	return actionDone, false
 }
