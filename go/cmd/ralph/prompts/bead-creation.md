@@ -231,25 +231,20 @@ titled "Stop file not deleted" with a red `bug` label is better than
 
 Refactor-type tasks get a `refactor` label.
 
-### Phase lifecycle tracking
+### In-flight tracking
 
-The ralph loop tracks each task through phases using `bd set-state` and
-`bd state`. The lifecycle is:
+The ralph loop marks a task in-flight when an agent starts work: it claims the
+bead (`status=in_progress`, assignee `ralph-loop`) and sets `phase=implementing`.
+Use `bd state <id> phase` or `bd show <id>` (status) to query whether a task is
+being worked.
 
-  **implementing** → **verified** → (close)
-
-The orchestrator sets `phase=implementing` when an agent starts work and
-`phase=verified` after tests pass and commits are present. A task cannot be
-closed unless its phase is `verified`.
-
-Use `bd state <id> phase` to query the current phase of any task. This is
-your primary tool for auditing whether a task genuinely completed its
-lifecycle or was falsely closed.
-
-When auditing closed tasks, challenge any close where the phase is not
-`verified` — this indicates the close skipped the verification gate. If a
-closed task's fix doesn't work or acceptance criteria were never met, create
-a new bead referencing the original rather than reopening it.
+There is no separate `verified` phase or close gate: a close is reached only
+through the loop's own control flow (verification → ship → merge), and lands as
+canonical `status=closed`. So `closed` already means "ralph verified and
+finished it." When auditing, a closed bead's history (the merge commit / PR in
+its external-ref) is the evidence — not a `phase` field. If a closed task's fix
+doesn't work or acceptance criteria were never met, create a new bead
+referencing the original rather than reopening it.
 
 ### Echo-back rule (EVERY bd operation)
 
@@ -287,9 +282,8 @@ substitute for `status`.
    - **in_progress** → claimed / being worked. Do not update without explicit
      user confirmation; if unsure, create a follow-up bead with a dependency.
    - **open** → free to modify, unless `phase` says otherwise (below).
-2. `bd state <id> phase` — ralph's sub-lifecycle *within* a worked task:
-   `implementing` = an agent is mid-iteration right now; `verified` = passed
-   verification, awaiting close.
+2. `bd state <id> phase` — `implementing` means an agent is mid-iteration right
+   now (the only phase value the loop sets during work).
 
 Treat **either** `status=in_progress` **or** `phase=implementing` as
 hands-off — both mean the bead is being worked, and a bead can show

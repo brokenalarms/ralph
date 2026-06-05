@@ -675,65 +675,6 @@ func TestBD_GetState_EmptyID(t *testing.T) {
 	}
 }
 
-// Proves: CloseTask is rejected when phase is not "verified".
-func TestBD_CloseTask_RejectsUnverified(t *testing.T) {
-	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "state" {
-			return "implementing", nil
-		}
-		if len(args) > 0 && args[0] == "close" {
-			t.Error("close should not be called when phase is not verified")
-			return "closed", nil
-		}
-		return "", nil
-	}
-	b := setupBD(t, runner)
-	err := b.CloseTask("task-1", "done")
-	if err == nil {
-		t.Error("expected error when closing unverified task")
-	}
-	if !strings.Contains(err.Error(), "phase") {
-		t.Errorf("expected phase-related error, got: %v", err)
-	}
-}
-
-// Proves: CloseTask succeeds when phase is "verified".
-func TestBD_CloseTask_AllowsVerified(t *testing.T) {
-	closed := false
-	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "state" {
-			return "verified", nil
-		}
-		if len(args) > 0 && args[0] == "close" {
-			closed = true
-			return "closed", nil
-		}
-		return "", nil
-	}
-	b := setupBD(t, runner)
-	if err := b.CloseTask("task-1", "done"); err != nil {
-		t.Fatalf("expected close to succeed for verified task, got: %v", err)
-	}
-	if !closed {
-		t.Error("expected close to be called for verified task")
-	}
-}
-
-// Proves: CloseTask with empty phase (state not set) is rejected.
-func TestBD_CloseTask_RejectsEmptyPhase(t *testing.T) {
-	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "state" {
-			return "", fmt.Errorf("no state set")
-		}
-		return "", nil
-	}
-	b := setupBD(t, runner)
-	err := b.CloseTask("task-1", "done")
-	if err == nil {
-		t.Error("expected error when phase state is not set")
-	}
-}
-
 // Proves: defaultRunBD includes stderr in the error when a command fails.
 func TestBD_DefaultRunBD_IncludesStderr(t *testing.T) {
 	b := &BD{bdPath: "/bin/sh"}

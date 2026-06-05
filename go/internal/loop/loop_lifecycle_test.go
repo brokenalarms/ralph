@@ -498,9 +498,9 @@ func (s *stateTrackingBackend) SetState(id, dimension, value, reason string) err
 	return nil
 }
 
-// Verifies that the loop sets phase=implementing when starting a task and
-// phase=verified after verification passes, ensuring the bd close guard
-// will allow the task to be closed.
+// Verifies that the loop sets phase=implementing when starting a task, and that
+// phase=verified is never set (the close gate it gated was removed — close is
+// now driven purely by control flow + canonical status).
 func TestLoop_LifecycleStates(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -555,8 +555,8 @@ func TestLoop_LifecycleStates(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	if len(backend.stateCalls) < 2 {
-		t.Fatalf("expected at least 2 SetState calls, got %d", len(backend.stateCalls))
+	if len(backend.stateCalls) < 1 {
+		t.Fatalf("expected at least 1 SetState call (phase=implementing), got %d", len(backend.stateCalls))
 	}
 
 	first := backend.stateCalls[0]
@@ -564,9 +564,11 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		t.Errorf("first SetState = %+v, want phase=implementing for ralph-lc1", first)
 	}
 
-	last := backend.stateCalls[len(backend.stateCalls)-1]
-	if last.id != "ralph-lc1" || last.dimension != "phase" || last.value != "verified" {
-		t.Errorf("last SetState = %+v, want phase=verified for ralph-lc1", last)
+	// phase=verified is no longer set — the close gate that consumed it is gone.
+	for _, c := range backend.stateCalls {
+		if c.dimension == "phase" && c.value == "verified" {
+			t.Errorf("phase=verified must not be set (close gate removed), got: %+v", c)
+		}
 	}
 }
 
