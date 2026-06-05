@@ -1572,6 +1572,104 @@ func TestDefaultRunBD_NoLogPathSkipsWrite(t *testing.T) {
 	}
 }
 
+// Proves: ClaimTask calls bd update <id> --claim to set status=in_progress.
+func TestBD_ClaimTask_CallsUpdateClaim(t *testing.T) {
+	var capturedArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "update" {
+			capturedArgs = args
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.ClaimTask("ralph-abc"); err != nil {
+		t.Fatal(err)
+	}
+	if len(capturedArgs) == 0 {
+		t.Fatal("expected update to be called")
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "--claim") {
+		t.Errorf("expected --claim in update args, got: %v", capturedArgs)
+	}
+	if !strings.Contains(joined, "ralph-abc") {
+		t.Errorf("expected task ID in update args, got: %v", capturedArgs)
+	}
+}
+
+// Proves: ClaimTask is a no-op with empty id.
+func TestBD_ClaimTask_EmptyID(t *testing.T) {
+	called := false
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		called = true
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.ClaimTask(""); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("expected no bd calls with empty id")
+	}
+}
+
+// Proves: after ClaimTask (status=in_progress), getNextIssue excludes the claimed
+// task because bd ready does not surface in_progress issues. A second task becomes
+// the selection target, proving no concurrent actor can pick up the claimed work.
+func TestBD_ClaimTask_ClaimedTaskExcludedFromGetNextIssue(t *testing.T) {
+	claimed := false
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "update":
+			if len(args) >= 3 && args[2] == "--claim" {
+				claimed = true
+				return "", nil
+			}
+			return "", nil
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				if claimed {
+					// bd ready excludes in_progress tasks after claim
+					return `[{"id":"other-task","title":"Other task","priority":2,"status":"open"}]`, nil
+				}
+				return `[{"id":"ralph-abc","title":"My task","priority":1,"status":"open"},{"id":"other-task","title":"Other task","priority":2,"status":"open"}]`, nil
+			}
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+
+	// Before claiming: ralph-abc is selected (higher priority)
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-abc" {
+		t.Errorf("expected ralph-abc before claim, got %q", info.ID)
+	}
+
+	if err := b.ClaimTask("ralph-abc"); err != nil {
+		t.Fatal(err)
+	}
+
+	// After claiming: bd ready excludes the in_progress task; other-task is selected
+	info, err = b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID == "ralph-abc" {
+		t.Error("claimed (in_progress) task must be excluded from getNextIssue — bd ready does not surface in_progress issues")
+	}
+	if info.ID != "other-task" {
+		t.Errorf("expected other-task after claim, got %q", info.ID)
+	}
+}
+
 // Proves: getNextIssue invokes bd ready with --exclude-type covering every
 // container/meta type. This prevents the loop-spin failure mode where bd ready
 // surfaces an epic (or other container) that the orchestrator selects, marks
