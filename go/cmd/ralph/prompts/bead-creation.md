@@ -140,14 +140,18 @@ Every bead must have:
   `git`, `prompt`, `ci`, `refactor`). The issue type (bug/task/feature) handles
   the category — labels are for topic/component.
 - A priority (0–4). Do not use "high"/"medium"/"low".
+- **Ownership** — create every bead with `-a=ralph-task` so it is born owned by
+  the task manager and hidden from the loop (see "Bead ownership"). It is
+  released to the loop only after you echo it and the user confirms.
 
-After creating a bead, echo back the result so the user can review and amend:
+After creating a bead (owned, hidden), echo back the result so the user can
+review and amend:
 > Created **ralph-abc** · P2 task · `orchestrator` `git`
 > **ralph loop: force-reset worktree after merge**
 > Resets the worktree to origin/main after each squash-merge so stale
 > branches don't accumulate.
 >
-> Looks good? (enter to confirm, or type changes)
+> Looks good? (enter to release to the loop, or type changes)
 
 Show the full description for short beads (up to ~3 lines). For longer
 descriptions, show the first ~3 lines and truncate with "… (type 'expand'
@@ -155,9 +159,13 @@ to see full description)". Always include the ID, priority, type, labels,
 title, and description in the echo.
 
 Then **wait for the user's response** before moving on:
-- **Enter / empty / confirmation** → proceed to the next action
+- **Enter / empty / confirmation** → the bead is approved. **Release it to the
+  loop:** `bd update <id> -a=ralph-loop` (the real handoff — until now it was
+  owned by `ralph-task` and invisible to the loop). For a bead you will work
+  yourself, leave it owned and start the work instead.
 - **User types changes** → apply them with `bd update` (title, description,
-  priority, labels, type), echo the updated summary, and confirm again
+  priority, labels, type, deps), echo the updated summary, and confirm again.
+  Still owned and hidden, so revising is safe — no rush, no race.
 - **"expand"** → show the full untruncated description
 
 ### Dependencies must be correct before you release beads to the loop
