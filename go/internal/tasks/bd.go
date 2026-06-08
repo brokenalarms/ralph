@@ -863,6 +863,29 @@ func (b *BD) GetOpenDependents(id string) ([]string, error) {
 	return openIDs, nil
 }
 
+// ListInProgressByAssignee returns TaskInfo for all in_progress tasks assigned
+// to the given assignee by calling bd list --status=in_progress --assignee=<assignee> --json.
+// Returns nil (not an error) when the bd call fails or the output is unparseable,
+// since this is used for opportunistic stall detection.
+func (b *BD) ListInProgressByAssignee(assignee string) ([]TaskInfo, error) {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "list", "--status=in_progress", "--assignee="+assignee, "--json")
+	if err != nil {
+		return nil, nil
+	}
+	var issues []bdIssue
+	if jsonErr := json.Unmarshal([]byte(out), &issues); jsonErr != nil {
+		return nil, nil
+	}
+	var result []TaskInfo
+	for _, issue := range issues {
+		if issue.ID == "" {
+			continue
+		}
+		result = append(result, TaskInfo{ID: issue.ID, Title: issue.Title, Priority: issue.Priority})
+	}
+	return result, nil
+}
+
 // IsReady reports whether task id is ready to work on. It calls bd show <id>
 // --json and checks the blocked_by array: returns true iff every entry has
 // status=closed (or the array is empty). Returns false (no error) for any

@@ -1,5 +1,7 @@
 package tasks
 
+import "github.com/brokenalarms/ralph/internal/config"
+
 // Availability reports whether tasks exist and are ready to work on.
 type Availability struct {
 	// HasRemaining is true when uncompleted tasks are available.
@@ -66,4 +68,39 @@ func Progress(b Backend) (completed, total int) {
 	c, _ := b.CountCompleted()
 	t, _ := b.CountTotal()
 	return c, t
+}
+
+// StuckState describes the stall condition where an in_progress task owned by
+// the loop blocks all remaining open work.
+type StuckState struct {
+	// StuckTaskIDs are the in_progress task IDs that are blocking dependent work.
+	StuckTaskIDs []string
+	// BlockedTaskIDs are the IDs of open tasks that cannot proceed until a stuck task closes.
+	BlockedTaskIDs []string
+}
+
+// DetectBlockedByInProgress checks whether the empty ready queue is caused by
+// in_progress tasks owned by the loop (config.LoopAssignee) that have open
+// dependents. Returns a non-nil StuckState when a stall is detected, nil when
+// there are no such tasks or the detection query fails.
+func DetectBlockedByInProgress(b Backend) (*StuckState, error) {
+	inProgress, err := b.ListInProgressByAssignee(config.LoopAssignee)
+	if err != nil || len(inProgress) == 0 {
+		return nil, err
+	}
+	var stuckIDs, blockedIDs []string
+	for _, task := range inProgress {
+		deps, depErr := b.GetOpenDependents(task.ID)
+		if depErr != nil {
+			continue
+		}
+		if len(deps) > 0 {
+			stuckIDs = append(stuckIDs, task.ID)
+			blockedIDs = append(blockedIDs, deps...)
+		}
+	}
+	if len(stuckIDs) == 0 {
+		return nil, nil
+	}
+	return &StuckState{StuckTaskIDs: stuckIDs, BlockedTaskIDs: blockedIDs}, nil
 }
