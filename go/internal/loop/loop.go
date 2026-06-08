@@ -727,6 +727,25 @@ iterLoop:
 			continue
 		}
 
+		// ── Resumed PR has failing CI: spawn a CI fix agent ──
+		// Mirror the non-resume flow: hand the agent the CI failure log so the
+		// iteration can fix the failing test (including pre-existing/unrelated
+		// failures, per the boy-scout rule) instead of a blind re-run that
+		// never sees the failure. If the fix agent pushes commits, re-enter the
+		// loop to re-resume and retry the merge against the new SHA.
+		if resumeResult.CIFailureDetail != nil {
+			_ = l.taskBackend.ClaimTask(task.id)
+			workDir := l.git.GetWorkDir()
+			rawLogPath := filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "raw.log")
+			fixResult := l.tryFixCI(ctx, resumeResult.CIFailureDetail, task.title, workDir, rawLogPath)
+			l.consecutiveNoAgentIters = 0
+			if fixResult == git.CIFixApplied {
+				continue
+			}
+			// Fix agent produced no commits — fall through to a normal agent
+			// run so the iteration still gets a chance to address the failure.
+		}
+
 		// ── Run agent ──
 		agentRun := l.RunIteration(ctx, task, runIteration)
 		lastAction = agentRun.iterAction
