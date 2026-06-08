@@ -460,6 +460,18 @@ func (b *BD) resumeTask() (bdIssue, bool) {
 		return bdIssue{}, false
 	}
 	if issue.Status == "open" || issue.Status == "in_progress" {
+		// Do not resume a task whose dependencies are no longer satisfied. A
+		// stale resumeTaskID can point at a task that was started, then had a
+		// blocker reopened — e.g. a prerequisite's PR failed CI and its bead
+		// was reopened, while this dependent task remained current_task_id.
+		// Resuming here would bypass the dependency graph and work the
+		// dependent task ahead of its prerequisite. Fall through to bd ready
+		// instead, which excludes blocked tasks, so the prerequisite is
+		// selected first. Only block on a definitive not-ready answer; a bd
+		// failure (err != nil) preserves the prior resume behavior.
+		if ready, err := b.IsReady(b.resumeTaskID); err == nil && !ready {
+			return bdIssue{}, false
+		}
 		return issue, true
 	}
 	return bdIssue{}, false
