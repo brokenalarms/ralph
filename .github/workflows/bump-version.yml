@@ -2,6 +2,7 @@ name: Bump version
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 jobs:
   bump:
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
