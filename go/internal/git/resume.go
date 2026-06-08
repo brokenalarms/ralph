@@ -60,13 +60,11 @@ type ResumeTaskResult struct {
 	// ShipErr is the error returned by Ship when ShipFailedAfterPush is true.
 	ShipErr error
 
-	// CIFailureDetail is set when the resumed PR is open with genuinely failing
-	// (non-infrastructure) CI. Handled stays false; the loop spawns a CI fix
-	// agent with this failure log — the same path the non-resume flow uses — so
-	// the iteration can fix the failing test (including pre-existing/unrelated
-	// failures, per the boy-scout rule) rather than re-running a blind agent
-	// that never sees the CI failure.
-	CIFailureDetail *CIFailureError
+	// ShipExisting is true when an existing open PR was discovered and is ready
+	// to ship: the loop routes it through shipAndFinalize (no agent run) so the
+	// single ship/merge/CI-fix/close path handles it. ResumeTask is discovery
+	// only — it does NOT ship or merge; that decision lives in one place.
+	ShipExisting bool
 }
 
 // parsePRNumber extracts a PR number from a URL
@@ -172,25 +170,25 @@ func (r *repo) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeT
 	return result, err
 }
 
-// resolveByState inspects PR state and returns what the loop should do next.
-func (r *repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTaskMeta, opts ResumeTaskOpts) (ResumeTaskResult, error) {
-	shipResult, err := r.Ship(ctx, ShipOpts{
-		PRNumber:        prNumber,
-		AutoMerge:       opts.AutoMerge,
-		Reviewers:       opts.Reviewers,
-		ReviewAddressed: opts.ReviewAddressed,
-	})
+// resolveByState is discovery only: it inspects the PR's state and tells the
+// loop what to do next. It does NOT ship, merge, or close — that lives in the
+// single shipAndFinalize/doShip path. An open, healthy PR is reported via
+// ShipExisting so the loop routes it through that path (which awaits CI, runs
+// the fix agent on failure, and merges in one retry loop — never bouncing back
+// to task selection).
+func (r *repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTaskMeta, _ ResumeTaskOpts) (ResumeTaskResult, error) {
+	state, err := r.GetPRState(ctx, prNumber)
 	if err != nil {
-		r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "Ship (resume): %v", err)
+		r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "GetPRState (resume): %v — re-running agent", err)
 		return ResumeTaskResult{PRNumber: prNumber}, nil
 	}
 
-	switch {
-	case shipResult.AlreadyMerged:
+	switch state {
+	case PRStateMerged:
 		r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, Link: r.buildPRLink(prNumber)}, "already merged — closing bead and moving on")
 		return ResumeTaskResult{Handled: true, AlreadyMerged: true, Merged: true, PRNumber: prNumber}, nil
 
-	case shipResult.Closed:
+	case PRStateClosed:
 		r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "is closed (not merged) — re-running agent")
 		r.PrepareForNextTask(meta.TaskID, "")
 		_ = r.RenameBranchForTask(meta.TaskTitle, meta.TaskID)
@@ -200,29 +198,12 @@ func (r *repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTask
 		}
 		return ResumeTaskResult{PRNumber: prNumber, ClearMetadata: true, NewBranch: newBranch}, nil
 
-	default:
-		// PR is open — Ship already attempted merge if AutoMerge was set.
-
-		// Genuine CI failure (required checks red, not infrastructure): the
-		// work is NOT done. Ship surfaces this via shipResult.CIFailure with a
-		// nil error, so it falls through to here. Do NOT mark Handled — that
-		// would close the bead as "merge pending" and advance to dependent
-		// tasks on top of unmerged, failing work. Carry the failure detail so
-		// the loop spawns a CI fix agent with the failure log (the same path
-		// the non-resume flow uses), letting the iteration fix the failing test
-		// — including pre-existing/unrelated failures, per the boy-scout rule —
-		// rather than re-running a blind agent that never sees the CI failure.
-		// Infrastructure failures (CI can't run — billing/runner) are exempt:
-		// those legitimately close and merge when CI recovers.
-		if shipResult.CIFailure && !shipResult.InfrastructureFailure {
-			r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "CI failing — leaving task open, spawning CI fix agent")
-			return ResumeTaskResult{PRNumber: prNumber, CIFailureDetail: shipResult.CIFailureDetail}, nil
-		}
-
+	default: // open
 		if ok, reason := r.PRChainIsHealthy(ctx, prNumber); !ok {
 			r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "chain unhealthy: %s — re-running agent", reason)
 			return ResumeTaskResult{PRNumber: prNumber}, nil
 		}
-		return ResumeTaskResult{Handled: true, Merged: shipResult.Merged, PRNumber: prNumber}, nil
+		r.logger.Emit(logging.Opts{Domain: "git", Link: r.buildPRLink(prNumber)}, "open PR — routing through ship/finalize")
+		return ResumeTaskResult{PRNumber: prNumber, ShipExisting: true}, nil
 	}
 }

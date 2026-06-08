@@ -720,6 +720,8 @@ iterLoop:
 			break iterLoop
 		}
 		if resumeResult.Handled {
+			// Only the already-merged case reaches Handled now (ResumeTask is
+			// discovery only). Close the bead and move on.
 			l.onResumeDone(ctx, task.id, task.title, resumeResult)
 			l.git.TagTaskEnd(task.id)
 			l.state.WriteRunBranch("")
@@ -727,68 +729,76 @@ iterLoop:
 			continue
 		}
 
-		// ── Resumed PR has failing CI: spawn a CI fix agent ──
-		// Mirror the non-resume flow: hand the agent the CI failure log so the
-		// iteration can fix the failing test (including pre-existing/unrelated
-		// failures, per the boy-scout rule) instead of a blind re-run that
-		// never sees the failure. If the fix agent pushes commits, re-enter the
-		// loop to re-resume and retry the merge against the new SHA.
-		if resumeResult.CIFailureDetail != nil {
-			_ = l.taskBackend.ClaimTask(task.id)
-			workDir := l.git.GetWorkDir()
-			rawLogPath := filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "raw.log")
-			fixResult := l.tryFixCI(ctx, resumeResult.CIFailureDetail, task.title, workDir, rawLogPath)
-			l.consecutiveNoAgentIters = 0
-			if fixResult == git.CIFixApplied {
-				continue
-			}
-			// Fix agent produced no commits — fall through to a normal agent
-			// run so the iteration still gets a chance to address the failure.
-		}
-
-		// ── Run agent ──
-		agentRun := l.RunIteration(ctx, task, runIteration)
-		lastAction = agentRun.iterAction
-		if agentRun.agentInvoked {
-			l.consecutiveNoAgentIters = 0
-		} else {
-			l.consecutiveNoAgentIters++
-		}
-		if agentRun.action != actionProceed {
-			if agentRun.action == actionRetry {
-				continue
-			}
-			if agentRun.action == actionSkip {
-				// Task skipped by analyzer. Track consecutive skips for cascade detection.
-				consecutiveSkipCount++
-				if consecutiveSkipCount >= 3 {
-					haltReason := fmt.Sprintf("cascade_skipped:%d", consecutiveSkipCount)
-					l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", haltReason)
-					l.state.Write("status", "halted_"+haltReason)
-					break iterLoop
-				}
-				l.state.WriteRunBranch("")
-				currentTaskID = ""
-				continue iterLoop
-			}
-			break
-		}
-		consecutiveSkipCount = 0
-
-		// ── Complete task (post-signal pipeline) ──
+		// ── Produce a completeTaskOut from one of two entry points, then run
+		// the shared aftermath. An existing open PR ships through the single
+		// shipAndFinalize path (no agent); otherwise the agent runs and
+		// completeTask funnels into the same path. Routing the resume open-PR
+		// case through shipAndFinalize is what fixes the "CI fixed but never
+		// merged" stall: doShip awaits CI, runs the fix agent on failure, and
+		// merges inside its retry loop — it never returns to task selection
+		// (which would strand the in_progress task on an empty bd ready). ──
 		var out completeTaskOut
-		if agentRun.result.SignalDetected {
-			out = l.completeTask(ctx, completeTaskParams{
-				result:            agentRun.result,
-				headBefore:        agentRun.prep.headBefore,
-				workDir:           agentRun.prep.workDir,
-				rawLogPath:        agentRun.prep.rawLogPath,
-				diffStat:          agentRun.diffStat,
-				taskID:            task.id,
-				nextTask:          task.title,
-				notify:            l.cfg.Notify,
-				ralphDir:          l.cfg.Dirs.RalphDir,
+		haveOut := false
+
+		if resumeResult.ShipExisting {
+			_ = l.taskBackend.ClaimTask(task.id)
+			out = l.shipAndFinalize(ctx, completeTaskParams{
+				taskID:     task.id,
+				nextTask:   task.title,
+				workDir:    l.git.GetWorkDir(),
+				rawLogPath: filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "raw.log"),
+				notify:     l.cfg.Notify,
+				ralphDir:   l.cfg.Dirs.RalphDir,
 			})
+			haveOut = true
+		} else {
+			// ── Run agent ──
+			agentRun := l.RunIteration(ctx, task, runIteration)
+			lastAction = agentRun.iterAction
+			if agentRun.agentInvoked {
+				l.consecutiveNoAgentIters = 0
+			} else {
+				l.consecutiveNoAgentIters++
+			}
+			if agentRun.action != actionProceed {
+				if agentRun.action == actionRetry {
+					continue
+				}
+				if agentRun.action == actionSkip {
+					// Task skipped by analyzer. Track consecutive skips for cascade detection.
+					consecutiveSkipCount++
+					if consecutiveSkipCount >= 3 {
+						haltReason := fmt.Sprintf("cascade_skipped:%d", consecutiveSkipCount)
+						l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", haltReason)
+						l.state.Write("status", "halted_"+haltReason)
+						break iterLoop
+					}
+					l.state.WriteRunBranch("")
+					currentTaskID = ""
+					continue iterLoop
+				}
+				break
+			}
+			consecutiveSkipCount = 0
+
+			if agentRun.result.SignalDetected {
+				out = l.completeTask(ctx, completeTaskParams{
+					result:     agentRun.result,
+					headBefore: agentRun.prep.headBefore,
+					workDir:    agentRun.prep.workDir,
+					rawLogPath: agentRun.prep.rawLogPath,
+					diffStat:   agentRun.diffStat,
+					taskID:     task.id,
+					nextTask:   task.title,
+					notify:     l.cfg.Notify,
+					ralphDir:   l.cfg.Dirs.RalphDir,
+				})
+				haveOut = true
+			}
+		}
+
+		// ── Shared aftermath: process the completeTaskOut from either path ──
+		if haveOut {
 			if out.ct != nil {
 				sessionTasks = append(sessionTasks, *out.ct)
 				emitTaskSummary(*out.ct, l.logger)
@@ -796,13 +806,11 @@ iterLoop:
 			if out.merged {
 				lastTaskMerged = true
 			}
-			switch out.action {
-			case signalRetry:
+			if out.action == signalRetry {
 				continue
 			}
-			// ── End-of-task: sync + evolve after task completes ──
 			// signalSkipped or signalComplete: fire post-task hook and check for
-			// binary rebuild. On signalRetry the task is not yet done — skip.
+			// binary rebuild. On signalRetry the task is not yet done — skipped above.
 			if ctx.Err() == nil {
 				if res := l.postTaskAndMaybeEvolve(ctx, task.id, out.prNumber, out.merged); res == signalEvolve {
 					break iterLoop
