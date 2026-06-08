@@ -208,23 +208,15 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			if prNum != 0 {
 				prState, _ := l.git.GetPRState(ctx, prNum)
 				if prState == git.PRStateOpen {
-					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
-					_, _, merged, _, _, _, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
-					prRef := fmt.Sprintf("PR #%d", prNum)
-					closeReason := fmt.Sprintf("Verified — %s open, merge pending", prRef)
-					if merged {
-						closeReason = fmt.Sprintf("Fixed in %s", prRef)
-					}
-					_ = l.taskBackend.CloseTask(p.taskID, closeReason)
-					l.git.TagTaskEnd(p.taskID)
-					if p.notify {
-						if merged {
-							notify.TaskMerged(p.taskID, p.nextTask, time.Now())
-						} else {
-							notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary, time.Now())
-						}
-					}
-					return completeTaskOut{action: signalSkipped, merged: merged, prNumber: prNum}
+					// Existing open PR with no new commits: route through the
+					// single ship/finalize path rather than re-implementing a
+					// doShip + close here. The old inline version discarded
+					// doShip's ciFailure return and closed as "merge pending"
+					// even when required CI was red (the third instance of the
+					// close-on-failing-CI bug). shipAndFinalize → doShip handles
+					// CI failure (fix agent + retry), merge, and close correctly.
+					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through shipAndFinalize", prNum)
+					return l.shipAndFinalize(ctx, p)
 				}
 				if prState == git.PRStateMerged {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged — closing bead", prNum)
@@ -273,6 +265,17 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		return completeTaskOut{action: signalSkipped}
 	}
 
+	return l.shipAndFinalize(ctx, p)
+}
+
+// shipAndFinalize is the single source of truth for shipping a task's PR and
+// finalizing the bead. It pushes / creates / merges the PR, routes genuine CI
+// failures to the fix agent, handles infrastructure failures, conflicts,
+// reviews, and stacked PRs, then closes (or leaves open) the bead based on the
+// outcome. completeTask (after verification) funnels through here; the resume
+// path does too, so the ship / merge / close decision lives in exactly one
+// place rather than being re-implemented per entry point.
+func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) completeTaskOut {
 	if ctx.Err() != nil {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before push")
 		l.setPhaseInterrupted(p.taskID)
