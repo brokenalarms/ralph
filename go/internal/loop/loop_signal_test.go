@@ -525,8 +525,82 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 		t.Errorf("post-task merged: got false, want true")
 	}
 
-	if out.action != signalSkipped {
-		t.Errorf("expected signalSkipped, got %v", out.action)
+	// Routed through shipAndFinalize (the single ship/close source of truth),
+	// which returns signalComplete on a merged PR. The caller then tags task
+	// end and tears down — functionally equivalent to the old signalSkipped
+	// path, which tagged internally. The meaningful outcome (merged + closed +
+	// PR 42) is asserted above.
+	if out.action != signalComplete {
+		t.Errorf("expected signalComplete, got %v", out.action)
+	}
+}
+
+// When headBefore == headAfterSignal (no new commits) and the existing open PR
+// has genuinely failing CI, the no-commits path must NOT close the bead. The
+// old inline version discarded doShip's ciFailure return and closed as "merge
+// pending" regardless (the third instance of the close-on-failing-CI bug);
+// routing through shipAndFinalize leaves the task open for the fix agent.
+func TestCompleteTask_NoNewCommits_ExistingOpenPR_FailingCI_StaysOpen(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend:  testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-cifail"},
+			ExternalRefs: map[string]string{"ralph-cifail": "gh-42"},
+		},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RemoteURL:     "https://github.com/owner/repo.git",
+		HeadRev:       "same-sha",
+		DefaultBranch: "main",
+		Ship:          git.ShipResult{PRNumber: 42, CIFailure: true, CIFailureDetail: &git.CIFailureError{PRNumber: 42}},
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs:       []git.StubPR{{Number: 42, Base: "main", State: git.PRStateOpen}},
+		},
+	})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner:       &stubRunner{},
+		VerifyHook:   passingVerifyHook(),
+	})
+
+	out := l.completeTask(context.Background(), completeTaskParams{
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "same-sha",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-cifail",
+		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
+	})
+
+	backend.CloseMu.Lock()
+	closedIDs := append([]string{}, backend.ClosedIDs...)
+	backend.CloseMu.Unlock()
+	if len(closedIDs) != 0 {
+		t.Errorf("bead must NOT be closed when the existing PR has failing CI, got %v", closedIDs)
+	}
+	if out.ct != nil {
+		t.Errorf("CI failure must not return a CompletedTask (would prevent retry), got %+v", out.ct)
 	}
 }
 
