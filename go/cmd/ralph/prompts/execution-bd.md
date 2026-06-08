@@ -35,6 +35,7 @@ Include this in your reflection as well, before the learnings section.
 3. Multiple atomic commits per task are fine. The orchestrator groups them into a single PR.
 4. Run only scoped, relevant tests during development — not the full suite. The orchestrator runs the full test suite as the completion gate.
 5. When using the Agent tool, ALWAYS set `isolation: "worktree"` so sub-agents work in their own git worktree. Sub-agents that share the main worktree can check out ralph's branches, breaking branch cleanup during recreation.
+6. Prefer existing source-of-truth constants over hardcoded literals. When a value you need already has a named constant or source-of-truth in the codebase — especially one the surrounding code already references — use or derive from it rather than hardcoding the literal. If you edit a line that referenced such a constant, keep referencing it. This applies to constant-vs-literal only; refactoring or extraction the task implies is fine and must not be discouraged.
 
 ## Test-driven development
 Write a test that proves the bead's requirement. Run it — it must FAIL. Then implement the fix. Run the test again — it must PASS. This is the minimum proof that your change does what the bead asks.
