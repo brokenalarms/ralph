@@ -151,7 +151,6 @@ type Config struct {
 	IdleTimeout           time.Duration
 	IdleTimeoutProgress   time.Duration
 	MaxRunDuration        time.Duration
-	PostSignalTimeout     time.Duration
 	PostTask              string
 	VerifyBuild           string
 	Notify                bool
@@ -768,7 +767,6 @@ iterLoop:
 				diffStat:          agentRun.diffStat,
 				taskID:            task.id,
 				nextTask:          task.title,
-				postSignalTimeout: l.cfg.PostSignalTimeout,
 				notify:            l.cfg.Notify,
 				ralphDir:          l.cfg.Dirs.RalphDir,
 			})

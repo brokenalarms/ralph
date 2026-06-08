@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -189,9 +188,9 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 }
 
 
-// completeTask completes normally within PostSignalTimeout when operations
-// are fast, proving the timeout doesn't interfere with successful flows.
-func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
+// completeTask completes normally when operations are fast, proving the
+// post-signal pipeline closes the task on the happy path.
+func TestCompleteTask_CompletesFastHappyPath(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -203,10 +202,9 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "after", Ship: git.ShipResult{PRNumber: 42}})
 	cfg := Config{
-		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations:     1,
-		CallsPerHour:      80,
-		PostSignalTimeout: 5 * time.Second,
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -215,19 +213,18 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:  passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
 
 	out := l.completeTask(context.Background(), completeTaskParams{
-		result:            claude.Result{SignalDetected: true},
-		headBefore:        "",
-		workDir:           dir,
-		rawLogPath:        filepath.Join(ralphDir, "raw.log"),
-		taskID:            "ralph-fast",
-		nextTask:          "Fix login",
-		postSignalTimeout: l.cfg.PostSignalTimeout,
-		ralphDir:          ralphDir,
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-fast",
+		nextTask:   "Fix login",
+		ralphDir:   ralphDir,
 	})
 
 	if out.action != signalComplete {

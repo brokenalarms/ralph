@@ -486,7 +486,8 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 
 type stateTrackingBackend struct {
 	testutil.MutableBackend
-	stateCalls []stateCall
+	stateCalls  []stateCall
+	reopenCalls []string
 }
 
 type stateCall struct {
@@ -495,6 +496,11 @@ type stateCall struct {
 
 func (s *stateTrackingBackend) SetState(id, dimension, value, reason string) error {
 	s.stateCalls = append(s.stateCalls, stateCall{id, dimension, value})
+	return nil
+}
+
+func (s *stateTrackingBackend) ReopenTask(id string) error {
+	s.reopenCalls = append(s.reopenCalls, id)
 	return nil
 }
 
@@ -708,6 +714,20 @@ func TestLoop_CtrlC_SetsPhaseInterrupted(t *testing.T) {
 	last := phaseValues[len(phaseValues)-1]
 	if last != "interrupted" {
 		t.Errorf("last phase SetState = %q, want %q; all phase values: %v", last, "interrupted", phaseValues)
+	}
+
+	// The interrupt path must also release the claim (status back to open) so
+	// the orphaned in_progress task returns to bd ready and the loop cannot
+	// deadlock waiting on a task it claimed but never finished.
+	var reopened bool
+	for _, id := range backend.reopenCalls {
+		if id == "ralph-ctrlc" {
+			reopened = true
+			break
+		}
+	}
+	if !reopened {
+		t.Errorf("expected ReopenTask(ralph-ctrlc) to release the claim on interrupt; reopen calls: %v", backend.reopenCalls)
 	}
 }
 

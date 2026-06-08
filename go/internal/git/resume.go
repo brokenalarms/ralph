@@ -194,6 +194,21 @@ func (r *repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTask
 
 	default:
 		// PR is open — Ship already attempted merge if AutoMerge was set.
+
+		// Genuine CI failure (required checks red, not infrastructure): the
+		// work is NOT done. Ship surfaces this via shipResult.CIFailure with a
+		// nil error, so it falls through to here. Do NOT mark Handled — that
+		// would close the bead as "merge pending" and advance to dependent
+		// tasks on top of unmerged, failing work. Return so the loop re-runs
+		// the agent to fix CI, mirroring the non-resume path in completeTask
+		// which leaves the task open on real CI failure. Infrastructure
+		// failures (CI can't run — billing/runner) are exempt: those
+		// legitimately close and merge when CI recovers.
+		if shipResult.CIFailure && !shipResult.InfrastructureFailure {
+			r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "CI failing — leaving task open, re-running agent")
+			return ResumeTaskResult{PRNumber: prNumber}, nil
+		}
+
 		if ok, reason := r.PRChainIsHealthy(ctx, prNumber); !ok {
 			r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "chain unhealthy: %s — re-running agent", reason)
 			return ResumeTaskResult{PRNumber: prNumber}, nil
