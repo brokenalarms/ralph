@@ -21,9 +21,10 @@ type StubBackend struct {
 	FullContext        string
 	SkippedTask        string
 	SkipReason         string
-	ResumeIDSet        string   // last value passed to SetResumeTaskID
-	HasRemainingResult *bool    // when non-nil, HasRemaining returns this value instead of Remaining > 0
-	OpenDependents     []string // returned by GetOpenDependents for any task
+	ResumeIDSet        string         // last value passed to SetResumeTaskID
+	HasRemainingResult *bool          // when non-nil, HasRemaining returns this value instead of Remaining > 0
+	OpenDependents     []string       // returned by GetOpenDependents for any task
+	InProgressTasks    []tasks.TaskInfo // returned by ListInProgressByAssignee for any assignee
 }
 
 func (s *StubBackend) Init() error { return nil }
@@ -68,6 +69,10 @@ func (s *StubBackend) SetMetadata(_, _, _ string) error           { return nil }
 func (s *StubBackend) GetMetadata(_, _ string) (string, error)    { return "", nil }
 func (s *StubBackend) GetOpenDependents(_ string) ([]string, error) {
 	return s.OpenDependents, nil
+}
+
+func (s *StubBackend) ListInProgressByAssignee(_ string) ([]tasks.TaskInfo, error) {
+	return s.InProgressTasks, nil
 }
 
 func (s *StubBackend) IsReady(_ string) (bool, error) { return true, nil }

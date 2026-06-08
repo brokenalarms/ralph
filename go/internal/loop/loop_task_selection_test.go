@@ -7,6 +7,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -319,5 +320,87 @@ func TestSelectNextTask_HaltsOnInconsistentResumeState(t *testing.T) {
 	status, _ := st.Read("status")
 	if status != "halted_inconsistent_resume_state" {
 		t.Errorf("expected status halted_inconsistent_resume_state, got %q", status)
+	}
+}
+
+// selectNextTask halts with halted_blocked_by_in_progress when bd ready is empty
+// because the only open tasks are blocked by an in_progress task the loop owns.
+// Proves: the loop does not enter the silent wait-for-tasks poll in this case.
+func TestSelectNextTask_HaltsOnBlockedByInProgress(t *testing.T) {
+	falseVal := false
+	backend := &testutil.StubBackend{
+		Remaining:          2,         // CountRemaining > 0: tasks exist
+		HasRemainingResult: &falseVal, // bd ready empty: nothing is ready
+		Total:              2,
+		NextID:             "",
+		NextTask:           "",
+		InProgressTasks:    []tasks.TaskInfo{{ID: "ralph-stuck", Title: "Stuck task"}},
+		OpenDependents:     []string{"ralph-blocked"},
+	}
+	l, _ := newTestLoopForSelection(t, backend)
+
+	waitHookCalled := false
+	l.waitHook = &stubWaitHook{fn: func() { waitHookCalled = true }}
+
+	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  1,
+		maxIterations: 100,
+		wait:          true,
+		completedIDs:  map[string]bool{},
+	})
+
+	if action != actionDone {
+		t.Fatalf("expected actionDone when blocked by in_progress, got %v", action)
+	}
+	status, _ := l.state.Read("status")
+	if status != "halted_blocked_by_in_progress" {
+		t.Errorf("expected status halted_blocked_by_in_progress, got %q", status)
+	}
+	if waitHookCalled {
+		t.Error("expected waitForTasks NOT to be entered when blocked by in_progress task")
+	}
+}
+
+// selectNextTask does NOT falsely halt when the backlog is genuinely empty
+// (no open tasks at all, no in_progress tasks with blocked dependents).
+// Proves: the empty-backlog path still enters the wait/complete path, not the stall path.
+func TestSelectNextTask_EmptyBacklog_DoesNotFalselyHalt(t *testing.T) {
+	falseVal := false
+	backend := &testutil.StubBackend{
+		Remaining:          0,         // no tasks of any kind
+		HasRemainingResult: &falseVal, // bd ready empty
+		Total:              0,
+		NextID:             "",
+		NextTask:           "",
+		InProgressTasks:    nil, // no in_progress tasks
+		OpenDependents:     nil,
+	}
+	l, _ := newTestLoopForSelection(t, backend)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	waitHookCalled := false
+	l.waitHook = &stubWaitHook{fn: func() {
+		waitHookCalled = true
+		cancel()
+	}}
+
+	_, action, _ := l.selectNextTask(ctx, selectNextTaskParams{
+		runIteration:  1,
+		maxIterations: 100,
+		wait:          true,
+		completedIDs:  map[string]bool{},
+	})
+
+	if !waitHookCalled {
+		t.Error("expected waitForTasks to be entered for a genuinely empty backlog")
+	}
+	if action != actionDone {
+		t.Fatalf("expected actionDone after context cancel in waitForTasks, got %v", action)
+	}
+	status, _ := l.state.Read("status")
+	if status == "halted_blocked_by_in_progress" {
+		t.Error("empty backlog must NOT produce halted_blocked_by_in_progress status")
 	}
 }

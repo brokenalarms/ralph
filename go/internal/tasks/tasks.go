@@ -110,6 +110,11 @@ type Backend interface {
 	// Returns nil when there are no open dependents or when the query fails.
 	GetOpenDependents(id string) ([]string, error)
 
+	// ListInProgressByAssignee returns TaskInfo for all in_progress tasks assigned
+	// to the given assignee. Used to detect stuck-loop conditions where no tasks are
+	// ready because they are all blocked by an in_progress task the loop owns.
+	ListInProgressByAssignee(assignee string) ([]TaskInfo, error)
+
 	// IsReady reports whether a task is ready to work on: its dependencies array
 	// is empty OR every entry has status=closed. Returns false (no error) for any
 	// non-closed dep. Use immediately before agent invocation to detect dep-graph

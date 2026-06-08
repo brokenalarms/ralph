@@ -101,6 +101,9 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		if p.runIteration > 0 {
 			l.flushUnpushedWork(ctx, p.lastTaskMerged)
 		}
+		if l.detectStuckInProgress() {
+			return taskContext{}, actionDone, waited
+		}
 		if !p.wait {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Success}, "All tasks complete!")
 			l.state.Write("status", "completed")
@@ -134,6 +137,9 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 
 	if taskID == "" && nextTask == "" {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task backend returned empty — no task to run")
+		if l.detectStuckInProgress() {
+			return taskContext{}, actionDone, waited
+		}
 		if p.wait {
 			if resumed := l.waitForTasks(ctx); !resumed {
 				return taskContext{}, actionDone, true
@@ -160,6 +166,23 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		title:   nextTask,
 		changed: changed,
 	}, actionProceed, waited
+}
+
+// detectStuckInProgress checks whether the empty ready queue is caused by
+// in_progress tasks (owned by the loop) that have open dependents. When a stall
+// is detected it logs the stuck and blocked task IDs, writes
+// halted_blocked_by_in_progress status, and returns true. Returns false when no
+// stall is detected or the detection query fails.
+func (l *Loop) detectStuckInProgress() bool {
+	stuck, err := tasks.DetectBlockedByInProgress(l.taskBackend)
+	if err != nil || stuck == nil {
+		return false
+	}
+	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error},
+		"Halting: stuck in_progress task(s) [%s] are blocking [%s] — close or reassign the stuck task(s) to unblock",
+		strings.Join(stuck.StuckTaskIDs, ", "), strings.Join(stuck.BlockedTaskIDs, ", "))
+	l.state.Write("status", "halted_blocked_by_in_progress")
+	return true
 }
 
 // validateResumeState checks whether a resumed task is genuinely resumable.
