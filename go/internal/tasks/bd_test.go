@@ -1312,6 +1312,39 @@ func TestBD_GetNextTaskInfo_ResumesLastTaskID(t *testing.T) {
 	}
 }
 
+// Proves: when resumeTaskID points to a task whose dependency is no longer
+// satisfied (a blocker reopened after the task was started), resumeTask does
+// NOT resume it — it falls through to bd ready so the prerequisite is selected
+// first. Guards against a stale current_task_id resuming a dependent task ahead
+// of its prerequisite (e.g. tabi-huv8 resumed while tabi-l0cy was reopened).
+func TestBD_GetNextTaskInfo_BlockedResumeTaskFallsThrough(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "show":
+			if len(args) >= 2 && args[1] == "ralph-huv8" {
+				return `[{"id":"ralph-huv8","title":"Dependent task","priority":2,"status":"in_progress","type":"task","blocked_by":[{"status":"open"}]}]`, nil
+			}
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"ralph-l0cy","title":"Prerequisite task","priority":2,"status":"open"}]`, nil
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetResumeTaskID("ralph-huv8")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-l0cy" {
+		t.Errorf("expected fall-through to ready prerequisite ralph-l0cy, got %q — a dependency-blocked resume target must not be resumed ahead of its prerequisite", info.ID)
+	}
+}
+
 // Proves: when resumeTaskID points to a closed task, it falls through to
 // bd ready for new work.
 func TestBD_GetNextTaskInfo_ClosedResumeTaskFallsThrough(t *testing.T) {
