@@ -239,3 +239,63 @@ func TestResumeTask_FoundViaBranchStoresPRURL(t *testing.T) {
 		t.Errorf("PRURLToStore = %q, want %q", result.PRURLToStore, expected)
 	}
 }
+
+// ResumeTask must NOT mark an open PR with genuinely failing CI as Handled.
+// Marking it Handled would close the bead as "merge pending" and let the loop
+// advance to dependent tasks on top of unmerged, failing work. Ship surfaces a
+// real CI failure via shipResult.CIFailure with a nil error, so it falls into
+// resolveByState's default case; the fix returns Handled=false there so the
+// loop re-runs the agent to fix CI. Infrastructure failures (CI can't run) are
+// exempt and covered separately.
+func TestResumeTask_OpenPRWithFailingCI_NotHandled(t *testing.T) {
+	stubCISleep(t)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 970,
+			Branch: "ralph/ralph-cif-fix",
+			Title:  "fix it",
+			State:  PRStateOpen,
+		}},
+		Checks:       map[int][]CICheckResult{970: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 1, // real test failure, not an infrastructure outage
+	})
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/ralph-cif-fix"),
+	)
+
+	result, err := repo.ResumeTask(context.Background(), ResumeTaskMeta{
+		TaskID:      "ralph-cif",
+		TaskTitle:   "fix it",
+		Branch:      "ralph/ralph-cif-fix",
+		ExternalRef: "https://github.com/owner/repo/pull/970",
+	}, ResumeTaskOpts{AutoMerge: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Handled {
+		t.Error("expected Handled=false for an open PR with failing CI — closing the bead would advance dependent tasks on top of unmerged, failing work")
+	}
+	if result.Merged {
+		t.Error("expected Merged=false when CI is failing")
+	}
+	if result.PRNumber != 970 {
+		t.Errorf("expected PRNumber=970, got %d", result.PRNumber)
+	}
+}

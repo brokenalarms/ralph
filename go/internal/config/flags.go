@@ -361,21 +361,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return fmt.Sprintf("%t", cfg.Notify) },
 	},
 	{
-		Help:      "Timeout for post-signal operations (verification, push, merge)", Default: "15m",
-		EnvVar:    "RALPH_POST_SIGNAL_TIMEOUT",
-		ConfigKey: "post_signal_timeout",
-		Kind:      KindDuration,
-		Apply: func(cfg *Config, val string) error {
-			d, err := parseDuration(val)
-			if err != nil {
-				return err
-			}
-			cfg.PostSignalTimeout = d
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.PostSignalTimeout.String() },
-	},
-	{
 		Long: "--model-ceiling", MetaVar: "<model>",
 		Help:      "Model ceiling for all LLM interactions. When unset, agents will escalate to more advanced models following failures.",
 		Default:   ModelSonnet,

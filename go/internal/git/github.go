@@ -235,10 +235,22 @@ func (g *ghCLI) logGHFailure(args []string, stderrOut, stdoutOut []byte, elapsed
 		shellSafeArgs(args), elapsed.Round(time.Millisecond), stderrStr, stdoutStr, err)
 }
 
+// ghCallTimeout bounds a single gh invocation. The loop no longer applies an
+// iteration-wide deadline (see completeTask), so each gh call carries its own
+// per-operation timeout — generous enough for any individual call (PR view,
+// merge, api, single CI/review poll fetch) but short enough that a genuinely
+// hung gh process (network partition, stuck auth) cannot block the loop
+// indefinitely. Polling loops (PollReview, waitForCI) issue many short calls
+// and bound their own total duration, so this per-call cap does not truncate
+// them.
+const ghCallTimeout = 3 * time.Minute
+
 // runGHCmd runs gh with the given args, capturing stderr to a buffer.
 // On err != nil or ctx.Err() != nil, emits one Warn log entry.
 // Returns stdout output and the error.
 func (g *ghCLI) runGHCmd(ctx context.Context, args []string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, ghCallTimeout)
+	defer cancel()
 	start := time.Now()
 	var stderrBuf bytes.Buffer
 	cmd := exec.CommandContext(ctx, "gh", args...)
@@ -254,6 +266,8 @@ func (g *ghCLI) runGHCmd(ctx context.Context, args []string) ([]byte, error) {
 // separate buffers. On err != nil or ctx.Err() != nil, emits one Warn log entry.
 // Returns stdout, stderr, and the error.
 func (g *ghCLI) runGHCombined(ctx context.Context, args []string) (stdout, stderr []byte, err error) {
+	ctx, cancel := context.WithTimeout(ctx, ghCallTimeout)
+	defer cancel()
 	start := time.Now()
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd := exec.CommandContext(ctx, "gh", args...)

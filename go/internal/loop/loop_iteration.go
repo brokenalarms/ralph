@@ -28,9 +28,8 @@ type completeTaskParams struct {
 	taskID     string
 	nextTask   string
 	// config
-	postSignalTimeout time.Duration
-	notify            bool
-	ralphDir          string
+	notify   bool
+	ralphDir string
 }
 
 // completeTaskOut carries the results of completeTask back to Run().
@@ -66,11 +65,14 @@ type postSignalParams struct {
 // completeTask runs after the agent signals completion: verifies the work,
 // ships a PR, merges if configured, and closes the bead.
 func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
-	if p.postSignalTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, p.postSignalTimeout)
-		defer cancel()
-	}
+	// No iteration-wide deadline is applied here. Post-signal work legitimately
+	// chains an agent at every stage (verify → CI fix → conflict → review →
+	// merge); a shared wall-clock would guillotine a healthy, progressing agent
+	// mid-run when the cumulative time exceeds an arbitrary cap. Each agent is
+	// already bounded independently inside claude.go by its idle timeout
+	// (IdleTimeout / IdleTimeoutProgress) and a hard per-agent wall-clock
+	// (MaxRunDuration / FixMaxRunDuration). The parent ctx remains cancel-only
+	// (Ctrl-C / feedback file).
 
 	// Watch for feedback file and cancel context when it appears.
 	if p.ralphDir != "" {
@@ -512,13 +514,28 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 	}, taskID, prNumber, merged)
 }
 
-// setPhaseInterrupted marks a task phase=interrupted so the task manager
-// knows the loop stopped mid-work and the bead is safe to update.
+// setPhaseInterrupted marks a task phase=interrupted and releases the loop's
+// claim by reverting status to open, so the task manager knows the loop stopped
+// mid-work and the bead returns to the ready queue.
+//
+// Releasing the claim is essential: ClaimTask set status=in_progress at the
+// start of the iteration, which removes the task from bd ready. Every caller
+// of this function is an abort/interrupt path where the iteration did NOT ship
+// or merge, so the task is no longer being worked. Without reopening, the task
+// stays in_progress forever — invisible to bd ready (which excludes
+// in_progress) and never resumed mid-session — deadlocking the loop and any
+// task that depends on it. ReopenTask preserves assignee=ralph-loop, so the
+// task stays selectable by bd ready --assignee=ralph-loop on the next pass.
 func (l *Loop) setPhaseInterrupted(taskID string) {
 	if taskID == "" {
 		return
 	}
-	if err := l.taskBackend.SetState(taskID, "phase", "interrupted", "ralph: Ctrl-C"); err != nil {
+	if err := l.taskBackend.ReopenTask(taskID); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ReopenTask (release claim): %v", err)
+	} else {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → open (claim released)", taskID)
+	}
+	if err := l.taskBackend.SetState(taskID, "phase", "interrupted", "ralph: interrupted"); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=interrupted: %v", err)
 	} else {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → interrupted", taskID)

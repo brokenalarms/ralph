@@ -62,7 +62,6 @@ type Config struct {
 	VerifyEscalationModel   string
 	FixModel                string
 	FixEscalationModel      string
-	PostSignalTimeout       time.Duration
 	PostTask                string
 	VerifyBuild             string
 	Verify                  string
