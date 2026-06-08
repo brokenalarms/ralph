@@ -240,16 +240,14 @@ func TestResumeTask_FoundViaBranchStoresPRURL(t *testing.T) {
 	}
 }
 
-// ResumeTask must NOT mark an open PR with genuinely failing CI as Handled.
-// Marking it Handled would close the bead as "merge pending" and let the loop
-// advance to dependent tasks on top of unmerged, failing work. Ship surfaces a
-// real CI failure via shipResult.CIFailure with a nil error, so it falls into
-// resolveByState's default case; the fix returns Handled=false and carries
-// CIFailureDetail so the loop spawns a CI fix agent with the failure log.
-// Infrastructure failures (CI can't run) are exempt and covered separately.
-func TestResumeTask_OpenPRWithFailingCI_NotHandled(t *testing.T) {
-	stubCISleep(t)
-
+// ResumeTask is discovery only: an open PR is reported via ShipExisting (not
+// Handled), so the loop routes it through shipAndFinalize → doShip, where CI is
+// awaited, the fix agent runs on failure, and the merge happens in one retry
+// loop. resolveByState itself no longer inspects CI or merges — that decision
+// lives in exactly one place. Crucially it must NOT mark an open PR Handled
+// (which would close the bead as "merge pending" and advance dependent tasks on
+// top of unmerged work).
+func TestResumeTask_OpenPR_RoutesToShipFinalize(t *testing.T) {
 	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
@@ -258,20 +256,15 @@ func TestResumeTask_OpenPRWithFailingCI_NotHandled(t *testing.T) {
 			Title:  "fix it",
 			State:  PRStateOpen,
 		}},
-		Checks:       map[int][]CICheckResult{970: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
-		JobStepCount: 1, // real test failure, not an infrastructure outage
 	})
 
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/owner/repo.git", nil)
 	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
+	// Not an ancestor of main (exit 1) — i.e. not already merged, so the chain
+	// is healthy and the open PR is shippable.
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("exit status 1"))
 	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	runner.On("rev-parse HEAD", "abc123", nil)
 
 	repo := newRepoForTest(
 		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}},
@@ -290,18 +283,15 @@ func TestResumeTask_OpenPRWithFailingCI_NotHandled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Handled {
-		t.Error("expected Handled=false for an open PR with failing CI — closing the bead would advance dependent tasks on top of unmerged, failing work")
+		t.Error("expected Handled=false for an open PR — resolveByState must not close/merge; the loop ships it via shipAndFinalize")
+	}
+	if !result.ShipExisting {
+		t.Error("expected ShipExisting=true for an open PR so the loop routes it through shipAndFinalize")
 	}
 	if result.Merged {
-		t.Error("expected Merged=false when CI is failing")
+		t.Error("expected Merged=false — resolveByState is discovery only and does not merge")
 	}
 	if result.PRNumber != 970 {
 		t.Errorf("expected PRNumber=970, got %d", result.PRNumber)
-	}
-	// The failure detail must be carried so the loop can spawn a CI fix agent
-	// with the failure log (boy-scout rule) rather than running a blind agent
-	// that never sees the CI failure.
-	if result.CIFailureDetail == nil {
-		t.Error("expected CIFailureDetail to be set so the loop can spawn a CI fix agent with the failure log")
 	}
 }

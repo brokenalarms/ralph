@@ -50,7 +50,12 @@ func (l *Loop) legacyCompletedBranches() []string {
 	return branches
 }
 
-// closeResumedTask closes the bead after the resume path resolves the PR.
+// closeResumedTask closes the bead when the resume path discovered the PR was
+// already merged before the loop did anything. This is the ONLY case the resume
+// path closes directly — open PRs route through shipAndFinalize, which owns the
+// ship/merge/CI-fix/close decision (single source of truth). The previous
+// "merge pending" close branches are gone: leaving them would re-introduce the
+// divergent close logic this unification removed.
 func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, result git.ResumeTaskResult) {
 	if taskID == "" {
 		return
@@ -63,20 +68,14 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 	if prRef == "" && result.PRNumber != 0 {
 		prRef = fmt.Sprintf("PR #%d", result.PRNumber)
 	}
-	merged := result.AlreadyMerged || result.Merged
-	var closeReason string
-	if prRef == "" {
-		closeReason = "Verified — merge pending"
-	} else if merged {
+	const merged = true
+	closeReason := "Fixed (already merged)"
+	if prRef != "" {
 		closeReason = fmt.Sprintf("Fixed in %s", prRef)
-	} else {
-		closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
 	}
-	if result.AlreadyMerged {
-		l.clearAttempts()
-		l.state.RecordCompletedTask(taskID, taskTitle)
-		l.state.ClearCurrentTask()
-	}
+	l.clearAttempts()
+	l.state.RecordCompletedTask(taskID, taskTitle)
+	l.state.ClearCurrentTask()
 	if err := l.taskBackend.CloseTask(taskID, closeReason); err != nil {
 		skipReason := "close_failed"
 		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
