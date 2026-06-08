@@ -6,12 +6,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
 )
+
+// ciSkipMarkerRe matches GitHub's documented skip-CI bracket markers,
+// case-insensitively.
+var ciSkipMarkerRe = regexp.MustCompile(`(?i)\[(skip ci|ci skip|no ci|skip actions|actions skip)\]`)
+
+// neutralizeCISkipMarkers replaces each GitHub skip-CI bracket marker in s
+// with a hyphenated form (e.g. "[skip ci]" → "[skip-ci]") that GitHub does
+// not recognise, so bead text that describes CI skip behaviour cannot
+// inadvertently suppress workflows on the resulting squash-merge commit.
+func neutralizeCISkipMarkers(s string) string {
+	return ciSkipMarkerRe.ReplaceAllStringFunc(s, func(match string) string {
+		inner := match[1 : len(match)-1]
+		return "[" + strings.ReplaceAll(inner, " ", "-") + "]"
+	})
+}
 
 // PRState is the lifecycle state of a GitHub pull request.
 type PRState string
@@ -108,7 +124,7 @@ func formatPRBody(description, acceptance, summary string) string {
 	if len(sections) == 0 {
 		return ""
 	}
-	return strings.Join(sections, "\n\n")
+	return neutralizeCISkipMarkers(strings.Join(sections, "\n\n"))
 }
 
 // MergeOpts configures a PR merge operation.

@@ -620,7 +620,7 @@ func prTitle(taskID, taskDesc, fallback string) string {
 	if title == "" {
 		title = fallback
 	}
-	return title
+	return neutralizeCISkipMarkers(title)
 }
 
 func (r *repo) prTitle(taskID, taskDesc string) string {
