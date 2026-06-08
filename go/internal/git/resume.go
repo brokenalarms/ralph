@@ -59,6 +59,14 @@ type ResumeTaskResult struct {
 
 	// ShipErr is the error returned by Ship when ShipFailedAfterPush is true.
 	ShipErr error
+
+	// CIFailureDetail is set when the resumed PR is open with genuinely failing
+	// (non-infrastructure) CI. Handled stays false; the loop spawns a CI fix
+	// agent with this failure log — the same path the non-resume flow uses — so
+	// the iteration can fix the failing test (including pre-existing/unrelated
+	// failures, per the boy-scout rule) rather than re-running a blind agent
+	// that never sees the CI failure.
+	CIFailureDetail *CIFailureError
 }
 
 // parsePRNumber extracts a PR number from a URL
@@ -199,14 +207,16 @@ func (r *repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTask
 		// work is NOT done. Ship surfaces this via shipResult.CIFailure with a
 		// nil error, so it falls through to here. Do NOT mark Handled — that
 		// would close the bead as "merge pending" and advance to dependent
-		// tasks on top of unmerged, failing work. Return so the loop re-runs
-		// the agent to fix CI, mirroring the non-resume path in completeTask
-		// which leaves the task open on real CI failure. Infrastructure
-		// failures (CI can't run — billing/runner) are exempt: those
-		// legitimately close and merge when CI recovers.
+		// tasks on top of unmerged, failing work. Carry the failure detail so
+		// the loop spawns a CI fix agent with the failure log (the same path
+		// the non-resume flow uses), letting the iteration fix the failing test
+		// — including pre-existing/unrelated failures, per the boy-scout rule —
+		// rather than re-running a blind agent that never sees the CI failure.
+		// Infrastructure failures (CI can't run — billing/runner) are exempt:
+		// those legitimately close and merge when CI recovers.
 		if shipResult.CIFailure && !shipResult.InfrastructureFailure {
-			r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "CI failing — leaving task open, re-running agent")
-			return ResumeTaskResult{PRNumber: prNumber}, nil
+			r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "CI failing — leaving task open, spawning CI fix agent")
+			return ResumeTaskResult{PRNumber: prNumber, CIFailureDetail: shipResult.CIFailureDetail}, nil
 		}
 
 		if ok, reason := r.PRChainIsHealthy(ctx, prNumber); !ok {

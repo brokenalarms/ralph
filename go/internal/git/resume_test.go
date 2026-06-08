@@ -244,9 +244,9 @@ func TestResumeTask_FoundViaBranchStoresPRURL(t *testing.T) {
 // Marking it Handled would close the bead as "merge pending" and let the loop
 // advance to dependent tasks on top of unmerged, failing work. Ship surfaces a
 // real CI failure via shipResult.CIFailure with a nil error, so it falls into
-// resolveByState's default case; the fix returns Handled=false there so the
-// loop re-runs the agent to fix CI. Infrastructure failures (CI can't run) are
-// exempt and covered separately.
+// resolveByState's default case; the fix returns Handled=false and carries
+// CIFailureDetail so the loop spawns a CI fix agent with the failure log.
+// Infrastructure failures (CI can't run) are exempt and covered separately.
 func TestResumeTask_OpenPRWithFailingCI_NotHandled(t *testing.T) {
 	stubCISleep(t)
 
@@ -297,5 +297,11 @@ func TestResumeTask_OpenPRWithFailingCI_NotHandled(t *testing.T) {
 	}
 	if result.PRNumber != 970 {
 		t.Errorf("expected PRNumber=970, got %d", result.PRNumber)
+	}
+	// The failure detail must be carried so the loop can spawn a CI fix agent
+	// with the failure log (boy-scout rule) rather than running a blind agent
+	// that never sees the CI failure.
+	if result.CIFailureDetail == nil {
+		t.Error("expected CIFailureDetail to be set so the loop can spawn a CI fix agent with the failure log")
 	}
 }
