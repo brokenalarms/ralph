@@ -404,6 +404,37 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 	}
 }
 
+// Verifies that a below-threshold idle timeout releases the loop's claim
+// (ReopenTask) before retrying, so the in_progress task returns to bd ready
+// and selectNextTask can re-pick it. Without this the task is stranded
+// in_progress, invisible to bd ready, and the loop drops into waitForTasks
+// indefinitely — stranding any dependents.
+func TestHandleRunResult_IdleTimeoutReleasesClaimForRetry(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+
+	backend := &testutil.StubBackend{}
+	l.taskBackend = backend
+
+	// Below threshold so the retry (not skip) path is taken.
+	l.currentTaskID = "task-it-retry"
+	l.taskIdleTimeouts = l.maxIdleTimeoutFailures() - 2
+
+	runIter := 3
+	result := claude.Result{IdleTimeout: true}
+	action := handleRunResultCall(l, context.Background(), result, nil,
+		"task-it-retry", "Idle task", "abc123", runIter)
+
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry, got %d", action)
+	}
+	if backend.ReopenedTask != "task-it-retry" {
+		t.Errorf("expected claim released via ReopenTask for %q, got %q", "task-it-retry", backend.ReopenedTask)
+	}
+	if backend.SkippedTask != "" {
+		t.Errorf("expected task not skipped on below-threshold timeout, got skip of %q", backend.SkippedTask)
+	}
+}
+
 // Verifies that when a task completes via signal, the attempt history is
 // cleared so re-attempts start fresh if the task reappears.
 func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
