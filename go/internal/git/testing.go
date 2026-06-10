@@ -380,6 +380,7 @@ type StubRepoConfig struct {
 	DiffFilesBetweenResult []string
 	DiffStat               string
 	DiffFullResult         string
+	DiffFromBaseResult     string
 	LogOnelineResult       string
 	ConflictDiff           string
 	RecentChangedFiles     string
@@ -522,13 +523,13 @@ func NewStub(cfg StubRepoConfig) Ops {
 
 // --- State accessors ---
 
-func (s *stubRepo) GetProjectDir() string    { return s.cfg.ProjectDir }
-func (s *stubRepo) GetWorkDir() string       { return s.cfg.WorkDir }
+func (s *stubRepo) GetProjectDir() string     { return s.cfg.ProjectDir }
+func (s *stubRepo) GetWorkDir() string        { return s.cfg.WorkDir }
 func (s *stubRepo) GetWorktreeBranch() string { return s.worktreeBranch }
-func (s *stubRepo) GetPrevBranch() string    { return s.prevBranch }
-func (s *stubRepo) IsBranchRenamed() bool    { return s.branchRenamed }
-func (s *stubRepo) SetBranchRenamed(v bool)  { s.branchRenamed = v }
-func (s *stubRepo) SetKnownPRNumber(n int)   { s.knownPRNumber = n }
+func (s *stubRepo) GetPrevBranch() string     { return s.prevBranch }
+func (s *stubRepo) IsBranchRenamed() bool     { return s.branchRenamed }
+func (s *stubRepo) SetBranchRenamed(v bool)   { s.branchRenamed = v }
+func (s *stubRepo) SetKnownPRNumber(n int)    { s.knownPRNumber = n }
 
 // --- PR operations: delegate to inner gh, mirroring *repo's delegation ---
 
@@ -591,18 +592,19 @@ func (s *stubRepo) PRDiffForTask(ctx context.Context, taskID string) string {
 
 // --- Diff and status queries ---
 
-func (s *stubRepo) HeadRev() string                        { return s.headRev }
-func (s *stubRepo) HasDiff() bool                          { return s.cfg.HasDiff }
-func (s *stubRepo) HasUncommittedChanges() bool            { return s.cfg.HasUncommitted }
-func (s *stubRepo) ChangedFiles(_, _ string) []string      { return s.cfg.ChangedFiles }
-func (s *stubRepo) DiffFilesBetween(_, _ string) []string  { return s.cfg.DiffFilesBetweenResult }
-func (s *stubRepo) DiffStatRange(_, _ string) string       { return s.cfg.DiffStat }
-func (s *stubRepo) DiffFull(_, _ string) string            { return s.cfg.DiffFullResult }
-func (s *stubRepo) LogOneline(_, _ string) string          { return s.cfg.LogOnelineResult }
-func (s *stubRepo) ConflictDiff() string                   { return s.cfg.ConflictDiff }
-func (s *stubRepo) RemoteURL() string                      { return s.cfg.RemoteURL }
-func (s *stubRepo) DetectDefaultBranch() string            { return s.cfg.DefaultBranch }
-func (s *stubRepo) RecentChangedFiles(_ int) string        { return s.cfg.RecentChangedFiles }
+func (s *stubRepo) HeadRev() string                                 { return s.headRev }
+func (s *stubRepo) HasDiff() bool                                   { return s.cfg.HasDiff }
+func (s *stubRepo) HasUncommittedChanges() bool                     { return s.cfg.HasUncommitted }
+func (s *stubRepo) ChangedFiles(_, _ string) []string               { return s.cfg.ChangedFiles }
+func (s *stubRepo) DiffFilesBetween(_, _ string) []string           { return s.cfg.DiffFilesBetweenResult }
+func (s *stubRepo) DiffStatRange(_, _ string) string                { return s.cfg.DiffStat }
+func (s *stubRepo) DiffFull(_, _ string) string                     { return s.cfg.DiffFullResult }
+func (s *stubRepo) DiffFromBase() string                            { return s.cfg.DiffFromBaseResult }
+func (s *stubRepo) LogOneline(_, _ string) string                   { return s.cfg.LogOnelineResult }
+func (s *stubRepo) ConflictDiff() string                            { return s.cfg.ConflictDiff }
+func (s *stubRepo) RemoteURL() string                               { return s.cfg.RemoteURL }
+func (s *stubRepo) DetectDefaultBranch() string                     { return s.cfg.DefaultBranch }
+func (s *stubRepo) RecentChangedFiles(_ int) string                 { return s.cfg.RecentChangedFiles }
 func (s *stubRepo) GetCIFailureLog(_ context.Context, _ int) string { return s.cfg.CIFailureLog }
 
 // --- Branch lifecycle ---
@@ -765,8 +767,8 @@ func (s *stubRepo) MergeStack(_ context.Context, _ MergeStackOpts) (MergeStackRe
 
 // --- Remote branch operations ---
 
-func (s *stubRepo) FetchBranch(_ string) error     { return s.cfg.FetchBranchErr }
-func (s *stubRepo) CheckoutRemoteBranch(_ string)  {}
+func (s *stubRepo) FetchBranch(_ string) error    { return s.cfg.FetchBranchErr }
+func (s *stubRepo) CheckoutRemoteBranch(_ string) {}
 
 func (s *stubRepo) RemoteBranchHasCommits(branch string) bool {
 	return s.cfg.RemoteBranchHasCommits[branch]
@@ -794,8 +796,8 @@ func (s *stubRepo) DeleteRemoteBranchByName(_ string) error {
 
 // --- Init / worktree lifecycle ---
 
-func (s *stubRepo) Init(_ context.Context) error         { return s.cfg.InitErr }
-func (s *stubRepo) InitTask(_ context.Context) error     { return s.cfg.InitErr }
+func (s *stubRepo) Init(_ context.Context) error          { return s.cfg.InitErr }
+func (s *stubRepo) InitTask(_ context.Context) error      { return s.cfg.InitErr }
 func (s *stubRepo) SetupWorktree(_ context.Context) error { return nil }
 
 // RemoveWorktree is a no-op: there is no real worktree to remove.
@@ -810,5 +812,3 @@ func (s *stubRepo) GitHubAvailable() bool {
 func (s *stubRepo) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
 	return s.gh.ListAllPRs(ctx, workDir)
 }
-
-

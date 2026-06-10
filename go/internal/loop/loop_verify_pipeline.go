@@ -238,12 +238,24 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 }
 
 // fetchVerifyDiff returns the diff and its label to feed the LLM verifier.
-// Prefers the PR diff (which covers prior iterations) and falls back to
-// the current iteration diff. Returns empty strings when neither is
-// available — LLMVerifyPR treats that as a no-op pass.
+// Prefers the PR diff (which covers prior iterations), then falls back to the
+// branch diff against the merge-base with the default branch
+// (origin/<base>...HEAD). The branch diff covers all commits the task branch
+// has made regardless of which iteration produced them — matching the PR
+// diff's coverage. This is critical when no PR exists yet (verification keeps
+// failing before push): an iteration-local headBefore..HEAD diff is empty
+// whenever the current iteration adds no new commit, even though prior
+// iterations committed the actual work, which caused the verifier to see no
+// changes and falsely skip completed tasks. The iteration-local headBefore
+// diff is the last resort only if the branch diff is somehow empty. Returns
+// empty strings when none are available — LLMVerifyPR treats that as a no-op
+// pass.
 func (l *Loop) fetchVerifyDiff(ctx context.Context, taskID, headBefore string) (string, string) {
 	if diff := l.git.PRDiffForTask(ctx, taskID); diff != "" {
 		return diff, "PR"
+	}
+	if diff := l.git.DiffFromBase(); diff != "" {
+		return diff, "branch"
 	}
 	if diff := l.git.DiffFull(headBefore, "HEAD"); diff != "" {
 		return diff, "iteration"
