@@ -71,7 +71,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	// mid-run when the cumulative time exceeds an arbitrary cap. Each agent is
 	// already bounded independently inside claude.go by its idle timeout
 	// (IdleTimeout / IdleTimeoutProgress) and a hard per-agent wall-clock
-	// (MaxRunDuration / FixMaxRunDuration). The parent ctx remains cancel-only
+	// (Timeouts.MaxRun). The parent ctx remains cancel-only
 	// (Ctrl-C / feedback file).
 
 	// Watch for feedback file and cancel context when it appears.

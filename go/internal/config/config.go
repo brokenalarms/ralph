@@ -46,36 +46,35 @@ type Config struct {
 	IdleTimeout                time.Duration
 	IdleTimeoutProgress        time.Duration
 	MaxRunDuration             time.Duration
-	FixMaxRunDuration          time.Duration
 	WatcherInterval            int
 	StuckThreshold             int
 	StuckConfirmationThreshold int
 	StagnationThreshold        int
 	TestSaturationThreshold    int
 	PermissionDenialThreshold  int
-	BaseBranch              string
-	Wait                    bool
-	Verbose                 bool
-	Model                   string
-	AgentEscalationModel    string // deprecated: no effect; cross-iteration escalation removed
-	VerifyModel             string
-	VerifyEscalationModel   string
-	FixModel                string
-	FixEscalationModel      string
-	PostTask                string
-	VerifyBuild             string
-	Verify                  string
-	Notify                  bool
-	CIPollTimeout           time.Duration
-	NoCIGracePeriod         time.Duration
+	BaseBranch                 string
+	Wait                       bool
+	Verbose                    bool
+	Model                      string
+	AgentEscalationModel       string // deprecated: no effect; cross-iteration escalation removed
+	VerifyModel                string
+	VerifyEscalationModel      string
+	FixModel                   string
+	FixEscalationModel         string
+	PostTask                   string
+	VerifyBuild                string
+	Verify                     string
+	Notify                     bool
+	CIPollTimeout              time.Duration
+	NoCIGracePeriod            time.Duration
 
 	// Review timeouts — how long to wait for automated code reviewers.
 	// Field names are neutral: the config package doesn't know about
 	// specific reviewer implementations (Copilot, CodeRabbit). Those are
 	// internal details of the git module.
-	ReviewerGatedTimeout        time.Duration
+	ReviewerGatedTimeout         time.Duration
 	ReviewerOpportunisticTimeout time.Duration
-	CodeRabbitReviewTimeout     time.Duration
+	CodeRabbitReviewTimeout      time.Duration
 
 	// Attempt limits — maximum retries before giving up or skipping.
 	MaxPromptAttempts      int
@@ -91,7 +90,7 @@ type Config struct {
 	ConnectivityCheckTimeout time.Duration
 	InternetRestoreInterval  time.Duration
 
-	// AgentHeartbeatInterval emits an "Agent still working" line when the
+	// AgentHeartbeatInterval emits an agent-liveness heartbeat line when the
 	// agent produces no visible output for this duration. Zero disables.
 	AgentHeartbeatInterval time.Duration
 

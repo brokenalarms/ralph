@@ -925,7 +925,7 @@ func TestPoll_IdleTimeoutKillsSession(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  200 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 200 * time.Millisecond},
 	}
 
 	result := runWithCommand(t, &runner, cfg, "sleep", "1")
@@ -978,7 +978,7 @@ func TestPoll_ActivityResetsIdleTimer(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  200 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 200 * time.Millisecond},
 	}
 
 	result := runWithCommand(t, &runner, cfg, "sleep", "1")
@@ -1049,7 +1049,7 @@ func TestPoll_OversizedRawLogLineDoesNotBreakIdleDetection(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  200 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 200 * time.Millisecond},
 	}
 
 	result := runWithCommand(t, &runner, cfg, "sleep", "1")
@@ -1164,14 +1164,13 @@ func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
 	runner := Runner{Logger: log}
 
 	cfg := RunConfig{
-		WorkDir:             dir,
-		RalphDir:            dir,
-		Prompt:              "echo test",
-		RawLog:              rawLog,
-		Signals:             signals,
-		PollInterval:        50 * time.Millisecond,
-		IdleTimeout:         5 * time.Second,
-		IdleTimeoutProgress: 200 * time.Millisecond,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 5 * time.Second, IdleProgress: 200 * time.Millisecond},
 	}
 
 	// Write a content activity line to the raw log after a short delay, simulating
@@ -1216,7 +1215,7 @@ func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  0,
+		Timeouts:     Timeouts{Idle: 0},
 	}
 
 	result := runWithCommand(t, &runner, cfg, "sleep", "1")
@@ -1258,14 +1257,13 @@ func TestPoll_WallClockTimeoutKillsSession(t *testing.T) {
 	defer close(stop)
 
 	cfg := RunConfig{
-		WorkDir:        dir,
-		RalphDir:       dir,
-		Prompt:         "echo test",
-		RawLog:         rawLog,
-		Signals:        signals,
-		PollInterval:   50 * time.Millisecond,
-		IdleTimeout:    5 * time.Second,
-		MaxRunDuration: 200 * time.Millisecond,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 5 * time.Second, MaxRun: 200 * time.Millisecond},
 	}
 
 	result := runWithCommand(t, &runner, cfg, "sleep", "2")
@@ -1298,13 +1296,13 @@ func TestPoll_ZeroMaxRunDurationDisables(t *testing.T) {
 	}()
 
 	cfg := RunConfig{
-		WorkDir:        dir,
-		RalphDir:       dir,
-		Prompt:         "echo test",
-		RawLog:         rawLog,
-		Signals:        signals,
-		PollInterval:   50 * time.Millisecond,
-		MaxRunDuration: 0,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{MaxRun: 0},
 	}
 
 	result := runWithCommand(t, &runner, cfg, "sleep", "1")
@@ -1373,7 +1371,7 @@ func TestIsContentActivity_PlaintextIsTrue(t *testing.T) {
 
 // Verifies that unparseable JSON conservatively resets the idle watchdog.
 func TestIsContentActivity_UnparseableJSONIsTrue(t *testing.T) {
-	if !isContentActivity(`{"type":"broken_json`, ) {
+	if !isContentActivity(`{"type":"broken_json`) {
 		t.Error("unparseable JSON should be treated as content activity (conservative)")
 	}
 }
@@ -1489,7 +1487,7 @@ func TestPoll_RateLimitEventsDoNotPreventIdleTimeout(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  200 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 200 * time.Millisecond},
 	}
 
 	result := runWithCommand(t, &runner, cfg, "sleep", "2")
@@ -1555,7 +1553,7 @@ func TestPoll_AllowedWarningRateLimitEventLogsOnce(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  400 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 400 * time.Millisecond},
 	}
 
 	// Write three allowed_warning events — only the first should log.
@@ -1604,7 +1602,7 @@ func TestPoll_RateLimitAllowedBackIn_LogsOnce(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  500 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 500 * time.Millisecond},
 	}
 
 	const resetsAt = int64(1776412800)
@@ -1661,7 +1659,7 @@ func TestPoll_RateLimitConsumingExtendedUsage_LogsOnce(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  500 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 500 * time.Millisecond},
 	}
 
 	const warningResetsAt = int64(1776412800)
@@ -1719,7 +1717,7 @@ func TestPoll_RateLimitNowUsingOverage_LogsOnce(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		IdleTimeout:  500 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 500 * time.Millisecond},
 	}
 
 	const resetsAt = int64(1776412800)
@@ -2506,11 +2504,11 @@ func TestRun_DetectsNoCodeNeededSignalAfterExit(t *testing.T) {
 	runner := Runner{Logger: log}
 
 	cfg := RunConfig{
-		WorkDir:      dir,
-		RalphDir:     dir,
-		Prompt:       "echo test",
-		RawLog:       rawLog,
-		Signals:      signals,
+		WorkDir:  dir,
+		RalphDir: dir,
+		Prompt:   "echo test",
+		RawLog:   rawLog,
+		Signals:  signals,
 		// Long poll interval so the signal is not caught mid-run.
 		PollInterval: 2 * time.Second,
 	}
@@ -2571,8 +2569,8 @@ func TestBuildAgentEnv_NoVenv(t *testing.T) {
 }
 
 // Verifies that when an agent produces no visible output for longer than
-// AgentHeartbeatInterval, the poll loop emits a "still working" heartbeat
-// line that includes the last human-readable text seen from the agent.
+// AgentHeartbeatInterval, the poll loop emits an agent-liveness heartbeat
+// line that includes the last activity text seen from the agent.
 func TestPoll_HeartbeatEmittedDuringQuietRun(t *testing.T) {
 	dir := t.TempDir()
 	rawLog := filepath.Join(dir, "raw.log")
@@ -2594,20 +2592,20 @@ func TestPoll_HeartbeatEmittedDuringQuietRun(t *testing.T) {
 	}()
 
 	cfg := RunConfig{
-		WorkDir:                dir,
-		RalphDir:               dir,
-		Prompt:                 "echo test",
-		RawLog:                 rawLog,
-		Signals:                signals,
-		PollInterval:           50 * time.Millisecond,
-		AgentHeartbeatInterval: 100 * time.Millisecond,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Heartbeat: 100 * time.Millisecond},
 	}
 
 	runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	var found bool
 	for _, msg := range log.logs {
-		if strings.Contains(msg, "Agent still working") && strings.Contains(msg, "Investigating the bug") {
+		if strings.Contains(msg, "Agent alive") && strings.Contains(msg, "Investigating the bug") {
 			found = true
 			break
 		}
@@ -2640,20 +2638,66 @@ func TestPoll_NoHeartbeatDuringActiveOutput(t *testing.T) {
 	}()
 
 	cfg := RunConfig{
-		WorkDir:                dir,
-		RalphDir:               dir,
-		Prompt:                 "echo test",
-		RawLog:                 rawLog,
-		Signals:                signals,
-		PollInterval:           50 * time.Millisecond,
-		AgentHeartbeatInterval: 120 * time.Millisecond,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Heartbeat: 120 * time.Millisecond},
 	}
 
 	runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	for _, msg := range log.logs {
-		if strings.Contains(msg, "Agent still working") {
+		if strings.Contains(msg, "Agent alive") {
 			t.Errorf("unexpected heartbeat during active output: %s", msg)
 		}
+	}
+}
+
+// Verifies that when an idle timeout is configured, the heartbeat reports the
+// idle-kill countdown — so the line states how long the agent has been quiet
+// AND when it will be killed, rather than vaguely asserting it is "working".
+func TestPoll_HeartbeatReportsIdleKillCountdown(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// One activity line, then quiet long enough for a heartbeat (but well under
+	// the 5s idle timeout, so the run is not killed) before completing.
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"thinking"}}`)
+		f.Close()
+		time.Sleep(300 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 5 * time.Second, Heartbeat: 100 * time.Millisecond},
+	}
+
+	runWithCommand(t, &runner, cfg, "sleep", "1")
+
+	var found bool
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Agent alive") && strings.Contains(msg, "idle-kill in") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected heartbeat reporting idle-kill countdown, logs were: %v", log.logs)
 	}
 }

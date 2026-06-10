@@ -168,7 +168,6 @@ func TestNewConfigKeysExist(t *testing.T) {
 		"idle_timeout":          false,
 		"idle_timeout_progress": false,
 		"max_run_duration":      false,
-		"fix_max_run_duration":  false,
 	}
 	for _, f := range Flags {
 		if _, ok := required[f.ConfigKey]; ok {

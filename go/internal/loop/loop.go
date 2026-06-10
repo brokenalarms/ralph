@@ -124,18 +124,18 @@ func (h *liveBinaryHasher) Hash() ([]byte, error) {
 // production implementations when nil — tests pass non-nil stubs to
 // override behavior.
 type Modules struct {
-	State        *state.Store
-	Git          git.Ops
-	TaskBackend  tasks.Backend
-	Logger       *logging.Logger
-	Verifier     *verifier.Verifier
-	Runner       claudeRunner   // nil → agent.New(logger)
-	Connectivity  Connectivity   // nil → live gh CLI / net checks
-	IterationHook IterationHook  // nil → no-op
-	PostTaskHook  PostTaskHook   // nil → fallback to runPostTask script path
-	WaitHook      WaitHook       // nil → no-op
-	VerifyHook    VerifyHook     // nil → fallback to runSimpleVerifyCompletion
-	BinaryHasher  BinaryHasher   // nil → reads os.Executable() SHA-256
+	State         *state.Store
+	Git           git.Ops
+	TaskBackend   tasks.Backend
+	Logger        *logging.Logger
+	Verifier      *verifier.Verifier
+	Runner        claudeRunner  // nil → agent.New(logger)
+	Connectivity  Connectivity  // nil → live gh CLI / net checks
+	IterationHook IterationHook // nil → no-op
+	PostTaskHook  PostTaskHook  // nil → fallback to runPostTask script path
+	WaitHook      WaitHook      // nil → no-op
+	VerifyHook    VerifyHook    // nil → fallback to runSimpleVerifyCompletion
+	BinaryHasher  BinaryHasher  // nil → reads os.Executable() SHA-256
 }
 
 // Config holds all parameters needed by the execution loop. Pure data —
@@ -148,9 +148,7 @@ type Config struct {
 	AutoMerge             bool
 	Evolve                bool
 	CallsPerHour          int
-	IdleTimeout           time.Duration
-	IdleTimeoutProgress   time.Duration
-	MaxRunDuration        time.Duration
+	Timeouts              claude.Timeouts
 	PostTask              string
 	VerifyBuild           string
 	Notify                bool
@@ -179,8 +177,6 @@ type Config struct {
 	// Network timeouts.
 	ConnectivityCheckTimeout time.Duration
 	InternetRestoreInterval  time.Duration
-
-	AgentHeartbeatInterval time.Duration
 
 	// ShipRetryBackoffs overrides the default retry delays for transient GitHub
 	// errors (default: 5s, 15s, 30s). Set to zero-duration slices in tests to
@@ -245,30 +241,30 @@ type CompletedTask struct {
 // cmd/ralph/main.go and threaded into Loop and other modules at
 // construction time. This is the only such exception in the codebase.
 type Loop struct {
-	cfg               Config
-	state             *state.Store
-	git               git.Ops
-	taskBackend       tasks.Backend
-	limiter           *ratelimit.Limiter
-	runner            claudeRunner
-	verifier          *verifier.Verifier
-	analyzer          *analyzer.Analyzer
-	taskAttempts             []AttemptEvent // in-memory attempt events for the current task, reset per task
-	taskIdleTimeouts         int            // consecutive idle timeout count for the current task
-	currentTaskID            string         // tracks which task's attempts are in taskAttempts
-	consecutiveNoAgentIters  int            // incremented when an iteration ends without invoking the agent; reset on agent invocation
-	logger            *logging.Logger
-	signals           claude.SignalPaths
-	connectivity      Connectivity
-	iterationHook     IterationHook
-	postTaskHook      PostTaskHook
-	waitHook          WaitHook
-	verifyHook        VerifyHook
-	binaryHasher      BinaryHasher
-	startupBinaryHash []byte
-	completedTasks    []CompletedTask
-	activeReviewers   []git.Reviewer
-	reviewersDetected bool
+	cfg                     Config
+	state                   *state.Store
+	git                     git.Ops
+	taskBackend             tasks.Backend
+	limiter                 *ratelimit.Limiter
+	runner                  claudeRunner
+	verifier                *verifier.Verifier
+	analyzer                *analyzer.Analyzer
+	taskAttempts            []AttemptEvent // in-memory attempt events for the current task, reset per task
+	taskIdleTimeouts        int            // consecutive idle timeout count for the current task
+	currentTaskID           string         // tracks which task's attempts are in taskAttempts
+	consecutiveNoAgentIters int            // incremented when an iteration ends without invoking the agent; reset on agent invocation
+	logger                  *logging.Logger
+	signals                 claude.SignalPaths
+	connectivity            Connectivity
+	iterationHook           IterationHook
+	postTaskHook            PostTaskHook
+	waitHook                WaitHook
+	verifyHook              VerifyHook
+	binaryHasher            BinaryHasher
+	startupBinaryHash       []byte
+	completedTasks          []CompletedTask
+	activeReviewers         []git.Reviewer
+	reviewersDetected       bool
 }
 
 // New creates an execution loop from the given configuration and module
@@ -473,21 +469,18 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 	agentModel := verify.CapModel(l.cfg.ModelCap, l.cfg.Model)
 	l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
 	result, runErr := l.runner.Run(claude.RunConfig{
-		Ctx:                 ctx,
-		WorkDir:             prep.workDir,
-		RalphDir:            l.cfg.Dirs.RalphDir,
-		Prompt:              prep.fullPrompt,
-		TaskID:              task.id,
-		RawLog:              prep.rawLogPath,
-		LogFile:             filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "loop.log"),
-		Verbose:             l.cfg.Verbose,
-		Model:               agentModel,
-		Signals:             l.signals,
-		PollInterval:        2 * time.Second,
-		IdleTimeout:            l.cfg.IdleTimeout,
-		IdleTimeoutProgress:    l.cfg.IdleTimeoutProgress,
-		MaxRunDuration:         l.cfg.MaxRunDuration,
-		AgentHeartbeatInterval: l.cfg.AgentHeartbeatInterval,
+		Ctx:          ctx,
+		WorkDir:      prep.workDir,
+		RalphDir:     l.cfg.Dirs.RalphDir,
+		Prompt:       prep.fullPrompt,
+		TaskID:       task.id,
+		RawLog:       prep.rawLogPath,
+		LogFile:      filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "loop.log"),
+		Verbose:      l.cfg.Verbose,
+		Model:        agentModel,
+		Signals:      l.signals,
+		PollInterval: 2 * time.Second,
+		Timeouts:     l.cfg.Timeouts,
 		OnSignal: func(summary string) bool {
 			// Stop the main runner before spawning fix-agent subprocesses
 			// inside runVerifyPipeline. The main agent session is wrapping
