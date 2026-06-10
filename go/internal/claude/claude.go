@@ -26,10 +26,10 @@ type Log interface {
 // SignalPaths holds the file paths used for inter-process signaling between
 // the ralph loop and the Claude process.
 type SignalPaths struct {
-	Complete      string // written when current task finishes
-	CurrentTask   string // written when Claude picks up a task
-	AllComplete   string // written when all tasks are done
-	NoCodeNeeded  string // written when investigation confirms no code changes are needed
+	Complete     string // written when current task finishes
+	CurrentTask  string // written when Claude picks up a task
+	AllComplete  string // written when all tasks are done
+	NoCodeNeeded string // written when investigation confirms no code changes are needed
 }
 
 // DefaultSignalPaths returns signal file paths under the given ralph dir.
@@ -42,29 +42,43 @@ func DefaultSignalPaths(ralphDir string) SignalPaths {
 	}
 }
 
+// Timeouts is the single source of truth for the timing policy applied to an
+// agent run. The same struct governs the main implementation agent and the
+// verifier's fix agent — there is no per-role divergence; callers pass one
+// shared value to both. Role-specific differences (whether a completion signal
+// is verified, where output is logged) live on RunConfig, not here.
+type Timeouts struct {
+	// Idle kills the session if the raw log file hasn't been modified for this
+	// duration. Zero disables idle detection.
+	Idle time.Duration
+
+	// IdleProgress is the shorter idle timeout used once the agent has produced
+	// content output (text, thinking, tool use) in the raw log. Zero falls back
+	// to Idle.
+	IdleProgress time.Duration
+
+	// MaxRun is the hard wall-clock cap on total agent run time, fired
+	// regardless of log activity. Zero disables the wall-clock backstop.
+	MaxRun time.Duration
+
+	// Heartbeat emits a liveness line when the agent produces no visible output
+	// for this duration. Zero disables.
+	Heartbeat time.Duration
+}
+
 // RunConfig configures a single Claude invocation.
 type RunConfig struct {
-	Ctx       context.Context // cancelled on SIGINT to stop the run
-	WorkDir   string
-	RalphDir  string
-	Prompt    string
-	RawLog    string // path to raw JSON log file
-	LogFile   string // path to human-readable log file
-	Signals   SignalPaths
+	Ctx          context.Context // cancelled on SIGINT to stop the run
+	WorkDir      string
+	RalphDir     string
+	Prompt       string
+	RawLog       string // path to raw JSON log file
+	LogFile      string // path to human-readable log file
+	Signals      SignalPaths
 	PollInterval time.Duration
 
-	// IdleTimeout kills the session if the raw log file hasn't been modified
-	// for this duration. Zero disables idle detection.
-	IdleTimeout time.Duration
-
-	// MaxRunDuration is the hard wall-clock cap on total agent run time.
-	// Zero disables the wall-clock backstop.
-	MaxRunDuration time.Duration
-
-	// IdleTimeoutProgress is the shorter idle timeout used once the agent has
-	// produced content output (text, thinking, tool use) in the raw log.
-	// Zero falls back to IdleTimeout.
-	IdleTimeoutProgress time.Duration
+	// Timeouts is the shared idle/progress/wall-clock/heartbeat policy.
+	Timeouts Timeouts
 
 	// OnSignal is called when the agent writes a completion signal.
 	// If it returns true, the signal is accepted (agent killed, result returned).
@@ -72,10 +86,6 @@ type RunConfig struct {
 	// Used by the orchestrator to verify tests before accepting completion.
 	// If nil, signals are always accepted (legacy behavior).
 	OnSignal func(summary string) bool
-
-	// AgentHeartbeatInterval emits an "Agent still working" line when the
-	// agent produces no visible output for this duration. Zero disables.
-	AgentHeartbeatInterval time.Duration
 
 	// FeedbackFile is the path where the orchestrator writes feedback for
 	// the agent to read. Used to send test failure output back to the agent.
@@ -544,7 +554,7 @@ func parseSystemStatusEvent(line string) string {
 // newLinesScan holds results from scanning newly appended raw log lines.
 type newLinesScan struct {
 	hasActivity             bool
-	lastText                string // last human-readable non-verbose-only line extracted this scan
+	lastActivityText        string // last extracted line of ANY tool/text (incl. verbose tools) — for the liveness heartbeat
 	isCompacting            bool
 	rlThrottled             bool
 	rlResetAt               time.Time
@@ -604,8 +614,8 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 		if !result.hasActivity && isContentActivity(line) {
 			result.hasActivity = true
 		}
-		if text := extractStreamText(line); text != "" && !isVerboseOnlyLine(text) {
-			result.lastText = text
+		if text := extractStreamText(line); text != "" {
+			result.lastActivityText = firstLine(text)
 		}
 		resetAt, throttled, warning, isUsingOverage, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
 		if ok {
@@ -649,7 +659,6 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 	return result
 }
 
-
 // poll checks for process exit and signal files on a ticker.
 func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	if cfg.Ctx == nil {
@@ -667,17 +676,17 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	nowOverageLogged := false
 	lastActivity := time.Now()
 	lastEmit := time.Now()
-	var latestText string
+	var latestActivity string
 	runStart := time.Now()
 	processDone := make(chan struct{})
 
 	// Clamp heartbeat to be shorter than the most restrictive idle timeout
 	// so a heartbeat always precedes any idle-timeout kill.
-	heartbeatInterval := cfg.AgentHeartbeatInterval
-	if heartbeatInterval > 0 && cfg.IdleTimeout > 0 {
-		minIdleTimeout := cfg.IdleTimeout
-		if cfg.IdleTimeoutProgress > 0 && cfg.IdleTimeoutProgress < minIdleTimeout {
-			minIdleTimeout = cfg.IdleTimeoutProgress
+	heartbeatInterval := cfg.Timeouts.Heartbeat
+	if heartbeatInterval > 0 && cfg.Timeouts.Idle > 0 {
+		minIdleTimeout := cfg.Timeouts.Idle
+		if cfg.Timeouts.IdleProgress > 0 && cfg.Timeouts.IdleProgress < minIdleTimeout {
+			minIdleTimeout = cfg.Timeouts.IdleProgress
 		}
 		if heartbeatInterval >= minIdleTimeout {
 			heartbeatInterval = minIdleTimeout * 3 / 4
@@ -740,8 +749,8 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					lastEmit = time.Now()
 					activitySeen = true
 				}
-				if scan.lastText != "" {
-					latestText = scan.lastText
+				if scan.lastActivityText != "" {
+					latestActivity = scan.lastActivityText
 				}
 				for _, status := range scan.statusEvents {
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model},
@@ -881,22 +890,38 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 			}
 
-			// Emit heartbeat when agent has been quiet longer than heartbeatInterval.
+			// Emit heartbeat when the agent has been quiet longer than
+			// heartbeatInterval. The line reports only what is actually known —
+			// the process is alive (we return earlier when it exits), how long
+			// the raw log has been silent, and how long until the idle-kill
+			// fires — plus the last tool/text activity when available. It does
+			// NOT claim the agent is making useful progress: silence looks
+			// identical whether the agent is thinking or hung. The idle timeout
+			// below is what adjudicates a genuinely stuck agent.
 			if heartbeatInterval > 0 && time.Since(lastEmit) >= heartbeatInterval {
-				elapsed := time.Since(runStart).Truncate(time.Second)
-				msg := fmt.Sprintf("Agent still working (%s elapsed)", elapsed)
-				if latestText != "" {
-					msg += ": " + latestText
+				quiet := time.Since(lastActivity).Truncate(time.Second)
+				msg := fmt.Sprintf("Agent alive, no output for %s", quiet)
+				if cfg.Timeouts.Idle > 0 {
+					idleThreshold := cfg.Timeouts.Idle
+					if cfg.Timeouts.IdleProgress > 0 && activitySeen {
+						idleThreshold = cfg.Timeouts.IdleProgress
+					}
+					if killIn := (idleThreshold - time.Since(lastActivity)).Truncate(time.Second); killIn > 0 {
+						msg += fmt.Sprintf(" (idle-kill in %s)", killIn)
+					}
+				}
+				if latestActivity != "" {
+					msg += " — last: " + latestActivity
 				}
 				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "%s", msg)
 				lastEmit = time.Now()
 			}
 
 			// Check idle timeout.
-			if cfg.IdleTimeout > 0 {
-				timeout := cfg.IdleTimeout
-				if cfg.IdleTimeoutProgress > 0 && activitySeen {
-					timeout = cfg.IdleTimeoutProgress
+			if cfg.Timeouts.Idle > 0 {
+				timeout := cfg.Timeouts.Idle
+				if cfg.Timeouts.IdleProgress > 0 && activitySeen {
+					timeout = cfg.Timeouts.IdleProgress
 				}
 				idle := time.Since(lastActivity)
 				if idle >= timeout {
@@ -907,8 +932,8 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			}
 
 			// Check wall-clock timeout — fires regardless of log activity.
-			if cfg.MaxRunDuration > 0 && time.Since(runStart) >= cfg.MaxRunDuration {
-				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Wall-clock timeout (%s max run duration) — killing session", cfg.MaxRunDuration)
+			if cfg.Timeouts.MaxRun > 0 && time.Since(runStart) >= cfg.Timeouts.MaxRun {
+				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Wall-clock timeout (%s max run duration) — killing session", cfg.Timeouts.MaxRun)
 				gracefulKill(cmd, processDone)
 				return Result{WallClockTimeout: true}
 			}

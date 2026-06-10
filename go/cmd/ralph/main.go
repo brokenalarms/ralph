@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -19,7 +20,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
-	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/tmux"
 	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -208,6 +208,16 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	// Construct the verifier module. Verifier holds no module references —
 	// it exposes stateless operations that Loop orchestrates. See
 	// internal/verifier/verifier.go for the rationale.
+	//
+	// agentTimeouts is the single timing policy shared by the main agent and
+	// the verifier's fix agent — built once, passed to both, so the two roles
+	// can never drift apart.
+	agentTimeouts := claude.Timeouts{
+		Idle:         cfg.IdleTimeout,
+		IdleProgress: cfg.IdleTimeoutProgress,
+		MaxRun:       cfg.MaxRunDuration,
+		Heartbeat:    cfg.AgentHeartbeatInterval,
+	}
 	vrf := verifier.New(verifier.Config{
 		ProjectDir:            dirs.ProjectDir,
 		ConfigVerify:          cfg.Verify,
@@ -218,9 +228,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		ModelCap:              modelCap(cfg),
 		PromptsDir:            dirs.PromptsDir,
 		RalphDir:              ralphDir,
-		IdleTimeout:            cfg.IdleTimeout,
-		AgentHeartbeatInterval: cfg.AgentHeartbeatInterval,
-		FixMaxRunDuration:      cfg.FixMaxRunDuration,
+		Timeouts:              agentTimeouts,
 		TestTimeout:           cfg.TestTimeout,
 		CompileCheckTimeout:   cfg.CompileCheckTimeout,
 		Signals:               claude.DefaultSignalPaths(ralphDir),
@@ -235,9 +243,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		AutoMerge:                cfg.AutoMerge,
 		Evolve:                   cfg.Evolve,
 		CallsPerHour:             cfg.CallsPerHour,
-		IdleTimeout:              cfg.IdleTimeout,
-		IdleTimeoutProgress:      cfg.IdleTimeoutProgress,
-		MaxRunDuration:           cfg.MaxRunDuration,
+		Timeouts:                 agentTimeouts,
 		PostTask:                 cfg.PostTask,
 		VerifyBuild:              cfg.VerifyBuild,
 		Verify:                   cfg.Verify,
@@ -259,7 +265,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		CompileCheckTimeout:      cfg.CompileCheckTimeout,
 		ConnectivityCheckTimeout: cfg.ConnectivityCheckTimeout,
 		InternetRestoreInterval:  cfg.InternetRestoreInterval,
-		AgentHeartbeatInterval:   cfg.AgentHeartbeatInterval,
 	}, loop.Modules{
 		State:       st,
 		Git:         gm,
@@ -348,7 +353,6 @@ func initRalphDir(ctx context.Context, cfg *config.Config, ralphDir, stateFile s
 
 	return false, -1
 }
-
 
 // resumeScriptHook implements loop.IterationHook by regenerating the
 // resume script at the start of each loop iteration. The script captures

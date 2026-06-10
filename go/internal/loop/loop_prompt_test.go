@@ -226,13 +226,13 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	// Capture the prompt passed to Claude
@@ -365,11 +365,13 @@ func TestLoop_HasProgress_LogActivityDrivesTimeout(t *testing.T) {
 	})
 
 	cfg := Config{
-		Dirs:                workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations:       1,
-		CallsPerHour:        80,
-		IdleTimeout:         30 * time.Second,   // long — must not fire
-		IdleTimeoutProgress: 100 * time.Millisecond, // short — fires once activity seen
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		Timeouts: claude.Timeouts{
+			Idle:         30 * time.Second,       // long — must not fire
+			IdleProgress: 100 * time.Millisecond, // short — fires once activity seen
+		},
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{

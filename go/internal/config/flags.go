@@ -70,7 +70,7 @@ var Flags = []FlagDef{
 	{
 		Help: "Max Claude calls per hour", Default: "80",
 		ConfigKey: "calls_per_hour",
-		Kind: KindInt,
+		Kind:      KindInt,
 		Apply: func(cfg *Config, val string) error {
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -110,7 +110,7 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.IdleTimeoutProgress.String() },
 	},
 	{
-		Help: "Hard wall-clock cap on agent run time; kills session if exceeded", Default: "60m",
+		Help: "Hard wall-clock cap on agent run time (main and fix agents); kills session if exceeded", Default: "30m",
 		EnvVar: "RALPH_MAX_RUN_DURATION", ConfigKey: "max_run_duration",
 		Kind: KindDuration,
 		Apply: func(cfg *Config, val string) error {
@@ -122,20 +122,6 @@ var Flags = []FlagDef{
 			return nil
 		},
 		Read: func(cfg *Config) string { return cfg.MaxRunDuration.String() },
-	},
-	{
-		Help: "Hard wall-clock cap on fix-agent run time; kills session if exceeded", Default: "30m",
-		EnvVar: "RALPH_FIX_MAX_RUN_DURATION", ConfigKey: "fix_max_run_duration",
-		Kind: KindDuration,
-		Apply: func(cfg *Config, val string) error {
-			d, err := parseDuration(val)
-			if err != nil {
-				return err
-			}
-			cfg.FixMaxRunDuration = d
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.FixMaxRunDuration.String() },
 	},
 	{
 		Long: "--tmux",
@@ -586,7 +572,7 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.FixEscalationModel },
 	},
 	{
-		Help:      "Emit 'Agent still working' heartbeat at this interval during quiet agent runs (0 disables)",
+		Help:      "Emit an agent-liveness heartbeat at this interval during quiet agent runs (0 disables)",
 		Default:   "60s",
 		EnvVar:    "RALPH_AGENT_HEARTBEAT_INTERVAL",
 		ConfigKey: "agent_heartbeat_interval",

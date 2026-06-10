@@ -49,7 +49,7 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 		ModelCap:              cfg.ModelCap,
 		PromptsDir:            cfg.Dirs.PromptsDir,
 		RalphDir:              cfg.Dirs.RalphDir,
-		IdleTimeout:           cfg.IdleTimeout,
+		Timeouts:              cfg.Timeouts,
 		TestTimeout:           cfg.TestTimeout,
 		CompileCheckTimeout:   cfg.CompileCheckTimeout,
 		Signals:               claude.DefaultSignalPaths(cfg.Dirs.RalphDir),

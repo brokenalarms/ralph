@@ -52,8 +52,8 @@ type Runner interface {
 // fields, no module references. Per-call data (diffs, task metadata, etc.)
 // flows in through method arguments, not through Config.
 type Config struct {
-	ProjectDir   string
-	ConfigVerify string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
+	ProjectDir            string
+	ConfigVerify          string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string
 	VerifyEscalationModel string
 	FixModel              string // model for fix agents on attempt 1; defaults to ModelSonnet
@@ -61,9 +61,7 @@ type Config struct {
 	ModelCap              string // maximum model tier ceiling from --model flag; empty means no cap
 	PromptsDir            string
 	RalphDir              string
-	IdleTimeout            time.Duration
-	AgentHeartbeatInterval time.Duration
-	FixMaxRunDuration      time.Duration
+	Timeouts              claude.Timeouts
 	TestTimeout           time.Duration
 	CompileCheckTimeout   time.Duration
 
@@ -441,10 +439,10 @@ type PreIterationInput struct {
 // Message in the agent prompt and TestPassed / CompilePassed to decide what
 // to write to the state store.
 type PreIterationResult struct {
-	Message       string // human-readable status message appended to agent prompt
-	TestResult    verify.Result
-	CompileResult verify.Result
-	TestElapsed   time.Duration
+	Message        string // human-readable status message appended to agent prompt
+	TestResult     verify.Result
+	CompileResult  verify.Result
+	TestElapsed    time.Duration
 	CompileElapsed time.Duration
 }
 
@@ -556,11 +554,9 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 		Prompt:       prompt,
 		RawLog:       rawLogPath,
 		Signals:      v.cfg.Signals,
-		PollInterval:           2 * time.Second,
-		IdleTimeout:            v.cfg.IdleTimeout,
-		AgentHeartbeatInterval: v.cfg.AgentHeartbeatInterval,
-		MaxRunDuration:         v.cfg.FixMaxRunDuration,
-		Model:          model,
+		PollInterval: 2 * time.Second,
+		Timeouts:     v.cfg.Timeouts,
+		Model:        model,
 	})
 
 	if !result.SignalDetected {
