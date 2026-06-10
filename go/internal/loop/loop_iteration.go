@@ -711,6 +711,23 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			l.skipTask(taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}
+		// Release the loop's claim before retrying. ClaimTask set
+		// status=in_progress at iteration start, which removes the task from
+		// bd ready. The retry re-enters task selection (Run: actionRetry →
+		// continue), and mid-session selectNextTask does NOT resume the
+		// current task — it relies on bd ready. Without reopening, the task
+		// stays in_progress, invisible to bd ready, never re-picked, and the
+		// loop drops into waitForTasks indefinitely, stranding any dependents.
+		// taskIdleTimeouts still bounds retries: l.currentTaskID is unchanged
+		// on re-pick, so runAgent does not reset the counter and the
+		// maxIdleTimeoutFailures skip above fires after N timeouts.
+		if taskID != "" && l.taskBackend != nil {
+			if err := l.taskBackend.ReopenTask(taskID); err != nil {
+				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ReopenTask (release claim for retry) %s: %v", taskID, err)
+			} else {
+				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → open (released for retry)", taskID)
+			}
+		}
 		return actionRetry
 	}
 	if result.RateLimited {

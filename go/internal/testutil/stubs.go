@@ -21,6 +21,7 @@ type StubBackend struct {
 	FullContext        string
 	SkippedTask        string
 	SkipReason         string
+	ReopenedTask       string
 	ResumeIDSet        string         // last value passed to SetResumeTaskID
 	HasRemainingResult *bool          // when non-nil, HasRemaining returns this value instead of Remaining > 0
 	OpenDependents     []string       // returned by GetOpenDependents for any task
@@ -54,7 +55,7 @@ func (s *StubBackend) SetSkippedIDs(_ []string) {}
 func (s *StubBackend) SetResumeTaskID(id string) {
 	s.ResumeIDSet = id
 }
-func (s *StubBackend) ReopenTask(string) error                    { return nil }
+func (s *StubBackend) ReopenTask(id string) error                { s.ReopenedTask = id; return nil }
 func (s *StubBackend) SetState(_, _, _, _ string) error           { return nil }
 func (s *StubBackend) GetState(_, _ string) (string, error)       { return "", nil }
 func (s *StubBackend) ExecutionInstructions() (string, error)     { return "", nil }
