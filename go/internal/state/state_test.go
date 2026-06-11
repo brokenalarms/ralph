@@ -542,65 +542,6 @@ func TestCompletedTasks_RoundTrip(t *testing.T) {
 	}
 }
 
-// Proves: AddSkippedTask persists IDs to state.json skipped_tasks.
-func TestAddSkippedTask_Persists(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5)
-
-	if err := st.AddSkippedTask("ralph-aaa"); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.AddSkippedTask("ralph-bbb"); err != nil {
-		t.Fatal(err)
-	}
-
-	skipped, err := st.GetSkippedTasks()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(skipped) != 2 || skipped[0] != "ralph-aaa" || skipped[1] != "ralph-bbb" {
-		t.Errorf("expected [ralph-aaa, ralph-bbb], got %v", skipped)
-	}
-}
-
-// Proves: AddSkippedTask is idempotent — duplicate IDs are not added.
-func TestAddSkippedTask_NoDuplicates(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5)
-
-	st.AddSkippedTask("ralph-aaa")
-	st.AddSkippedTask("ralph-aaa")
-
-	skipped, _ := st.GetSkippedTasks()
-	if len(skipped) != 1 {
-		t.Errorf("expected 1 entry (no duplicate), got %d", len(skipped))
-	}
-}
-
-// Proves: skipped_tasks round-trips through JSON serialization.
-func TestSkippedTasks_RoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5)
-
-	st.AddSkippedTask("ralph-abc")
-	st.AddSkippedTask("ralph-def")
-
-	s, _ := st.Load()
-	data, _ := json.Marshal(s)
-	if !strings.Contains(string(data), `"skipped_tasks"`) {
-		t.Errorf("expected skipped_tasks in JSON, got %s", data)
-	}
-
-	var s2 State
-	json.Unmarshal(data, &s2)
-	if len(s2.SkippedTasks) != 2 {
-		t.Errorf("expected 2 skipped tasks after round-trip, got %d", len(s2.SkippedTasks))
-	}
-}
-
 // Proves: AddPushedBranch records branches in push order (oldest first) and
 // GetPushedBranches returns them in the same order.
 func TestAddPushedBranch_RecordsInOrder(t *testing.T) {

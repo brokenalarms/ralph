@@ -40,7 +40,6 @@ func (b *minimalBackend) GetOpenDependents(_ string) ([]string, error)          
 func (b *minimalBackend) ListInProgressByAssignee(_ string) ([]TaskInfo, error) { return nil, nil }
 func (b *minimalBackend) IsReady(_ string) (bool, error)                        { return true, nil }
 func (b *minimalBackend) Label() string                                          { return "beads" }
-func (b *minimalBackend) SetSkippedIDs(_ []string)                  {}
 func (b *minimalBackend) SetResumeTaskID(id string) {
 	b.resumeIDCalled = true
 	b.resumeIDSet = id
@@ -60,7 +59,7 @@ func TestNext_AlwaysCallsSetResumeTaskID(t *testing.T) {
 
 	// Calling Next with an empty resumeID must clear the BD-internal resume state.
 	b.resumeIDCalled = false
-	_, _ = Next(b, "", nil)
+	_, _ = Next(b, "")
 
 	if !b.resumeIDCalled {
 		t.Error("Next('', ...) must call SetResumeTaskID even with empty string to clear the BD resume target")
@@ -75,9 +74,55 @@ func TestNext_AlwaysCallsSetResumeTaskID(t *testing.T) {
 func TestNext_SetsResumeIDWhenNonEmpty(t *testing.T) {
 	b := &minimalBackend{nextInfo: TaskInfo{ID: "ralph-abc"}}
 
-	_, _ = Next(b, "ralph-abc", nil)
+	_, _ = Next(b, "ralph-abc")
 
 	if b.resumeIDSet != "ralph-abc" {
 		t.Errorf("SetResumeTaskID = %q, want ralph-abc", b.resumeIDSet)
+	}
+}
+
+// reassignableBackend simulates a bead being reassigned: initially HasRemaining
+// returns false (bead assigned to ralph-task), then true after reassignment back.
+type reassignableBackend struct {
+	minimalBackend
+	remaining bool
+}
+
+func (b *reassignableBackend) HasRemaining() (bool, error) { return b.remaining, nil }
+
+// Proves: reassigning a skipped bead back to ralph-loop makes Next/Poll select
+// it again, because skip is pure assignee state — no separate filter exists.
+func TestNext_ReassignedBeadIsSelectable(t *testing.T) {
+	b := &reassignableBackend{
+		minimalBackend: minimalBackend{nextInfo: TaskInfo{ID: "ralph-abc", Title: "Fix auth"}},
+	}
+
+	// Before reassignment: bead assigned to ralph-task, not in inbox.
+	b.remaining = false
+	has, err := Poll(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if has {
+		t.Error("Poll: expected false before reassignment to ralph-loop")
+	}
+
+	// After reassignment back to ralph-loop: bead appears in inbox.
+	b.remaining = true
+	has, err = Poll(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has {
+		t.Error("Poll: expected true after reassignment back to ralph-loop")
+	}
+
+	// Next also picks it up — no skip filter to re-suppress it.
+	info, err := Next(b, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-abc" {
+		t.Errorf("Next: expected ralph-abc after reassignment, got %q", info.ID)
 	}
 }

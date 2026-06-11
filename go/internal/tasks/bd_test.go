@@ -416,6 +416,29 @@ func TestBD_SkipTask_RecordsReasonAsComment(t *testing.T) {
 	}
 }
 
+// Proves: bd SkipTask reassigns the bead to config.TaskAssignee and adds a
+// skipped label so it leaves the loop's inbox with no separate filter needed.
+func TestBD_SkipTask_ReassignsToTaskAssignee(t *testing.T) {
+	var updateArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "update" {
+			updateArgs = args
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", "transport_error"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(updateArgs, " ")
+	if !strings.Contains(joined, "--assignee="+config.TaskAssignee) {
+		t.Errorf("SkipTask must reassign to %s, got update args: %v", config.TaskAssignee, updateArgs)
+	}
+	if !strings.Contains(joined, "--label=skipped") {
+		t.Errorf("SkipTask must add skipped label, got update args: %v", updateArgs)
+	}
+}
+
 // Proves: bd SkipTask is a no-op with empty id.
 func TestBD_SkipTask_EmptyID(t *testing.T) {
 	called := false
@@ -1069,64 +1092,23 @@ func TestBD_GetMetadata_NoMetadata(t *testing.T) {
 	}
 }
 
-// Proves: SetSkippedIDs causes getNextIssue to exclude skipped tasks.
-func TestBD_SetSkippedIDs_FiltersNextIssue(t *testing.T) {
-	runner := mockBD(
-		"3",
-		map[string]string{"open": "2", "in_progress": "0", "closed": "1"},
-		"[]",
-		`[{"id":"ralph-aaa","title":"Task A","priority":0},{"id":"ralph-bbb","title":"Task B","priority":1}]`,
-	)
-	b := setupBD(t, runner)
-	b.SetSkippedIDs([]string{"ralph-aaa"})
-
-	info, err := b.GetNextTaskInfo()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.ID != "ralph-bbb" {
-		t.Errorf("expected ralph-bbb (skipped ralph-aaa), got %q", info.ID)
-	}
-}
-
-// Proves: HasRemaining returns false when all remaining tasks are skipped.
-func TestBD_HasRemaining_ExcludesSkipped(t *testing.T) {
+// Proves: HasRemaining returns false when the loop inbox (bd ready --assignee=ralph-loop)
+// returns no tasks — simulates all tasks having been reassigned away from ralph-loop.
+func TestBD_HasRemaining_EmptyInbox(t *testing.T) {
 	runner := mockBD(
 		"1",
 		map[string]string{"open": "1", "in_progress": "0", "closed": "0"},
 		"[]",
-		`[{"id":"ralph-only","title":"Only task"}]`,
+		"[]", // bd ready returns nothing — tasks reassigned to ralph-task
 	)
 	b := setupBD(t, runner)
-	b.SetSkippedIDs([]string{"ralph-only"})
 
 	has, err := b.HasRemaining()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if has {
-		t.Error("HasRemaining should be false when all tasks are skipped")
-	}
-}
-
-// HasOpenButAllSkipped returns true when open tasks exist but HasRemaining
-// is false because all are filtered by the skip list.
-func TestBD_HasOpenButAllSkipped_ReturnsTrue(t *testing.T) {
-	runner := mockBD(
-		"1",
-		map[string]string{"open": "1", "in_progress": "0", "closed": "0"},
-		"[]",
-		`[{"id":"ralph-only","title":"Only task"}]`,
-	)
-	b := setupBD(t, runner)
-	b.SetSkippedIDs([]string{"ralph-only"})
-
-	got, err := HasOpenButAllSkipped(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got {
-		t.Error("HasOpenButAllSkipped should return true when tasks exist but all are skipped")
+		t.Error("HasRemaining should be false when loop inbox is empty")
 	}
 }
 
@@ -1149,7 +1131,7 @@ func TestBD_HasOpenButAllSkipped_NoTasks(t *testing.T) {
 	}
 }
 
-// HasOpenButAllSkipped returns false when tasks exist and at least one is available.
+// HasOpenButAllSkipped returns false when tasks exist and are selectable.
 func TestBD_HasOpenButAllSkipped_TasksAvailable(t *testing.T) {
 	runner := mockBD(
 		"2",
@@ -1158,35 +1140,13 @@ func TestBD_HasOpenButAllSkipped_TasksAvailable(t *testing.T) {
 		`[{"id":"ralph-a","title":"Task A"},{"id":"ralph-b","title":"Task B"}]`,
 	)
 	b := setupBD(t, runner)
-	b.SetSkippedIDs([]string{"ralph-a"})
 
 	got, err := HasOpenButAllSkipped(b)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got {
-		t.Error("HasOpenButAllSkipped should return false when at least one task remains after skip filter")
-	}
-}
-
-// Proves: SetSkippedIDs with empty list clears any previous skips.
-func TestBD_SetSkippedIDs_EmptyClearsSkips(t *testing.T) {
-	runner := mockBD(
-		"1",
-		map[string]string{"open": "1", "in_progress": "0", "closed": "0"},
-		"[]",
-		`[{"id":"ralph-abc","title":"A task"}]`,
-	)
-	b := setupBD(t, runner)
-	b.SetSkippedIDs([]string{"ralph-abc"})
-	b.SetSkippedIDs([]string{})
-
-	info, err := b.GetNextTaskInfo()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.ID != "ralph-abc" {
-		t.Errorf("expected ralph-abc after clearing skips, got %q", info.ID)
+		t.Error("HasOpenButAllSkipped should return false when tasks are selectable")
 	}
 }
 
@@ -1375,13 +1335,17 @@ func TestBD_GetNextTaskInfo_ClosedResumeTaskFallsThrough(t *testing.T) {
 	}
 }
 
-// Proves: when resumeTaskID is in the skipped set, it is not resumed.
+// Proves: when resumeTaskID's bead is assigned to ralph-task (i.e. was skipped
+// by reassignment), it is not resumed — falls through to bd ready.
 func TestBD_GetNextTaskInfo_SkippedResumeTaskFallsThrough(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
 			return "", errors.New("no args")
 		}
 		switch args[0] {
+		case "show":
+			// The skipped bead is now assigned to ralph-task, not ralph-loop.
+			return `[{"id":"ralph-skip","title":"Skipped task","status":"open","assignee":"ralph-task"}]`, nil
 		case "ready":
 			if strings.Contains(strings.Join(args, " "), "--json") {
 				return `[{"id":"ralph-new","title":"New task","priority":2,"status":"open"}]`, nil
@@ -1390,7 +1354,6 @@ func TestBD_GetNextTaskInfo_SkippedResumeTaskFallsThrough(t *testing.T) {
 		return "", nil
 	}
 	b := setupBD(t, runner)
-	b.SetSkippedIDs([]string{"ralph-skip"})
 	b.SetResumeTaskID("ralph-skip")
 	info, err := b.GetNextTaskInfo()
 	if err != nil {

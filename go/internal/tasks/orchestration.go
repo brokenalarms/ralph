@@ -26,28 +26,29 @@ func CheckAvailability(b Backend) (Availability, error) {
 	return Availability{HasRemaining: false, HasAny: hasTasks}, nil
 }
 
-// Poll updates the backend's skip filter, then checks whether any tasks
-// remain. Use during wait-mode polling so skipped IDs stay current.
-func Poll(b Backend, skippedIDs []string) (bool, error) {
-	b.SetSkippedIDs(skippedIDs)
+// Poll checks whether any tasks remain in the loop's inbox.
+// Use during wait-mode polling.
+func Poll(b Backend) (bool, error) {
 	return b.HasRemaining()
 }
 
-// Next prepares the backend with resume and skip state, then returns the
-// next task. Pass a non-empty resumeID only on the first iteration so a
-// paused session picks up where it left off. An empty resumeID explicitly
-// clears any previously-set resume target so subsequent iterations start
-// fresh from the priority queue. Returns a zero TaskInfo when no task is
-// available.
-func Next(b Backend, resumeID string, skippedIDs []string) (TaskInfo, error) {
-	b.SetSkippedIDs(skippedIDs)
+// Next prepares the backend with the resume target, then returns the next
+// task. Pass a non-empty resumeID only on the first iteration so a paused
+// session picks up where it left off. An empty resumeID explicitly clears
+// any previously-set resume target so subsequent iterations start fresh
+// from the priority queue. Returns a zero TaskInfo when no task is available.
+func Next(b Backend, resumeID string) (TaskInfo, error) {
 	b.SetResumeTaskID(resumeID)
 	return b.GetNextTaskInfo()
 }
 
-// HasOpenButAllSkipped reports whether open tasks exist but none are available
-// after the skip filter is applied. When true, polling will never yield new
-// work and the loop should exit rather than waiting forever.
+// HasOpenButAllSkipped reports whether tasks exist in the ralph-loop inbox
+// (CountRemaining > 0) but none are immediately selectable (HasRemaining = false).
+// With the assignee-based skip model, skipped tasks are reassigned to
+// ralph-task and leave the loop's inbox entirely, so this function returns
+// false when all tasks are skipped (inbox is empty and CountRemaining is 0).
+// It returns true only when in_progress tasks exist but bd ready returns nothing,
+// which is the stuck-in-progress detection path.
 func HasOpenButAllSkipped(b Backend) (bool, error) {
 	count, err := b.CountRemaining()
 	if err != nil {

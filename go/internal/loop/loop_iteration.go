@@ -104,20 +104,11 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		}()
 	}
 
-	// Guard: if the task was already skipped during verification (e.g. 3
-	// rejected attempts), do not push or merge the rejected work.
-	if p.taskID != "" {
-		skipped, err := l.state.GetSkippedTasks()
-		if err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to load skipped tasks for %s: %v — conservatively not pushing", p.taskID, err)
-			return completeTaskOut{action: signalSkipped}
-		}
-		for _, id := range skipped {
-			if id == p.taskID {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s was skipped during verification — not pushing", p.taskID)
-				return completeTaskOut{action: signalSkipped}
-			}
-		}
+	// Guard: if the task was skipped during verification (e.g. 3 rejected
+	// attempts), do not push or merge the rejected work.
+	if p.taskID != "" && l.sessionSkippedIDs[p.taskID] {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s was skipped during verification — not pushing", p.taskID)
+		return completeTaskOut{action: signalSkipped}
 	}
 
 	// Preflight: check bead wasn't prematurely closed by the agent.
