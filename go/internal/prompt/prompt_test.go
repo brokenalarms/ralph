@@ -1204,3 +1204,109 @@ func TestBeadCreation_DOMToyCase(t *testing.T) {
 		t.Error("DOM toy case requirement must appear within the 'Creating beads' section")
 	}
 }
+
+// Proves: task-manager.md startup protocol instructs querying skipped beads after
+// the startup summary and presenting a triage block, parallel to the closure audit.
+func TestBuildTaskManagerPrompt_SkipTriageStartup(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"skipped", "startup protocol must query skipped beads"},
+		{"triage", "startup must present a triage block for skipped beads"},
+		{"silent", "must stay silent when no skipped beads exist"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: task-manager.md encodes the principle that a verification_rejected skip
+// always indicates a ralph defect — never agent incompetence — and routes it to
+// diagnosis rather than dismissal.
+func TestBuildTaskManagerPrompt_SkipTriageVerificationRejectedIsRalphDefect(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	lower := strings.ToLower(result)
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"verification_rejected", "must name the verification_rejected skip reason explicitly"},
+		{"ralph defect", "must encode that verification_rejected always indicates a ralph defect"},
+		{"never", "must explicitly prohibit blaming agent failure for verification_rejected skips"},
+		{"diff", "diagnosis must compare branch diff against acceptance criteria"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: task-manager.md maps each skip reason to a concrete action — size-related
+// skips to split, infra failures to a ralph bug bead, dependency issues to re-ordering.
+func TestBuildTaskManagerPrompt_SkipTriageReasonRouting(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	lower := strings.ToLower(result)
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"compaction_detected", "must name compaction_detected skip reason and route to split"},
+		{"idle_timeout_max_failures", "must name idle_timeout_max_failures and route to split"},
+		{"push_failed", "must route infra failures (push_failed) to a ralph bug bead"},
+		{"skip_would_strand_dependents", "must route dependency-order skips to dep re-ordering"},
+		{"hands-on", "verification_rejected path must offer hands-on fix as a route"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: the skip-triage block proposes actions per bead without auto-creating
+// beads or auto-fixing, consistent with the existing create-on-conclusion rule.
+func TestBuildTaskManagerPrompt_SkipTriageProposesNotAutoActs(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	lower := strings.ToLower(result)
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"propose", "triage must propose actions rather than auto-creating or auto-fixing"},
+		{"confirm", "triage must wait for confirmation before acting"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}

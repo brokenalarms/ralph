@@ -34,6 +34,67 @@ summary, check for unaudited bead closures:
 The audit prompt is non-blocking: after appending it, respond to the user's
 first real message normally. Do not wait for an answer before continuing.
 
+**Skip-triage check (non-blocking):** After the closure audit prompt, check
+for skipped beads that need diagnosis:
+
+1. Run `bd list --assignee=ralph-task --label=skipped` to find beads that
+   the loop has reassigned after skipping.
+2. If any exist, read the skip-reason comment on each bead (`bd show <id>`).
+3. Classify each by skip reason and append a triage block:
+
+   > **Skipped beads requiring triage (N beads):**
+   >
+   > - **ralph-xyz** — _reason_ → _recommended action_
+   > …
+
+4. If no skipped beads exist, remain silent — do not mention skip-triage.
+
+**Classification and routing:**
+
+| Skip reason | What it means | Recommended action |
+|---|---|---|
+| `compaction_detected` | Bead too large; context window hit mid-iteration | Propose a split using the unwieldy-bead split flow |
+| `idle_timeout_max_failures` | Context window exhausted repeatedly | Propose a split using the unwieldy-bead split flow |
+| `verification_rejected` / `verification_rejected_*` | **Ralph defect** — see principle below | Diagnose via branch-diff-vs-AC, then route to a loop-bug bead or hands-on fix |
+| `push_failed` / `pr_creation_failed` / `close_failed` / `dependency_blocked_by` | Ralph or infra defect | File a ralph bug bead |
+| `skip_would_strand_dependents` | Dependency-order problem | Propose re-ordering or adjusting deps |
+
+**Core principle — verification_rejected is always a ralph defect:**
+
+A `verification_rejected` skip is reached only after retries, fix-agents, and
+sonnet-to-opus escalation. This path means the loop faithfully executed but
+the verifier rejected the work. That rejection always indicates a ralph defect —
+never agent incompetence. The defect is one of:
+
+- The verifier was fed the wrong, empty, or truncated diff (the branch-vs-base
+  check: compare `git diff origin/main...HEAD` on the bead's branch against the
+  acceptance criteria — if the diff is empty or missing the expected changes, this
+  is the defect).
+- The context fed to the agent was wrong or insufficient.
+- The bead/acceptance criteria were malformed, contradictory, or too large for
+  one context window.
+
+Triage must identify which of these applies. It must never conclude "no action"
+or "agent at fault."
+
+**Diagnosis flow for `verification_rejected`:**
+
+1. Find the bead's branch: check `external-ref` in `bd show <id>` for the PR,
+   or `git log --grep=<bead-id>` in the project directory.
+2. Run `git diff origin/main...<branch-tip>` and compare against the bead's
+   acceptance criteria.
+3. If the diff is empty or missing the expected changes → wrong/empty/truncated
+   diff defect → file a ralph-loop bug bead.
+4. If the diff looks correct but the verifier still rejected → the verifier
+   received wrong context or the AC was unverifiable → either a context/prompt
+   bug or a hands-on AC clarification.
+5. If the diff is partial and context looks fine → AC may be too large for one
+   context window → propose a split.
+
+**Triage block format:** Propose the recommended action per bead. Do not
+auto-create beads or auto-apply fixes without user confirmation — present the
+diagnosis and await a `yes` / `no` / or amended instruction before acting.
+
 <startup-context>
 {{STARTUP_CONTEXT}}
 </startup-context>
