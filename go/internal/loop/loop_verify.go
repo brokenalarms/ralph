@@ -24,8 +24,7 @@ const (
 
 // fixLoopSpec parameterizes one cycle of "spawn a fix agent, observe whether
 // it made commits, push if it did". Each tryFix* wrapper supplies its
-// fix-specific spawn callback and (optionally) a post-commit pre-push hook
-// (e.g. for CI's out-of-scope file revert) and a post-push hook (e.g. for
+// fix-specific spawn callback and (optionally) a post-push hook (e.g. for
 // review's resolve-comments call).
 type fixLoopSpec struct {
 	// spawn invokes the fix agent. The result's SignalDetected gates the
@@ -43,13 +42,6 @@ type fixLoopSpec struct {
 	// noCommitsMsg overrides the default "fix agent made no new commits"
 	// log line — the three callers each phrase it slightly differently.
 	noCommitsMsg string
-
-	// onPushReady is invoked between the no-commits check and the push,
-	// when there ARE new commits to push. It receives headBefore (captured
-	// by fixLoop before spawning) and headAfter so the wrapper can compute
-	// post-fix invariants (e.g. CI's out-of-scope-file detection) without
-	// needing its own HeadRev() calls.
-	onPushReady func(headBefore, headAfter string)
 
 	// onPushed runs after a successful push. Used by the review wrapper to
 	// reply-and-resolve review threads. Errors are logged but not surfaced
@@ -83,10 +75,6 @@ func (l *Loop) fixLoop(ctx context.Context, opts fixLoopSpec) fixLoopResult {
 		return fixNoCommits
 	}
 
-	if opts.onPushReady != nil {
-		opts.onPushReady(headBefore, headAfter)
-	}
-
 	l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s fix committed — pushing", opts.fixName)
 	if err := l.git.Push(ctx); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", opts.fixName, err)
@@ -108,7 +96,6 @@ func (l *Loop) fixLoop(ctx context.Context, opts fixLoopSpec) fixLoopResult {
 //   - CIFixFailed:    agent error or push failure
 func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) git.CIFixResult {
 	ciLog := l.git.GetCIFailureLog(ctx, ciErr.PRNumber)
-	baseBranch := l.git.DetectDefaultBranch()
 
 	// Pre-filter required vs optional check failures. Verifier does not
 	// import the git package, so Loop flattens the typed git.CheckFailure
@@ -140,29 +127,6 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 				RequiredFailures: requiredNames,
 				OptionalFailures: optionalNames,
 			})
-		},
-		onPushReady: func(headBefore, headAfter string) {
-			// Snapshot files in the task diff before the fix agent ran. We
-			// resolve this from headBefore (captured by fixLoop before the
-			// agent spawn), so no extra HeadRev() call is needed here.
-			taskFiles := l.git.DiffFilesBetween("origin/"+baseBranch, headBefore)
-			taskFileSet := make(map[string]bool, len(taskFiles))
-			for _, f := range taskFiles {
-				taskFileSet[f] = true
-			}
-			fixFiles := l.git.DiffFilesBetween(headBefore, headAfter)
-			var outOfScope []string
-			for _, f := range fixFiles {
-				if !taskFileSet[f] {
-					outOfScope = append(outOfScope, f)
-				}
-			}
-			if len(outOfScope) > 0 {
-				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
-					"Fix agent modified %d file(s) outside task scope: %s — reverting out-of-scope changes",
-					len(outOfScope), strings.Join(outOfScope, ", "))
-				l.git.RevertFilesToRef(outOfScope, "origin/"+baseBranch)
-			}
 		},
 	})
 
