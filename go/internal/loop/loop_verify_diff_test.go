@@ -25,7 +25,7 @@ func TestFetchVerifyDiff_PrefersPR(t *testing.T) {
 	})
 	l := newDiffTestLoop(gm)
 
-	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore")
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "")
 	if diff != "pr-diff" || source != "PR" {
 		t.Fatalf("expected (pr-diff, PR), got (%q, %q)", diff, source)
 	}
@@ -44,7 +44,7 @@ func TestFetchVerifyDiff_NoPR_PriorIterationCommit_UsesBranchDiff(t *testing.T) 
 	})
 	l := newDiffTestLoop(gm)
 
-	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "same-sha")
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "same-sha", "")
 	if diff != "branch-diff" || source != "branch" {
 		t.Fatalf("expected (branch-diff, branch), got (%q, %q)", diff, source)
 	}
@@ -59,7 +59,7 @@ func TestFetchVerifyDiff_FallsBackToIteration(t *testing.T) {
 	})
 	l := newDiffTestLoop(gm)
 
-	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore")
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "")
 	if diff != "iteration-diff" || source != "iteration" {
 		t.Fatalf("expected (iteration-diff, iteration), got (%q, %q)", diff, source)
 	}
@@ -70,8 +70,42 @@ func TestFetchVerifyDiff_AllEmpty(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{})
 	l := newDiffTestLoop(gm)
 
-	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore")
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "")
 	if diff != "" || source != "" {
 		t.Fatalf("expected empty diff and source, got (%q, %q)", diff, source)
+	}
+}
+
+// When signalTimeHead is set and the iteration diff is non-empty,
+// fetchVerifyDiff prefers it over DiffFromBase — it cannot include unrelated
+// commits that merged to origin/<base> mid-iteration.
+func TestFetchVerifyDiff_SignalTimeHead_PrefersIterationDiffOverBase(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		PRDiffForTaskResult: "",
+		DiffFromBaseResult:  "base-diff-with-unrelated",
+		DiffFullResult:      "agent-work-diff",
+	})
+	l := newDiffTestLoop(gm)
+
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "signal-sha")
+	if diff != "agent-work-diff" || source != "branch" {
+		t.Fatalf("expected (agent-work-diff, branch), got (%q, %q)", diff, source)
+	}
+}
+
+// When signalTimeHead is set but the iteration diff is empty (prior-iteration
+// commits only, headBefore==HEAD this iteration), fetchVerifyDiff falls through
+// to DiffFromBase so the verifier still sees the prior-iteration work.
+func TestFetchVerifyDiff_SignalTimeHead_EmptyIterationFallsThroughToBase(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		PRDiffForTaskResult: "",
+		DiffFromBaseResult:  "prior-iteration-branch-diff",
+		DiffFullResult:      "", // headBefore == HEAD: empty iteration diff
+	})
+	l := newDiffTestLoop(gm)
+
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "same-sha", "signal-sha")
+	if diff != "prior-iteration-branch-diff" || source != "branch" {
+		t.Fatalf("expected (prior-iteration-branch-diff, branch), got (%q, %q)", diff, source)
 	}
 }
