@@ -147,6 +147,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				DiffStat: p.diffStat,
 				Analysis: "no_code_needed_rejected: verifier did not confirm the claim",
 			})
+			l.releaseClaimForRetry(p.taskID)
 			return completeTaskOut{action: signalRetry}
 		}
 	} else if !p.result.OnSignalUsed {
@@ -159,6 +160,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				DiffStat: p.diffStat,
 				Analysis: "verification_failed: fix must pass tests and produce commits before closing",
 			})
+			l.releaseClaimForRetry(p.taskID)
 			return completeTaskOut{action: signalRetry}
 		}
 	}
@@ -536,6 +538,22 @@ func (l *Loop) setPhaseInterrupted(taskID string) {
 	}
 }
 
+// releaseClaimForRetry reopens the task (status → open, assignee preserved) so
+// bd ready can re-select it on the next iteration. Every retry/interrupt exit
+// from the task iteration must call this — the liminal phase (selectNextTask,
+// waitForTasks, postTaskAndMaybeEvolve) must only be reached with a resolved
+// task, never an in_progress claim.
+func (l *Loop) releaseClaimForRetry(taskID string) {
+	if taskID == "" || l.taskBackend == nil {
+		return
+	}
+	if err := l.taskBackend.ReopenTask(taskID); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ReopenTask (release claim for retry) %s: %v", taskID, err)
+	} else {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → open (released for retry)", taskID)
+	}
+}
+
 // buildCompletedTask assembles the CompletedTask record for a signal.
 func (l *Loop) buildCompletedTask(ctx context.Context, taskID, nextTask, summary string, prNumber int) CompletedTask {
 	ct := CompletedTask{
@@ -663,6 +681,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			if !l.connectivity.WaitForInternet(ctx, l.logger) {
 				return actionDone
 			}
+			l.releaseClaimForRetry(taskID)
 			return actionRetry
 		}
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed on iteration %d, continuing...", runIteration)
@@ -680,6 +699,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			DiffStat: diffStat,
 			Analysis: "user_feedback: check bead notes for details",
 		})
+		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}
 	if result.IdleTimeout || result.WallClockTimeout {
@@ -702,23 +722,10 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			l.skipTask(taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}
-		// Release the loop's claim before retrying. ClaimTask set
-		// status=in_progress at iteration start, which removes the task from
-		// bd ready. The retry re-enters task selection (Run: actionRetry →
-		// continue), and mid-session selectNextTask does NOT resume the
-		// current task — it relies on bd ready. Without reopening, the task
-		// stays in_progress, invisible to bd ready, never re-picked, and the
-		// loop drops into waitForTasks indefinitely, stranding any dependents.
 		// taskIdleTimeouts still bounds retries: l.currentTaskID is unchanged
 		// on re-pick, so runAgent does not reset the counter and the
 		// maxIdleTimeoutFailures skip above fires after N timeouts.
-		if taskID != "" && l.taskBackend != nil {
-			if err := l.taskBackend.ReopenTask(taskID); err != nil {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ReopenTask (release claim for retry) %s: %v", taskID, err)
-			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → open (released for retry)", taskID)
-			}
-		}
+		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}
 	if result.RateLimited {
@@ -732,6 +739,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			return actionDone
 		}
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: l.cfg.Model}, "Rate limit reset — resuming")
+		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}
 
