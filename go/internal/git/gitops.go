@@ -120,6 +120,9 @@ type Ops interface {
 	BranchIsAheadOfMain(branch string) bool
 	BranchHasUnmergedWork(branch string) bool
 	BranchIsAncestorOfMain(branch string) bool
+	// IsCommitAncestorOf returns true when sha is an ancestor of (or equal to) ref.
+	// Used to assert a signal-time commit is still reachable on the branch.
+	IsCommitAncestorOf(sha, ref string) bool
 	DeleteRemoteBranchByName(branch string) error
 
 	// Worktree lifecycle.

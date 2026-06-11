@@ -17,6 +17,7 @@ import (
 type verifyPipelineInput struct {
 	ctx             context.Context
 	headBefore      string
+	signalTimeHead  string // HEAD at the moment the agent's complete signal was handled
 	workDir         string
 	rawLogPath      string
 	taskID          string
@@ -190,9 +191,20 @@ func (l *Loop) runCompileFixLoop(spawn verifier.FixAgentSpawn, taskAccept string
 func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgentSpawn, taskDesc, taskAccept string, maxLLMAttempts, maxTestFix int) (bool, string) {
 	attempts := 0
 	for {
+		// Assert signal-time HEAD is still reachable before consuming an attempt.
+		// A worktree reset drops the agent's commit without incrementing the
+		// rejection counter — treat it as an infrastructure failure, not a
+		// verification rejection.
+		if p.signalTimeHead != "" && !l.git.IsCommitAncestorOf(p.signalTimeHead, "HEAD") {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+				"Infrastructure error: signal-time commit %s is not an ancestor of HEAD — worktree may have been reset; aborting verification without consuming an attempt",
+				p.signalTimeHead)
+			return false, ""
+		}
+
 		attempts++
 
-		diff, diffSource := l.fetchVerifyDiff(p.ctx, p.taskID, p.headBefore)
+		diff, diffSource := l.fetchVerifyDiff(p.ctx, p.taskID, p.headBefore, p.signalTimeHead)
 
 		llmResult, _ := l.verifier.LLMVerify(verifier.LLMVerifyOpts{
 			Ctx:          p.ctx,
@@ -238,21 +250,27 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 }
 
 // fetchVerifyDiff returns the diff and its label to feed the LLM verifier.
-// Prefers the PR diff (which covers prior iterations), then falls back to the
-// branch diff against the merge-base with the default branch
+// Prefers the PR diff (which covers prior iterations), then the
+// iteration-anchored diff when signalTimeHead is known (headBefore..HEAD —
+// contains the agent's work and cannot include unrelated commits that merged
+// to origin/<base> mid-iteration), then the branch diff against the merge-base
 // (origin/<base>...HEAD). The branch diff covers all commits the task branch
-// has made regardless of which iteration produced them — matching the PR
-// diff's coverage. This is critical when no PR exists yet (verification keeps
-// failing before push): an iteration-local headBefore..HEAD diff is empty
-// whenever the current iteration adds no new commit, even though prior
-// iterations committed the actual work, which caused the verifier to see no
-// changes and falsely skip completed tasks. The iteration-local headBefore
-// diff is the last resort only if the branch diff is somehow empty. Returns
-// empty strings when none are available — LLMVerifyPR treats that as a no-op
-// pass.
-func (l *Loop) fetchVerifyDiff(ctx context.Context, taskID, headBefore string) (string, string) {
+// has made regardless of which iteration produced them — the right fallback
+// when signalTimeHead is not set and the iteration-local headBefore..HEAD diff
+// is empty (prior-iteration commits only). The iteration-local headBefore diff
+// is the last resort only if the branch diff is also empty. Returns empty
+// strings when none are available — LLMVerifyPR treats that as a no-op pass.
+func (l *Loop) fetchVerifyDiff(ctx context.Context, taskID, headBefore, signalTimeHead string) (string, string) {
 	if diff := l.git.PRDiffForTask(ctx, taskID); diff != "" {
 		return diff, "PR"
+	}
+	// When signalTimeHead is set it has already been confirmed as an ancestor
+	// of HEAD by the caller. headBefore..HEAD is anchored at the iteration
+	// start and cannot include unrelated commits from origin/<base>.
+	if signalTimeHead != "" {
+		if diff := l.git.DiffFull(headBefore, "HEAD"); diff != "" {
+			return diff, "branch"
+		}
 	}
 	if diff := l.git.DiffFromBase(); diff != "" {
 		return diff, "branch"

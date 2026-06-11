@@ -419,6 +419,9 @@ type StubRepoConfig struct {
 	BranchIsAheadOfMain    map[string]bool
 	BranchHasUnmergedWork  map[string]bool
 	BranchIsAncestorOfMain map[string]bool
+	// CommitDroppedFromBranch simulates a worktree reset that removed the
+	// agent's commit. When true, IsCommitAncestorOf always returns false.
+	CommitDroppedFromBranch bool
 
 	// PRChainHealthy overrides PRChainIsHealthy output. When PRChainHealthyMsg
 	// is non-empty, PRChainIsHealthy returns (PRChainHealthy, PRChainHealthyMsg).
@@ -781,6 +784,10 @@ func (s *stubRepo) BranchHasUnmergedWork(branch string) bool {
 
 func (s *stubRepo) BranchIsAncestorOfMain(branch string) bool {
 	return s.cfg.BranchIsAncestorOfMain[branch]
+}
+
+func (s *stubRepo) IsCommitAncestorOf(_, _ string) bool {
+	return !s.cfg.CommitDroppedFromBranch
 }
 
 func (s *stubRepo) DeleteRemoteBranchByName(_ string) error {

@@ -236,6 +236,11 @@ func (r *repo) BranchIsAncestorOfMain(branch string) bool {
 	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil
 }
 
+// IsCommitAncestorOf returns true when sha is an ancestor of (or equal to) ref.
+func (r *repo) IsCommitAncestorOf(sha, ref string) bool {
+	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", sha, ref) == nil
+}
+
 // BranchIsAheadOfMain returns true if origin's default branch is an
 // ancestor of the remote branch — meaning the branch is cleanly ahead
 // of main with unmerged work. Returns false for landed branches (equal

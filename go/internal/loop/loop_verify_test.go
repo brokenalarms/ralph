@@ -999,3 +999,84 @@ func TestVerifyGate_RunsInWorktreeNotProjectDir(t *testing.T) {
 		t.Fatalf("verify gate should pass when worktree tests pass — got failure: %s", reason)
 	}
 }
+
+// Proves the signal → assert → verify ordering:
+// When the agent commits and signals (signalTimeHead captured), but the branch
+// is subsequently reset to origin/<base> (dropping the commit), the verify
+// pipeline must abort as an infrastructure error — not a rejection — so the
+// task is not skipped and the LLM verifier is never invoked.
+//
+// AC5 integration test: agent commits → branch reset → verification attempt
+// aborts as infra error, task not skipped, LLM not called.
+func TestRunVerifyPipeline_SignalCommitDropped_InfraAbort(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	// Simulate: agent committed "signal-sha", then the worktree was reset
+	// to origin/main. CommitDroppedFromBranch causes IsCommitAncestorOf to
+	// return false, simulating that signal-sha is no longer reachable from HEAD.
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:              dir,
+		WorkDir:                 dir,
+		DiffFullResult:          "+stub agent work",
+		CommitDroppedFromBranch: true,
+	})
+
+	llmCalled := false
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		// MaxLLMVerifyAttempts left at default (3) so the skip threshold is clear.
+	}
+	logger := logging.New(nil)
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(_ context.Context, _, _, _ string) (string, error) {
+				llmCalled = true
+				return "YES: looks good", nil
+			}},
+		}),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+
+	// signal → assert (infra check) → verify ordering:
+	// signalTimeHead is captured at signal time (before reset).
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
+		ctx:            context.Background(),
+		headBefore:     "old-sha",
+		signalTimeHead: "signal-sha",
+		workDir:        dir,
+		rawLogPath:     filepath.Join(ralphDir, "raw.log"),
+		taskID:         "test-infra",
+		nextTask:       "Test infra abort",
+	})
+	if skipReason != "" {
+		l.skipTask("test-infra", skipReason)
+	}
+
+	if verified {
+		t.Error("verification must fail when signal-time commit is dropped from the branch")
+	}
+	// Infrastructure abort: no skipReason means the task is NOT added to
+	// skipped_tasks — it will retry on the next iteration.
+	if skipReason != "" {
+		t.Errorf("infra abort must not produce a skip reason, got %q", skipReason)
+	}
+	// The LLM verifier must not be invoked — the assert fires before verify.
+	if llmCalled {
+		t.Error("LLM verifier must not be invoked when signal-time commit is absent from HEAD")
+	}
+	// The task must not be recorded as skipped in the backend.
+	if backend.SkippedTask != "" {
+		t.Errorf("task must not be skipped on infra abort, got SkippedTask=%q", backend.SkippedTask)
+	}
+}

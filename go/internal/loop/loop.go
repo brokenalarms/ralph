@@ -486,13 +486,17 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 			// inside runVerifyPipeline. The main agent session is wrapping
 			// up anyway (it just signaled completion).
 			l.runner.StopStreaming()
+			// Capture HEAD before any subsequent git operations so the
+			// verify pipeline can assert this commit is still reachable.
+			signalTimeHead := l.git.HeadRev()
 			verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
-				ctx:        ctx,
-				headBefore: prep.headBefore,
-				workDir:    prep.workDir,
-				rawLogPath: prep.rawLogPath,
-				taskID:     task.id,
-				nextTask:   task.title,
+				ctx:            ctx,
+				headBefore:     prep.headBefore,
+				signalTimeHead: signalTimeHead,
+				workDir:        prep.workDir,
+				rawLogPath:     prep.rawLogPath,
+				taskID:         task.id,
+				nextTask:       task.title,
 			})
 			if skipReason != "" {
 				l.skipTask(task.id, skipReason)
