@@ -47,7 +47,6 @@ type Ops interface {
 	HasDiff() bool
 	HasUncommittedChanges() bool
 	ChangedFiles(headBefore, headAfter string) []string
-	DiffFilesBetween(from, to string) []string
 	DiffStatRange(from, to string) string
 	DiffFull(from, to string) string
 	DiffFromBase() string
@@ -73,7 +72,6 @@ type Ops interface {
 
 	// Commit operations.
 	CommitAll(message string)
-	RevertFilesToRef(files []string, ref string)
 	// EmptyCommit creates a commit even if there are no file changes, to re-trigger CI.
 	EmptyCommit(message string)
 

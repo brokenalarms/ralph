@@ -376,9 +376,8 @@ type StubRepoConfig struct {
 	GitHub StubGitHubConfig
 
 	// Static returns for read-only queries.
-	ChangedFiles           []string
-	DiffFilesBetweenResult []string
-	DiffStat               string
+	ChangedFiles []string
+	DiffStat     string
 	DiffFullResult         string
 	DiffFromBaseResult     string
 	LogOnelineResult       string
@@ -596,7 +595,6 @@ func (s *stubRepo) HeadRev() string                                 { return s.h
 func (s *stubRepo) HasDiff() bool                                   { return s.cfg.HasDiff }
 func (s *stubRepo) HasUncommittedChanges() bool                     { return s.cfg.HasUncommitted }
 func (s *stubRepo) ChangedFiles(_, _ string) []string               { return s.cfg.ChangedFiles }
-func (s *stubRepo) DiffFilesBetween(_, _ string) []string           { return s.cfg.DiffFilesBetweenResult }
 func (s *stubRepo) DiffStatRange(_, _ string) string                { return s.cfg.DiffStat }
 func (s *stubRepo) DiffFull(_, _ string) string                     { return s.cfg.DiffFullResult }
 func (s *stubRepo) DiffFromBase() string                            { return s.cfg.DiffFromBaseResult }
@@ -692,11 +690,6 @@ func (s *stubRepo) TagTaskEnd(_ string)   {}
 // CommitAll advances the fake head so subsequent HeadRev calls reflect that
 // a commit was made.
 func (s *stubRepo) CommitAll(_ string) {
-	s.commitSeq++
-	s.headRev = fmt.Sprintf("stub-head-%d", s.commitSeq)
-}
-
-func (s *stubRepo) RevertFilesToRef(_ []string, _ string) {
 	s.commitSeq++
 	s.headRev = fmt.Sprintf("stub-head-%d", s.commitSeq)
 }

@@ -141,16 +141,6 @@ func (r *repo) CommitAll(message string) {
 	_ = r.gitCmdErr(r.workDir, "commit", "-m", message)
 }
 
-// RevertFilesToRef restores files to their state in the given ref and amends
-// the current commit. Used to undo out-of-scope changes made by fix agents.
-func (r *repo) RevertFilesToRef(files []string, ref string) {
-	for _, f := range files {
-		_ = r.gitCmdErr(r.workDir, "checkout", ref, "--", f)
-	}
-	r.gitCmd(r.workDir, "add", "-A")
-	_ = r.gitCmdErr(r.workDir, "commit", "--amend", "--no-edit")
-}
-
 func (r *repo) EmptyCommit(message string) {
 	_ = r.gitCmdErr(r.workDir, "commit", "--allow-empty", "-m", message)
 }
@@ -177,23 +167,6 @@ func (r *repo) ChangedFiles(headBefore, headAfter string) []string {
 	}
 
 	return result
-}
-
-// DiffFilesBetween returns the list of files modified between two refs.
-// Unlike ChangedFiles, this does not include uncommitted or cached changes.
-func (r *repo) DiffFilesBetween(from, to string) []string {
-	if from == "" || to == "" || from == to {
-		return nil
-	}
-	out := r.gitOutput(r.workDir, "diff", "--name-only", from, to)
-	var files []string
-	for _, f := range strings.Split(out, "\n") {
-		f = strings.TrimSpace(f)
-		if f != "" {
-			files = append(files, f)
-		}
-	}
-	return files
 }
 
 func (r *repo) DiffStatRange(from, to string) string {

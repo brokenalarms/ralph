@@ -891,14 +891,56 @@ func TestFixModelEscalation_DefaultModels(t *testing.T) {
 	}
 }
 
-// Phase C deletion: TestTryFixCI_RevertsOutOfScopeFiles and
-// TestTryFixCI_DoesNotRevertInScopeFiles both rely on HeadRevFunc
-// (sequenced "before-sha"/"after-sha") and DiffFilesBetweenFunc
-// (different return per (from, to) pair). The new stubRepo exposes neither
-// callback-style hook: HeadRev is static, DiffFilesBetween returns
-// cfg.DiffFilesBetweenResult regardless of args, and RevertFilesToRef has
-// no call-tracking. Out-of-scope revert logic is a real-git behavior and
-// belongs in Phase D integration with a real rebase+checkout cycle.
+// Proves that a CI fix agent committing changes to a file outside the task
+// diff is preserved and pushed, not reverted to origin/<default>. Previously
+// an onPushReady hook in tryFixCI would call RevertFilesToRef on any file not
+// in the task diff, undoing legitimate boy-scout fixes and leaving CI red.
+func TestTryFixCI_OutOfScopeFixPreservedAndPushed(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	// HasUncommitted=true causes fixLoop to call CommitAll, advancing headRev
+	// from "task-head" to "stub-head-1". This simulates the fix agent modifying
+	// a file (outside the task diff) and leaving it uncommitted.
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		HeadRev:        "task-head",
+		HasUncommitted: true,
+	})
+
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:  st,
+		Git:    gm,
+		Logger: logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "fixed flaky test in unrelated file")}
+			},
+		}),
+	})
+
+	ciErr := &git.CIFailureError{
+		PRNumber: 42,
+		Failures: []git.CICheckResult{{Name: "test / unit", Bucket: "fail"}},
+	}
+	result := l.tryFixCI(context.Background(), ciErr, "Fix login bug", dir, filepath.Join(ralphDir, "raw.log"))
+	if result != git.CIFixApplied {
+		t.Errorf("expected CIFixApplied when fix agent commits out-of-scope changes, got %v", result)
+	}
+	// Exactly one new commit (the fix). A revert would produce headRev "stub-head-2".
+	if gm.HeadRev() != "stub-head-1" {
+		t.Errorf("expected fix commit to be pushed as-is (stub-head-1), got %s — a revert commit was added", gm.HeadRev())
+	}
+}
 
 // Proves the verify gate (post-signal and pre-iteration) uses l.git.GetWorkDir()
 // — the live per-task worktree — not cfg.Dirs.ProjectDir. When the worktree has
