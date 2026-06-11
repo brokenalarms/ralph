@@ -150,6 +150,31 @@ func (r *repo) CheckoutRemoteBranch(branch string) {
 	}
 }
 
+// LocalBranchHasCommits returns true when refs/heads/<branch> exists locally
+// and has at least one commit ahead of origin/<default>. Used to detect
+// unpushed task work before deciding whether to rename over the local branch.
+func (r *repo) LocalBranchHasCommits(branch string) bool {
+	if !r.refExists(r.workDir, "refs/heads/"+branch) {
+		return false
+	}
+	defaultBranch := r.detectDefaultBranch()
+	count := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+defaultBranch+".."+branch)
+	return count != "" && count != "0"
+}
+
+// CheckoutLocalBranch checks out an existing local branch in the worktree
+// without fetching from origin. Used to resume unpushed task work where the
+// remote has no corresponding branch.
+func (r *repo) CheckoutLocalBranch(branch string) {
+	_ = r.gitCmdErr(r.workDir, "checkout", "-B", branch, branch)
+	r.worktreeBranch = branch
+	r.branchRenamed = true
+	if r.state != nil {
+		_ = r.state.Write("worktree_branch", branch)
+		_ = r.state.Write("branch_renamed", "true")
+	}
+}
+
 // DeleteRemoteBranchByName deletes a specific remote branch.
 func (r *repo) DeleteRemoteBranchByName(branch string) error {
 	return r.gitCmdErr(r.workDir, "push", "origin", "--delete", branch)

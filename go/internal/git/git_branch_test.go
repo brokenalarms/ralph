@@ -151,6 +151,54 @@ func TestSetStackHead_OpenPRButNotAheadOfMain_PrevBranchEmpty(t *testing.T) {
 	}
 }
 
+// checkoutExistingBranch checks out an existing local branch when the remote has
+// none but the local branch has unpushed commits, instead of renaming/deleting it.
+func TestCheckoutExistingBranch_LocalBranchWithCommits_CheckedOut(t *testing.T) {
+	storedBranch := "ralph/ralph-abc-my-task"
+	runner := newStubRunner()
+	// FetchBranch: no remote branch exists (fetch fails silently).
+	runner.On("fetch", "", fmt.Errorf("fatal: couldn't find remote ref"))
+	// RemoteBranchHasCommits: refExists for origin/<branch> returns false.
+	// rev-parse --verify origin/<branch> → error = remote doesn't exist.
+	// (rev-list is not called since refExists fails first)
+
+	// LocalBranchHasCommits: refExists for refs/heads/<branch> returns "" nil (exists).
+	// rev-parse --verify → need a sequence: first call is for origin/storedBranch (remote),
+	// second is for refs/heads/storedBranch (local).
+	runner.OnSequence("rev-parse", []stubResponse{
+		{Output: "", Err: fmt.Errorf("not found")},             // origin/ralph/ralph-abc-my-task (RemoteBranchHasCommits)
+		{Output: "abc123", Err: nil},                           // refs/heads/ralph/ralph-abc-my-task (LocalBranchHasCommits)
+	})
+	// rev-list for LocalBranchHasCommits: commits ahead of origin/<default>.
+	runner.On("rev-list", "3", nil)
+	// CheckoutLocalBranch: checkout -B <branch> (no fetch).
+	runner.On("checkout", "", nil)
+
+	r := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/worktrees/wt1", Logger: logging.New(nil)},
+		nil,
+		withRunner(runner),
+		withWorktreeBranch("ralph/next"),
+	)
+
+	checkedOut, err := checkoutExistingBranch(r, BranchTaskMeta{Branch: storedBranch}, "ralph-abc", "My task")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !checkedOut {
+		t.Error("expected checkedOut=true when local branch has unpushed commits, got false")
+	}
+	if r.worktreeBranch != storedBranch {
+		t.Errorf("expected worktreeBranch=%q, got %q", storedBranch, r.worktreeBranch)
+	}
+	// RenameBranchTo must not have been called — branch -D should not appear.
+	for _, c := range runner.Called() {
+		if len(c.Args) >= 2 && c.Args[0] == "branch" && c.Args[1] == "-D" {
+			t.Errorf("branch -D must not be called when local branch has unpushed commits; got call: %v", c.Args)
+		}
+	}
+}
+
 // checkoutExistingBranch renames the branch to a task-based name when no
 // stored branch exists in meta.
 func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {

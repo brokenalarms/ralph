@@ -160,6 +160,11 @@ func checkoutExistingBranch(r *repo, meta BranchTaskMeta, taskID, nextTask strin
 				}
 			}
 		}
+		if r.LocalBranchHasCommits(storedBranch) {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Resuming local branch %s — unpushed commits preserved", storedBranch)
+			r.CheckoutLocalBranch(storedBranch)
+			return true, nil
+		}
 		r.RenameBranchTo(storedBranch)
 		return false, nil
 	}
