@@ -3,6 +3,8 @@ package git
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -166,8 +168,8 @@ func TestCheckoutExistingBranch_LocalBranchWithCommits_CheckedOut(t *testing.T) 
 	// rev-parse --verify → need a sequence: first call is for origin/storedBranch (remote),
 	// second is for refs/heads/storedBranch (local).
 	runner.OnSequence("rev-parse", []stubResponse{
-		{Output: "", Err: fmt.Errorf("not found")},             // origin/ralph/ralph-abc-my-task (RemoteBranchHasCommits)
-		{Output: "abc123", Err: nil},                           // refs/heads/ralph/ralph-abc-my-task (LocalBranchHasCommits)
+		{Output: "", Err: fmt.Errorf("not found")},  // origin/ralph/ralph-abc-my-task (RemoteBranchHasCommits)
+		{Output: "abc123", Err: nil},                // refs/heads/ralph/ralph-abc-my-task (LocalBranchHasCommits)
 	})
 	// rev-list for LocalBranchHasCommits: commits ahead of origin/<default>.
 	runner.On("rev-list", "3", nil)
@@ -368,4 +370,90 @@ func TestSetStackHead_SilentAfterRunStartClear(t *testing.T) {
 			}
 		}
 	})
+}
+
+// BranchForTask rebases a resumed branch onto current origin/<default> after
+// checkoutExistingBranch checks it out, so agent edits apply to up-to-date files.
+// Verifies AC #3: a resumed branch behind origin/<default> is rebased before
+// any agent runs.
+func TestBranchForTask_ResumedBranchRebased(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Create a local task branch in the worktree with one commit.
+	taskBranch := "ralph/ralph-abc-resume-task"
+	run(t, "git", "-C", mgr.workDir, "checkout", "-b", taskBranch)
+	writeFile(t, mgr.workDir, "task.txt", "task work\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "task: add task.txt")
+	// Return to the wip branch so BranchForTask starts from the right state.
+	run(t, "git", "-C", mgr.workDir, "checkout", "-")
+
+	// Advance main in origin with a new commit the task branch doesn't have.
+	writeFile(t, project, "main-new.txt", "main advance\n")
+	run(t, "git", "-C", project, "commit", "-m", "main: advance")
+	pushToOrigin(t, project)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin", "main")
+
+	branch, err := mgr.BranchForTask(context.Background(), "ralph-abc", "Resume task", BranchTaskMeta{
+		Branch: taskBranch,
+	})
+	if err != nil {
+		t.Fatalf("BranchForTask returned error: %v", err)
+	}
+	if branch != taskBranch {
+		t.Errorf("expected branch %q, got %q", taskBranch, branch)
+	}
+
+	// After rebase, the new main commit's file must be present.
+	if _, statErr := os.Stat(filepath.Join(mgr.workDir, "main-new.txt")); statErr != nil {
+		t.Error("main-new.txt must be present after rebasing resumed branch onto current origin/main")
+	}
+	// Original task work must be preserved.
+	if _, statErr := os.Stat(filepath.Join(mgr.workDir, "task.txt")); statErr != nil {
+		t.Error("task.txt must be preserved after rebase")
+	}
+}
+
+// BranchForTask warns and continues when the post-checkout rebase of a resumed
+// branch produces a LocalRebaseConflictError, matching the existing pre-checkout
+// error handling. Verifies AC #2.
+func TestBranchForTask_ResumedBranchConflict_WarnAndContinue(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Create a shared file on main so both sides can diverge from it.
+	writeFile(t, project, "shared.txt", "original\n")
+	run(t, "git", "-C", project, "commit", "-m", "add shared")
+	pushToOrigin(t, project)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "reset", "--hard", "origin/main")
+
+	// Create a local task branch that modifies shared.txt.
+	taskBranch := "ralph/ralph-xyz-conflict-task"
+	run(t, "git", "-C", mgr.workDir, "checkout", "-b", taskBranch)
+	writeFile(t, mgr.workDir, "shared.txt", "task version\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "task: edit shared.txt")
+	run(t, "git", "-C", mgr.workDir, "checkout", "-")
+
+	// Advance main with a conflicting change to the same file.
+	writeFile(t, project, "shared.txt", "main version\n")
+	run(t, "git", "-C", project, "commit", "-m", "main: edit shared.txt")
+	pushToOrigin(t, project)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin", "main")
+
+	log := &testLog{}
+	mgr.logger = log
+
+	branch, err := mgr.BranchForTask(context.Background(), "ralph-xyz", "Conflict task", BranchTaskMeta{
+		Branch: taskBranch,
+	})
+	if err != nil {
+		t.Fatalf("BranchForTask must return nil on LocalRebaseConflictError, got: %v", err)
+	}
+	if branch != taskBranch {
+		t.Errorf("expected branch %q, got %q", taskBranch, branch)
+	}
+	if !log.contains("continuing with stale base") {
+		t.Errorf("expected 'continuing with stale base' warning, got: %v", log.messages)
+	}
 }

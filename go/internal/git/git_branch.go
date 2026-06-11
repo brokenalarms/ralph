@@ -79,8 +79,19 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 		}
 	}
 
-	if _, err := checkoutExistingBranch(r, meta, taskID, title); err != nil {
+	checkedOut, err := checkoutExistingBranch(r, meta, taskID, title)
+	if err != nil {
 		return "", err
+	}
+	if checkedOut {
+		if err := r.EnsureUpToDate(ctx); err != nil {
+			var localConflict *LocalRebaseConflictError
+			if errors.As(err, &localConflict) {
+				r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v — continuing with stale base", localConflict)
+			} else {
+				return "", err
+			}
+		}
 	}
 	return r.worktreeBranch, nil
 }
