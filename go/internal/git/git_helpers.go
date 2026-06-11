@@ -207,6 +207,16 @@ func (r *repo) DiffFull(from, to string) string {
 	return r.gitOutput(r.workDir, "diff", from+".."+to)
 }
 
+// DiffFromBase returns the three-dot diff of HEAD against the merge-base with
+// the default branch (git diff origin/<base>...HEAD). Unlike DiffFull with an
+// iteration-local headBefore, this captures every commit the task branch has
+// made relative to the base regardless of which iteration produced it — the
+// same coverage a PR diff gives. Used by the verifier when no PR exists yet.
+func (r *repo) DiffFromBase() string {
+	remote := "origin/" + r.detectDefaultBranch()
+	return r.gitOutput(r.workDir, "diff", remote+"...HEAD")
+}
+
 // ConflictDiff returns the three-way merge diff between HEAD and the base
 // branch (or the default branch), showing what diverges. Used to give a
 // conflict resolution agent context about the conflicting changes.
@@ -330,4 +340,3 @@ func (r *repo) PruneOrphanedWorktrees() {
 		os.RemoveAll(dirPath)
 	}
 }
-

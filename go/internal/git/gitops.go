@@ -50,6 +50,7 @@ type Ops interface {
 	DiffFilesBetween(from, to string) []string
 	DiffStatRange(from, to string) string
 	DiffFull(from, to string) string
+	DiffFromBase() string
 	LogOneline(from, to string) string
 	ConflictDiff() string
 	RemoteURL() string
@@ -130,7 +131,6 @@ type Ops interface {
 	// GitHub availability and PR listing.
 	GitHubAvailable() bool
 	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
-
 }
 
 // Compile-time check that *repo satisfies Ops.
