@@ -803,6 +803,131 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 	}
 }
 
+// Proves that when the agent is killed by user feedback (FeedbackKill), the
+// iteration releases its claim on the task via ReopenTask before returning to
+// task selection, so the task is never stranded in_progress between iterations.
+func TestLoop_ActionRetry_ReleasesClaimBeforeNextSelection(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stateTrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "task to retry",
+				NextID:       "ralph-retry1",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{FeedbackKill: true},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner:       runner,
+	})
+
+	_ = l.Run(context.Background())
+
+	var reopened bool
+	for _, id := range backend.reopenCalls {
+		if id == "ralph-retry1" {
+			reopened = true
+			break
+		}
+	}
+	if !reopened {
+		t.Errorf("expected ReopenTask(ralph-retry1) to release the claim on actionRetry; reopen calls: %v", backend.reopenCalls)
+	}
+}
+
+// Proves that when an agent signals completion but verification fails (signalRetry),
+// the iteration releases its claim on the task via ReopenTask before returning to
+// task selection, so the task is never stranded in_progress between iterations.
+func TestLoop_SignalRetry_ReleasesClaimBeforeNextSelection(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stateTrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "task that fails verify",
+				NextID:       "ralph-retry2",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner:       runner,
+		VerifyHook:   &stubVerifyHook{passed: false, reason: "tests failed"},
+	})
+
+	_ = l.Run(context.Background())
+
+	var reopened bool
+	for _, id := range backend.reopenCalls {
+		if id == "ralph-retry2" {
+			reopened = true
+			break
+		}
+	}
+	if !reopened {
+		t.Errorf("expected ReopenTask(ralph-retry2) to release the claim on signalRetry; reopen calls: %v", backend.reopenCalls)
+	}
+}
+
 // waitForTasks returns true when a skipped bead is reassigned back to
 // ralph-loop (making HasRemaining true), proving that Poll picks it up
 // with no separate skip filter needed.
