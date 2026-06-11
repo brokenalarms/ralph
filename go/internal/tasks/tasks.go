@@ -45,14 +45,11 @@ type Backend interface {
 	// CloseTask marks a task as complete.
 	CloseTask(id string, reason string) error
 
-	// SkipTask marks a task as skipped — sets status back to open and
-	// adds the reason as a bd comment. The skip is tracked in state.json,
-	// not in the bd backend.
+	// SkipTask reassigns the bead to config.TaskAssignee with status=open and
+	// label=skipped, removing it from the loop's bd ready --assignee=ralph-loop
+	// inbox. The reason is recorded as a bead comment. Un-skip by reassigning
+	// back to ralph-loop via bd update <id> --assignee=ralph-loop.
 	SkipTask(id string, reason string) error
-
-	// SetSkippedIDs configures the set of task IDs to exclude from
-	// GetNextTask/HasRemaining queries. Loaded from state.json on startup.
-	SetSkippedIDs(ids []string)
 
 	// SetResumeTaskID tells the backend to check this task first before
 	// falling through to the ready queue. If the task is still

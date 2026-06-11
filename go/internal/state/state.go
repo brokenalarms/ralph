@@ -41,7 +41,6 @@ type State struct {
 	LastTestResult string `json:"last_test_result,omitempty"`
 	LastTestTime   string `json:"last_test_time,omitempty"`
 	CompletedTasks []CompletedTaskEntry `json:"completed_tasks,omitempty"`
-	SkippedTasks   []string             `json:"skipped_tasks,omitempty"`
 	PushedBranches []string             `json:"pushed_branches,omitempty"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
@@ -99,7 +98,6 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"task_backend": true, "max_iterations": true,
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
 		"completed_tasks": true,
-		"skipped_tasks":   true,
 		"pushed_branches": true,
 		// backwards compat: old state files written with last_task_id are read
 		// into CurrentTaskID; the field is never written back as last_task_id.
@@ -342,30 +340,6 @@ func (st *Store) ClearCompletedTasks() error {
 	}
 	s.CompletedTasks = nil
 	return st.Save(s)
-}
-
-// AddSkippedTask appends a task ID to the skipped list if not already present.
-func (st *Store) AddSkippedTask(id string) error {
-	s, err := st.Load()
-	if err != nil {
-		return err
-	}
-	for _, existing := range s.SkippedTasks {
-		if existing == id {
-			return nil
-		}
-	}
-	s.SkippedTasks = append(s.SkippedTasks, id)
-	return st.Save(s)
-}
-
-// GetSkippedTasks returns all skipped task IDs.
-func (st *Store) GetSkippedTasks() ([]string, error) {
-	s, err := st.Load()
-	if err != nil {
-		return nil, err
-	}
-	return s.SkippedTasks, nil
 }
 
 // AddPushedBranch appends a branch name to the pushed-branches list if not

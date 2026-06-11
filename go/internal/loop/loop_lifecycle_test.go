@@ -803,15 +803,12 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 	}
 }
 
-// Clearing skipped_tasks from state.json during wait-mode polling causes the
-// loop to refresh the backend's skip set, making previously-skipped tasks
-// eligible for selection without restarting the loop.
-func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
+// waitForTasks returns true when a skipped bead is reassigned back to
+// ralph-loop (making HasRemaining true), proving that Poll picks it up
+// with no separate skip filter needed.
+func TestLoop_WaitMode_PicksUpReassignedBead(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-
-	// Seed state.json with a skipped task.
-	st.AddSkippedTask("ralph-xyz")
 
 	backend := &testutil.MutableBackend{}
 	backend.Remaining = 0
@@ -839,9 +836,8 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 		WaitHook: &stubWaitHook{fn: func() {
-			s, _ := st.Load()
-			s.SkippedTasks = nil
-			st.Save(s)
+			// Simulate bead being reassigned back to ralph-loop:
+			// HasRemaining now returns true.
 			backend.Lock()
 			backend.Remaining = 1
 			backend.Unlock()
@@ -853,19 +849,6 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 
 	got := l.waitForTasks(ctx)
 	if !got {
-		t.Fatal("waitForTasks should return true after skipped tasks cleared")
-	}
-
-	backend.Lock()
-	calls := backend.LastSkippedIDs
-	backend.Unlock()
-
-	if len(calls) == 0 {
-		t.Fatal("expected SetSkippedIDs to be called during wait polling")
-	}
-	// The last call should be an empty slice (skipped_tasks cleared).
-	last := calls[len(calls)-1]
-	if len(last) != 0 {
-		t.Errorf("expected empty skip list after clearing, got %v", last)
+		t.Fatal("waitForTasks should return true after bead reassigned back to ralph-loop")
 	}
 }

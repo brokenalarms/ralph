@@ -13,13 +13,9 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// Verifies that initialize writes max_iterations to state and loads skipped
-// tasks from state into the backend, proving both initialization side-effects
-// work when called on a Loop.
-func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
+// Verifies that initialize writes max_iterations to state.
+func TestInitialize_WritesConfig(t *testing.T) {
 	dir, st := setupTestDir(t)
-
-	st.AddSkippedTask("ralph-skip1")
 
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
@@ -48,21 +44,8 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 		t.Fatalf("initialize returned error: %v", err)
 	}
 
-	// initialize must call state.WriteConfig(maxIter).
 	if got := st.ReadMaxIterations(0); got != 7 {
 		t.Errorf("expected max_iterations=7 in state, got %d", got)
-	}
-
-	// initialize must load skipped tasks from state into the backend.
-	backend.Lock()
-	skipped := backend.LastSkippedIDs
-	backend.Unlock()
-	if len(skipped) == 0 {
-		t.Error("expected SetSkippedIDs to be called with skipped tasks from state")
-	}
-	last := skipped[len(skipped)-1]
-	if len(last) == 0 || last[0] != "ralph-skip1" {
-		t.Errorf("expected ['ralph-skip1'] in last SetSkippedIDs call, got %v", last)
 	}
 }
 

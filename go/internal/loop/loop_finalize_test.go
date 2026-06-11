@@ -555,8 +555,8 @@ func TestFinalizePR_PushSucceededPRCreationFailed_SkipsWithBranch(t *testing.T) 
 	}
 }
 
-// Loop.skipTask sets status to open in backend and persists to state.json.
-func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
+// Loop.skipTask reassigns the bead via SkipTask and tracks it in sessionSkippedIDs.
+func TestSkipTask_ReassignsBeadAndTracksInSession(t *testing.T) {
 	dir, st := setupTestDir(t)
 	backend := &testutil.StubBackend{}
 	cfg := Config{
@@ -579,12 +579,8 @@ func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	if backend.SkipReason != "merge_failed" {
 		t.Errorf("expected backend.SkipReason=merge_failed, got %q", backend.SkipReason)
 	}
-	skipped, err := st.GetSkippedTasks()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(skipped) != 1 || skipped[0] != "ralph-xyz" {
-		t.Errorf("expected [ralph-xyz] in state.json skipped_tasks, got %v", skipped)
+	if !l.sessionSkippedIDs["ralph-xyz"] {
+		t.Error("expected ralph-xyz to be tracked in sessionSkippedIDs")
 	}
 }
 

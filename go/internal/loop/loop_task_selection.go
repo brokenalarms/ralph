@@ -131,8 +131,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 			resumeID, _ = l.state.Read("current_task_id")
 		}
 	}
-	skippedIDs, _ := l.state.GetSkippedTasks()
-	taskInfo, _ := tasks.Next(l.taskBackend, resumeID, skippedIDs)
+	taskInfo, _ := tasks.Next(l.taskBackend, resumeID)
 	taskID, nextTask := taskInfo.ID, taskInfo.Title
 
 	if taskID == "" && nextTask == "" {

@@ -263,6 +263,7 @@ type Loop struct {
 	binaryHasher            BinaryHasher
 	startupBinaryHash       []byte
 	completedTasks          []CompletedTask
+	sessionSkippedIDs       map[string]bool // in-memory skip set for this session; no state.json persistence
 	activeReviewers         []git.Reviewer
 	reviewersDetected       bool
 }
@@ -362,9 +363,10 @@ func emitTaskSummary(ct CompletedTask, log *logging.Logger) {
 	}
 }
 
-// skipTask sets the task back to open in bd, records the reason as a comment,
-// and adds the ID to both the backend's in-memory skip set and the state.json
-// skipped_tasks list so it stays excluded from future selection.
+// skipTask reassigns the bead to ralph-task (config.TaskAssignee), records
+// the reason as a comment, and tracks the ID in-memory for the lifetime of
+// this session. The bead leaves the loop's bd ready inbox by assignment, so
+// no separate skip filter is needed.
 // Returns (true, haltReason) when the skip is escalated because the task has
 // open dependents that would be stranded; (false, "") on a normal successful skip.
 func (l *Loop) skipTask(id, reason string) (bool, string) {
@@ -382,11 +384,10 @@ func (l *Loop) skipTask(id, reason string) (bool, string) {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
 	}
 	l.state.ClearCurrentTask()
-	if err := l.state.AddSkippedTask(id); err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to persist skip for %s: %v", id, err)
+	if l.sessionSkippedIDs == nil {
+		l.sessionSkippedIDs = make(map[string]bool)
 	}
-	skipped, _ := l.state.GetSkippedTasks()
-	l.taskBackend.SetSkippedIDs(skipped)
+	l.sessionSkippedIDs[id] = true
 	return false, ""
 }
 

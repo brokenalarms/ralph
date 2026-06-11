@@ -68,16 +68,10 @@ func (l *Loop) maybeEvolve(fallback postSignalAction) postSignalAction {
 	return fallback
 }
 
-// initialize performs all one-time setup: skipped task loading,
-// state config write, and worktree sync. The caller is responsible for
-// calling limiter.Init() before initialize.
+// initialize performs all one-time setup: state config write and worktree sync.
+// The caller is responsible for calling limiter.Init() before initialize.
 func (l *Loop) initialize(ctx context.Context) error {
 	l.state.WriteConfig(l.cfg.MaxIterations)
-
-	if skipped, err := l.state.GetSkippedTasks(); err == nil && len(skipped) > 0 {
-		l.taskBackend.SetSkippedIDs(skipped)
-		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Loaded %d skipped tasks from state", len(skipped))
-	}
 
 	l.state.ClearCompletedTasksFile()
 

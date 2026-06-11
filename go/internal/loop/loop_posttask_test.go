@@ -123,8 +123,8 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 	}
 }
 
-// completeTask: if the task was already skipped (e.g. verification
-// rejected 3 times), it returns signalSkipped without pushing or merging.
+// completeTask: if the task was skipped during verification (tracked in
+// sessionSkippedIDs), it returns signalSkipped without pushing or merging.
 func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -153,10 +153,8 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 	})
 	l.runner = &stubRunner{}
 
-	// Mark the task as skipped in state before calling completeTask.
-	if err := st.AddSkippedTask("ralph-skipped"); err != nil {
-		t.Fatalf("AddSkippedTask: %v", err)
-	}
+	// Mark the task as skipped in the loop's session set (as skipTask would do).
+	l.sessionSkippedIDs = map[string]bool{"ralph-skipped": true}
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},

@@ -35,7 +35,6 @@ type BD struct {
 	RalphDir   string        // .ralph state directory for invocation logging; empty disables logging
 	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
 	bdPath     string        // resolved absolute path to the bd binary
-	skippedIDs map[string]bool
 	resumeTaskID string
 }
 
@@ -50,13 +49,6 @@ type bdCallRecord struct {
 	KilledByCtxCancel bool     `json:"killedByCtxCancel"`
 	CtxErr            string   `json:"ctxErr,omitempty"`
 	StderrTail        string   `json:"stderrTail,omitempty"`
-}
-
-func (b *BD) SetSkippedIDs(ids []string) {
-	b.skippedIDs = make(map[string]bool, len(ids))
-	for _, id := range ids {
-		b.skippedIDs[id] = true
-	}
 }
 
 func (b *BD) SetResumeTaskID(id string) {
@@ -385,6 +377,7 @@ type bdIssue struct {
 	Priority *int   `json:"priority,omitempty"`
 	Type     string `json:"type,omitempty"`
 	Status   string `json:"status,omitempty"`
+	Assignee string `json:"assignee,omitempty"`
 }
 
 // nonExecutableBDTypes lists bd issue types that are containers or metadata
@@ -431,7 +424,7 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 	if err != nil {
 		return bdIssue{}, nil
 	}
-	issue, ok := bestIssue(out, b.skippedIDs)
+	issue, ok := bestIssue(out)
 	if !ok {
 		return bdIssue{}, nil
 	}
@@ -439,12 +432,12 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 }
 
 // resumeTask checks whether the resumeTaskID points to a task that is
-// still open or in_progress AND has an executable type. Container/meta
-// types (epic, decision, merge-request, molecule, convoy) are rejected
-// so a stale last_task_id pointing at a container can't bypass the
-// type filter applied to bd ready.
+// still open or in_progress, assigned to the loop (not skipped/reassigned),
+// and has an executable type. Container/meta types (epic, decision,
+// merge-request, molecule, convoy) are rejected so a stale last_task_id
+// pointing at a container can't bypass the type filter applied to bd ready.
 func (b *BD) resumeTask() (bdIssue, bool) {
-	if b.resumeTaskID == "" || b.skippedIDs[b.resumeTaskID] {
+	if b.resumeTaskID == "" {
 		return bdIssue{}, false
 	}
 	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", b.resumeTaskID, "--json")
@@ -457,6 +450,11 @@ func (b *BD) resumeTask() (bdIssue, bool) {
 	}
 	issue := items[0]
 	if nonExecutableBDTypesSet[issue.Type] {
+		return bdIssue{}, false
+	}
+	// Reject tasks that were skipped (reassigned to ralph-task). A non-empty
+	// assignee that isn't the loop means the bead has left the loop's inbox.
+	if issue.Assignee != "" && issue.Assignee != config.LoopAssignee {
 		return bdIssue{}, false
 	}
 	if issue.Status == "open" || issue.Status == "in_progress" {
@@ -501,9 +499,8 @@ func issueTypeRank(issue bdIssue) int {
 
 // bestIssue parses all issues from JSON and returns the one with the
 // highest priority (lowest number), breaking ties by type rank
-// (bug < task < feature/enhancement), then by status (in_progress before
-// open). Issues whose ID appears in skip are excluded from selection.
-func bestIssue(jsonStr string, skip map[string]bool) (bdIssue, bool) {
+// (bug < task < feature/enhancement), then by status (in_progress before open).
+func bestIssue(jsonStr string) (bdIssue, bool) {
 	var issues []bdIssue
 	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
 		return bdIssue{}, false
@@ -512,9 +509,6 @@ func bestIssue(jsonStr string, skip map[string]bool) (bdIssue, bool) {
 	best := -1
 	for i, issue := range issues {
 		if issue.ID == "" && issue.Title == "" {
-			continue
-		}
-		if skip[issue.ID] {
 			continue
 		}
 		if best == -1 {
@@ -647,7 +641,7 @@ func (b *BD) SkipTask(id string, reason string) error {
 	if id == "" {
 		return nil
 	}
-	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open"); err != nil {
+	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open", "--assignee="+config.TaskAssignee, "--label=skipped"); err != nil {
 		return err
 	}
 	if reason != "" {

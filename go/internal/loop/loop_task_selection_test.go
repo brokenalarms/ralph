@@ -198,16 +198,18 @@ func TestSelectNextTask_SetResumeIDOnFirstIteration(t *testing.T) {
 	}
 }
 
-// When wait=true and all open tasks are skipped, selectNextTask must NOT exit
-// immediately — it falls through to waitForTasks and polls for new work.
-// Proved by: the waitHook fires (confirming waitForTasks was entered), and
-// context cancellation from the hook causes actionDone with status "stopped",
-// not the old "all_skipped" short-circuit.
+// When wait=true and the ralph-loop inbox is empty (e.g. all tasks skipped and
+// reassigned to ralph-task), selectNextTask must NOT exit immediately — it falls
+// through to waitForTasks and polls for work. The loop exits only when Ctrl-C or
+// a new task appears. Proved by: the waitHook fires (confirming waitForTasks was
+// entered), and context cancellation from the hook causes actionDone with status
+// "stopped". This is the AC5 preservation test: open tasks exist (in ralph-task
+// inbox) but none are workable by the loop (loop inbox is empty).
 func TestSelectNextTask_WaitMode_AllSkipped(t *testing.T) {
 	falseVal := false
 	backend := &testutil.StubBackend{
-		Remaining:          1,         // CountRemaining returns 1 (open task exists)
-		HasRemainingResult: &falseVal, // HasRemaining returns false (all skipped)
+		Remaining:          1,         // CountRemaining returns 1 (open task exists globally)
+		HasRemainingResult: &falseVal, // HasRemaining returns false (loop inbox is empty)
 		Total:              1,
 		NextID:             "",
 		NextTask:           "",

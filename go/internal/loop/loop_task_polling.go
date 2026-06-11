@@ -17,8 +17,7 @@ func (l *Loop) pollForTasks() (found, done bool) {
 		l.state.Write("status", "stopped")
 		return false, true
 	}
-	skipped, _ := l.state.GetSkippedTasks()
-	hasRemaining, err := tasks.Poll(l.taskBackend, skipped)
+	hasRemaining, err := tasks.Poll(l.taskBackend)
 	if err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error during wait: %v", err)
 		return false, false
