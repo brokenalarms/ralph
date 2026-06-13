@@ -416,8 +416,9 @@ func TestBD_SkipTask_RecordsReasonAsComment(t *testing.T) {
 	}
 }
 
-// Proves: bd SkipTask reassigns the bead to config.TaskAssignee and adds a
-// skipped label so it leaves the loop's inbox with no separate filter needed.
+// Proves: bd SkipTask reassigns the bead to config.TaskAssignee and adds the
+// skipped label via --add-label so it leaves the loop's inbox with no separate
+// filter needed. --label is not a valid bd update flag and must not be used.
 func TestBD_SkipTask_ReassignsToTaskAssignee(t *testing.T) {
 	var updateArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
@@ -431,11 +432,17 @@ func TestBD_SkipTask_ReassignsToTaskAssignee(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(updateArgs, " ")
+	if !strings.Contains(joined, "--status=open") {
+		t.Errorf("SkipTask must set --status=open, got update args: %v", updateArgs)
+	}
 	if !strings.Contains(joined, "--assignee="+config.TaskAssignee) {
 		t.Errorf("SkipTask must reassign to %s, got update args: %v", config.TaskAssignee, updateArgs)
 	}
-	if !strings.Contains(joined, "--label=skipped") {
-		t.Errorf("SkipTask must add skipped label, got update args: %v", updateArgs)
+	if !strings.Contains(joined, "--add-label=skipped") {
+		t.Errorf("SkipTask must use --add-label=skipped, got update args: %v", updateArgs)
+	}
+	if strings.Contains(joined, "--label=skipped") {
+		t.Errorf("SkipTask must not use --label=skipped (invalid flag), got update args: %v", updateArgs)
 	}
 }
 
