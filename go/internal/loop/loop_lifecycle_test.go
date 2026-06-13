@@ -928,6 +928,110 @@ func TestLoop_SignalRetry_ReleasesClaimBeforeNextSelection(t *testing.T) {
 	}
 }
 
+// Proves the 8x70 evolve-restart resume path: a task claimed mid-implementation
+// has its claim released at the iteration boundary (releaseClaimForRetry), so
+// when a new loop session starts after an evolve-restart, the task is status=open
+// and re-selected normally — never triggering halted_blocked_by_in_progress.
+func TestLoop_EvolveRestart_ReleasedClaimResumesWithoutHalt(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stateTrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "task interrupted by evolve",
+				NextID:       "ralph-evo1",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	logger := logging.New(nil)
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+
+	// Session 1: agent gets FeedbackKill (simulates mid-implementation interrupt).
+	// The iteration boundary must call releaseClaimForRetry so the task returns to
+	// status=open before the session exits.
+	l1 := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner:       &stubRunner{result: claude.Result{FeedbackKill: true}},
+	})
+	_ = l1.Run(context.Background())
+
+	// The claim must have been released at the iteration boundary so the task is
+	// status=open (not in_progress) when the evolve-restart spawns a new session.
+	var released bool
+	for _, id := range backend.reopenCalls {
+		if id == "ralph-evo1" {
+			released = true
+			break
+		}
+	}
+	if !released {
+		t.Fatalf("expected ReopenTask(ralph-evo1) to release the claim at the iteration boundary; reopen calls: %v", backend.reopenCalls)
+	}
+
+	// current_task_id must persist in state — the new session reads this to
+	// resume the same task after an evolve-restart.
+	resumeID, _ := st.Read("current_task_id")
+	if resumeID != "ralph-evo1" {
+		t.Fatalf("expected current_task_id=ralph-evo1 in state for evolve-restart resume; got %q", resumeID)
+	}
+
+	// Session 2: simulates the new loop binary started by the orchestrator after
+	// evolve-restart. Task is open (claim released); the loop must re-select it
+	// and run the agent without entering halted_blocked_by_in_progress.
+	run2Called := false
+	l2 := New(cfg, Modules{
+		State:  st,    // same state — current_task_id is set
+		Git:    gm,
+		TaskBackend: backend, // same backend — Remaining=1 (task is open)
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner: &stubRunner{
+			onRun: func() {
+				run2Called = true
+				backend.Lock()
+				backend.Remaining = 0
+				backend.Completed = 1
+				backend.Unlock()
+			},
+			result: claude.Result{SignalDetected: true, Summary: "done"},
+		},
+		VerifyHook: passingVerifyHook(),
+	})
+	_ = l2.Run(context.Background())
+
+	if !run2Called {
+		t.Error("expected agent to run in the evolve-restart resume session — task must be re-selected as open")
+	}
+	finalStatus, _ := st.Read("status")
+	if finalStatus == "halted_blocked_by_in_progress" {
+		t.Errorf("evolve-restart resume must not enter halted_blocked_by_in_progress (claim was released at iteration boundary)")
+	}
+}
+
 // waitForTasks returns true when a skipped bead is reassigned back to
 // ralph-loop (making HasRemaining true), proving that Poll picks it up
 // with no separate skip filter needed.
