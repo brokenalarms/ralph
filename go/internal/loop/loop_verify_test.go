@@ -1080,3 +1080,80 @@ func TestRunVerifyPipeline_SignalCommitDropped_InfraAbort(t *testing.T) {
 		t.Errorf("task must not be skipped on infra abort, got SkippedTask=%q", backend.SkippedTask)
 	}
 }
+
+// Reproduces ralph-732q: a task worktree branch is configured, but git
+// operations have fallen back to the project checkout (GetWorkDir() ==
+// GetProjectDir()). Every diff/HEAD read would then reflect projectDir's
+// HEAD — the PREVIOUS task's merged commit — so the verifier would be handed
+// the prior task's diff and falsely reject this task's correct work. The
+// pipeline must abort as an infrastructure error before any LLM call: no
+// skip, no attempt consumed, LLM never invoked.
+func TestRunVerifyPipeline_WorktreeBranchButProjectDir_InfraAbort(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	// Contamination state: the run is configured to use a per-task worktree
+	// (cfg.Dirs.WorkDir below points at a separate dir), but git operations
+	// have fallen back to the project checkout — GetWorkDir() == GetProjectDir()
+	// == dir. DiffFullResult is the prior task's diff that would be fed to the
+	// verifier if the guard did not fire.
+	worktreeDir := filepath.Join(dir, "worktree-ralph-732q")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/ralph-732q-task",
+		DiffFullResult: "+prior task diff (loop_iteration.go)",
+		HeadRev:        "prior-task-merged-sha",
+	})
+
+	llmCalled := false
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: worktreeDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(_ context.Context, _, _, _ string) (string, error) {
+				llmCalled = true
+				return "NO: diff has no task-manager.md changes", nil
+			}},
+		}),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
+		ctx:            context.Background(),
+		headBefore:     "old-sha",
+		signalTimeHead: "signal-sha",
+		workDir:        dir,
+		rawLogPath:     filepath.Join(ralphDir, "raw.log"),
+		taskID:         "ralph-732q",
+		nextTask:       "startup skip-triage",
+	})
+	if skipReason != "" {
+		l.skipTask("ralph-732q", skipReason)
+	}
+
+	if verified {
+		t.Error("verification must fail (infra abort) when a worktree branch is configured but git ops resolve to projectDir")
+	}
+	if skipReason != "" {
+		t.Errorf("infra abort must not produce a skip reason, got %q", skipReason)
+	}
+	if llmCalled {
+		t.Error("LLM verifier must not be invoked when the worktree invariant is violated — a stale projectDir diff must never reach the verifier")
+	}
+	if backend.SkippedTask != "" {
+		t.Errorf("task must not be skipped on infra abort, got SkippedTask=%q", backend.SkippedTask)
+	}
+}
