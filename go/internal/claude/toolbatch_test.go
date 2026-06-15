@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/testutil"
 )
 
 // strip ANSI codes for assertions
@@ -162,11 +164,12 @@ func TestToolBatcher_FlushIfExpired(t *testing.T) {
 		t.Errorf("should not flush before window expires, got %v", out)
 	}
 
-	time.Sleep(60 * time.Millisecond)
-	out = b.FlushIfExpired()
-	if len(out) == 0 {
-		t.Fatal("should flush after window expires")
-	}
+	// Poll FlushIfExpired until the 50ms window elapses and it emits the batch,
+	// rather than sleeping a magic duration past the window.
+	testutil.WaitFor(t, 2*time.Second, "batch window to expire and flush", func() bool {
+		out = b.FlushIfExpired()
+		return len(out) != 0
+	})
 	all := stripANSI(strings.Join(out, " "))
 	if !strings.Contains(all, "[Read] file.go") {
 		t.Errorf("flushed line should contain batched Read, got: %s", all)
@@ -309,9 +312,15 @@ func TestVerboseOnlyTools_ExactMembership(t *testing.T) {
 // Window expiry during ProcessLine flushes old batch before accumulating new tool.
 func TestToolBatcher_WindowExpiryDuringProcess(t *testing.T) {
 	b := NewToolBatcher(50*time.Millisecond, "")
+	start := time.Now()
 	b.ProcessLine("[Read] /path/old.go")
 
-	time.Sleep(60 * time.Millisecond)
+	// Wait for the 50ms batch window to elapse before the next ProcessLine, so
+	// it flushes the old batch — an observable elapsed-time condition rather
+	// than a magic sleep.
+	testutil.WaitFor(t, 2*time.Second, "batch window (50ms) to elapse", func() bool {
+		return time.Since(start) > 50*time.Millisecond
+	})
 
 	out := b.ProcessLine("[Read] /path/new.go")
 	// Should flush old batch
