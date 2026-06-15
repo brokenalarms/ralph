@@ -40,6 +40,29 @@ type verifyPipelineInput struct {
 // should call l.skipTask(taskID, skipReason) — that action is Loop's, not
 // verifier's.
 func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReason string) {
+	// Worktree invariant. Every diff/HEAD read in this pipeline (CheckCommits,
+	// fetchVerifyDiff's DiffFull/DiffFromBase, the signal-time ancestor guard)
+	// resolves against l.git's workDir. When the run is configured to use a
+	// per-task worktree (cfg.Dirs.WorkDir is a separate dir, not projectDir)
+	// but git operations have fallen back to the project checkout, all of those
+	// reads silently reflect the project checkout — whose HEAD is the PREVIOUS
+	// task's merged commit, not this task's branch tip — and the verifier is
+	// handed the prior task's diff. No internal consistency check can catch
+	// this: signalTimeHead and HEAD are both read from the same contaminated
+	// workDir, so the ancestor guard below passes trivially. Compare against
+	// the configured worktree instead. The inverse (Dirs.WorkDir == projectDir)
+	// is legitimate in-place operation and must not trip this guard. Abort as
+	// an infrastructure error — no skip, no attempt consumed — rather than
+	// false-reject correct work. Observed on ralph-732q: the worktree held the
+	// deliverable commit but verification resolved to projectDir and rejected
+	// the prior task's diff three times.
+	if l.cfg.Dirs.WorkDir != "" && l.cfg.Dirs.WorkDir != l.git.GetProjectDir() && l.git.GetWorkDir() == l.git.GetProjectDir() {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+			"Infrastructure error: run is configured for worktree %q but git operations resolve to projectDir %q — aborting verification to avoid verifying a stale project-checkout diff",
+			l.cfg.Dirs.WorkDir, l.git.GetProjectDir())
+		return false, ""
+	}
+
 	// Zero-commit guard: if the agent signaled completion without committing,
 	// the task was not worked. First check iteration-local commits; if none,
 	// fall back to checking whether prior iterations left commits ahead of
