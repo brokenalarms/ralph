@@ -27,6 +27,12 @@
 - Each test should explain in a comment why it exists and what user functionality it proves — not just assert correctness mechanically.
 - Do not write tests that assert specific strings from prompt templates. Prompts are natural-language guidance — test behavior, not prose.
 
+## Test synchronization (no fixed sleeps)
+- Tests must not use a fixed `time.Sleep` (or `time.After`) as a synchronization proxy — a magic delay chosen to be "long enough" for an asynchronous event. It is flaky under load (the event may not have happened yet) and silently wasteful when over-long.
+- Synchronize on the observable condition instead, via the `testutil.WaitFor*` helpers: `WaitFor` (arbitrary predicate), `WaitForFile`, `WaitForSignalFile`, `WaitProcessGone`. They poll the condition and return the instant it holds; the timeout is a bounded upper limit that guards against a hang, not a delay that must be tuned.
+- To assert a *non-event* (something does NOT happen), drive the system to an observable state with `WaitFor`, then assert — do not sleep and hope.
+- A `forbidigo` lint rule forbids `time.Sleep` in `*_test.go`; the `testutil` wait helpers are the only exception.
+
 ## Stubs and test doubles
 - A test stub implements exactly the production interface — the same methods, nothing else. It is indistinguishable in shape from the real implementation.
 - Stub configuration happens at construction via a `StubXConfig` struct passed to `NewStubX(cfg)`. The constructor is the only configuration seam.
