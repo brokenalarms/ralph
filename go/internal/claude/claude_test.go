@@ -2018,8 +2018,19 @@ func TestRun_KillsProcessOnContextCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel only after the spawned process has started and written its PID
+	// file. Cancelling on a fixed timer races process startup: under load the
+	// kill can arrive before bash runs `echo $$ > pidFile`, leaving the file
+	// absent. The script's `sleep 1` keeps the process alive long enough to be
+	// killed once we cancel.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if data, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(data)) != "" {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 		cancel()
 	}()
 
@@ -2037,18 +2048,28 @@ func TestRun_KillsProcessOnContextCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Read the captured PID.
+	// Read the captured PID. By the time Run() returns the cancel goroutine
+	// has confirmed the PID file is present and non-empty.
 	pidData, err := os.ReadFile(pidFile)
 	if err != nil {
 		t.Fatal("PID file not written — process may not have started")
 	}
 	pid := strings.TrimSpace(string(pidData))
 
-	// Verify the process is dead. kill -0 checks if a process exists.
-	time.Sleep(100 * time.Millisecond)
-	check := exec.Command("kill", "-0", pid)
-	if err := check.Run(); err == nil {
-		t.Errorf("process %s should be dead after Run() returns, but kill -0 succeeded", pid)
+	// The process must be gone once Run() returns. Poll kill -0 until it fails
+	// rather than asserting after a fixed sleep — the kill may take a moment to
+	// propagate to the process group.
+	dead := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if exec.Command("kill", "-0", pid).Run() != nil {
+			dead = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !dead {
+		t.Errorf("process %s should be dead after Run() returns, but kill -0 still succeeds", pid)
 	}
 }
 
