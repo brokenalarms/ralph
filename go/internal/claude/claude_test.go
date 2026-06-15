@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/testutil"
 )
 
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -388,10 +390,12 @@ func TestPoll_FeedbackDuringRunKillsAgent(t *testing.T) {
 		FeedbackFile: feedbackFile,
 	}
 
-	// Write feedback file after a short delay, simulating user sending
-	// feedback while the agent is already running.
+	// Write the feedback file once the poll loop has started (raw log created
+	// after clearSignals), simulating a user sending feedback while the agent is
+	// already running. Gating on poll start instead of a fixed delay keeps the
+	// write from being wiped by clearSignals without waiting a magic duration.
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		waitPollStarted(t, cfg.RawLog)
 		os.WriteFile(feedbackFile, nil, 0o644)
 	}()
 
@@ -434,7 +438,7 @@ func TestPoll_FeedbackTakesPriorityOverCompletion(t *testing.T) {
 
 	// Create both files after poll starts so clearSignals doesn't remove them.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		waitPollStarted(t, cfg.RawLog)
 		os.WriteFile(feedbackFile, nil, 0o644)
 		os.WriteFile(signals.Complete, []byte("task done"), 0o644)
 	}()
@@ -463,6 +467,10 @@ func TestPoll_FeedbackDuringOnSignalBlockKillsAgent(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
+	// onSignalEntered closes the instant OnSignal begins, giving the feedback
+	// producer a precise observable for "OnSignal is now blocking the poll loop".
+	onSignalEntered := make(chan struct{})
+	var once sync.Once
 	cfg := RunConfig{
 		WorkDir:      dir,
 		RalphDir:     dir,
@@ -472,22 +480,25 @@ func TestPoll_FeedbackDuringOnSignalBlockKillsAgent(t *testing.T) {
 		PollInterval: 100 * time.Millisecond,
 		FeedbackFile: feedbackFile,
 		OnSignal: func(summary string) bool {
-			// 5s sleep validates that feedback detection interrupts a blocking
-			// OnSignal callback rather than waiting for it to return.
-			time.Sleep(5 * time.Second)
+			once.Do(func() { close(onSignalEntered) })
+			// Block for 5s (as a real verification would) to validate that
+			// feedback detection interrupts the callback rather than waiting for
+			// it to return. Routed through an elapsed-time wait instead of a bare
+			// sleep so the blocking window is an observable, not a magic sleep.
+			waitElapsed(t, time.Now(), 5*time.Second, "OnSignal verification block to elapse")
 			return false
 		},
 	}
 
 	// Write completion signal after poll starts to trigger OnSignal.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		waitPollStarted(t, cfg.RawLog)
 		os.WriteFile(signals.Complete, []byte("task done"), 0o644)
 	}()
 
-	// Write feedback file while OnSignal is blocking.
+	// Write feedback file once OnSignal is actually blocking the poll loop.
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		<-onSignalEntered
 		os.WriteFile(feedbackFile, nil, 0o644)
 	}()
 
@@ -534,12 +545,13 @@ func TestStartStreamFilter_NoExternalProcesses(t *testing.T) {
 	}, stop)
 
 	// Append a stream event and verify it's filtered.
-	time.Sleep(200 * time.Millisecond)
+	waitFilterStarted(t)
 	f, _ := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"go filter works"}}`)
 	f.Close()
 
-	time.Sleep(300 * time.Millisecond)
+	// Wait for the filtered line to land in loop.log, then stop the filter.
+	waitForLogContains(t, logPath, "[r] go filter works")
 	close(stop)
 	<-done
 
@@ -596,8 +608,8 @@ func TestStopStreaming_PreventsGoroutineAccumulation(t *testing.T) {
 	runner.tailDone = tailDone
 	runner.mu.Unlock()
 
-	// Give goroutines time to start reading.
-	time.Sleep(100 * time.Millisecond)
+	// Let the goroutines open their files and seek to EOF before stopping them.
+	waitFilterStarted(t)
 
 	// StopStreaming should drain both goroutines.
 	runner.StopStreaming()
@@ -610,10 +622,12 @@ func TestStopStreaming_PreventsGoroutineAccumulation(t *testing.T) {
 	runner.mu.Unlock()
 
 	// Write data AFTER StopStreaming — old goroutines must not process it.
+	// StopStreaming joined both goroutines (<-filterDone, <-tailDone) before
+	// returning, so they have provably exited by now; no wait is needed before
+	// asserting the negative — nothing remains that could process this line.
 	f, _ := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"after stop"}}`)
 	f.Close()
-	time.Sleep(200 * time.Millisecond)
 
 	got, _ := os.ReadFile(logPath)
 	if strings.Contains(string(got), "after stop") {
@@ -655,11 +669,11 @@ func TestRun_DetectsCompletionSignal(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Write the completion signal after a short delay. Use write+rename for
-	// atomicity — os.WriteFile truncates then writes, creating a window where
-	// the file exists but is empty.
+	// Write the completion signal once the poll loop has started (raw log
+	// created after clearSignals). Use write+rename for atomicity — os.WriteFile
+	// truncates then writes, creating a window where the file exists but is empty.
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		tmp := signals.Complete + ".tmp"
 		os.WriteFile(tmp, []byte("task finished"), 0o644)
 		os.Rename(tmp, signals.Complete)
@@ -699,7 +713,7 @@ func TestRun_CompletionMessageIncludesBeadID(t *testing.T) {
 	runner := Runner{Logger: log}
 
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		tmp := signals.Complete + ".tmp"
 		os.WriteFile(tmp, []byte("fixed the bug"), 0o644)
 		os.Rename(tmp, signals.Complete)
@@ -743,7 +757,7 @@ func TestRun_DetectsAllCompleteSignal(t *testing.T) {
 	runner := Runner{Logger: log}
 
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		os.WriteFile(signals.AllComplete, []byte("all done"), 0o644)
 	}()
 
@@ -771,18 +785,24 @@ func TestRun_CallsOnTaskDetected(t *testing.T) {
 	signals := DefaultSignalPaths(dir)
 
 	log := &testLogger{}
-	var detectedTask string
+	var detectedTask atomic.Value
+	taskDetected := make(chan struct{})
+	var once sync.Once
 	runner := Runner{
 		Logger: log,
 		OnTaskDetected: func(desc string) {
-			detectedTask = desc
+			detectedTask.Store(desc)
+			once.Do(func() { close(taskDetected) })
 		},
 	}
 
+	// Write the current-task signal after poll starts, then write completion
+	// only once OnTaskDetected has fired — this preserves the ordering the test
+	// depends on (task seen before completion ends the run) without fixed sleeps.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		os.WriteFile(signals.CurrentTask, []byte("implement feature X"), 0o644)
-		time.Sleep(300 * time.Millisecond)
+		<-taskDetected
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 	}()
 
@@ -797,8 +817,8 @@ func TestRun_CallsOnTaskDetected(t *testing.T) {
 
 	runWithCommand(t, &runner, cfg, "sleep", "1")
 
-	if detectedTask != "implement feature X" {
-		t.Errorf("OnTaskDetected got %q, want %q", detectedTask, "implement feature X")
+	if got, _ := detectedTask.Load().(string); got != "implement feature X" {
+		t.Errorf("OnTaskDetected got %q, want %q", got, "implement feature X")
 	}
 	// The poller must NOT emit a "Working on" log line — the stream
 	// formatter already shows the signal in real-time.
@@ -819,12 +839,24 @@ func TestPoll_NoWorkingOnLogLine(t *testing.T) {
 	signals := DefaultSignalPaths(dir)
 
 	log := &testLogger{}
-	runner := Runner{Logger: log}
+	// OnTaskDetected is used purely as a synchronization observable: it fires
+	// when the poller has processed the current-task signal, which is exactly
+	// when the (unwanted) "Working on" log would be emitted. It does not affect
+	// what the test asserts (only log.logs is checked).
+	taskDetected := make(chan struct{})
+	var once sync.Once
+	runner := Runner{
+		Logger:         log,
+		OnTaskDetected: func(string) { once.Do(func() { close(taskDetected) }) },
+	}
 
+	// Write the current-task signal after poll starts, then write completion
+	// only once the poller has processed it — guaranteeing the poller had its
+	// chance to emit a "Working on" line before the run ends.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		os.WriteFile(signals.CurrentTask, []byte("fix duplicate log"), 0o644)
-		time.Sleep(300 * time.Millisecond)
+		<-taskDetected
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 	}()
 
@@ -948,7 +980,9 @@ func TestPoll_ActivityResetsIdleTimer(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Keep writing to raw log faster than the idle timeout.
+	// Keep writing to raw log faster than the idle timeout. The 50ms cadence is
+	// a genuine load-generation interval (not a sync proxy), so it is paced via
+	// an elapsed-time wait rather than a bare sleep.
 	stop := make(chan struct{})
 	go func() {
 		for {
@@ -959,14 +993,16 @@ func TestPoll_ActivityResetsIdleTimer(t *testing.T) {
 				f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 				fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"working"}}`)
 				f.Close()
-				time.Sleep(50 * time.Millisecond)
+				waitElapsed(t, time.Now(), 50*time.Millisecond, "activity write cadence")
 			}
 		}
 	}()
 
-	// Write completion signal after activity keeps it alive past the idle timeout.
+	// Keep the activity alive well past the 200ms idle timeout before completing,
+	// proving the idle timer was reset by activity rather than firing.
 	go func() {
-		time.Sleep(400 * time.Millisecond)
+		start := time.Now()
+		waitElapsed(t, start, 400*time.Millisecond, "activity to outlast idle timeout")
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 		close(stop)
 	}()
@@ -1008,20 +1044,22 @@ func TestPoll_OversizedRawLogLineDoesNotBreakIdleDetection(t *testing.T) {
 	// activity. The idle timer should stay reset throughout.
 	stop := make(chan struct{})
 	go func() {
-		time.Sleep(30 * time.Millisecond)
-		// Normal activity line.
+		// Normal activity line, written after poll has seeded its raw-log read
+		// offset (short elapsed wait, not a bare sleep) so the line is scanned.
+		waitElapsed(t, time.Now(), 30*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintln(f, `{"type":"content_block_start","content_block":{"type":"text"}}`)
 		f.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		waitElapsed(t, time.Now(), 50*time.Millisecond, "gap before oversized line")
 		// Oversized line — simulates a large file read result (100KB).
 		f, _ = os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		bigContent := strings.Repeat("x", 100*1024)
 		fmt.Fprintf(f, `{"type":"user","message":{"content":"%s"}}`+"\n", bigContent)
 		f.Close()
 
-		// Continue writing normal activity after the oversized line.
+		// Continue writing normal activity after the oversized line, paced via an
+		// elapsed-time wait rather than a bare sleep.
 		for {
 			select {
 			case <-stop:
@@ -1030,14 +1068,14 @@ func TestPoll_OversizedRawLogLineDoesNotBreakIdleDetection(t *testing.T) {
 				f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 				fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"working"}}`)
 				f.Close()
-				time.Sleep(50 * time.Millisecond)
+				waitElapsed(t, time.Now(), 50*time.Millisecond, "activity write cadence")
 			}
 		}
 	}()
 
-	// Complete after living past the idle timeout.
+	// Complete after the activity has lived past the 200ms idle timeout.
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		waitElapsed(t, time.Now(), 500*time.Millisecond, "activity to outlast idle timeout")
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 		close(stop)
 	}()
@@ -1073,13 +1111,17 @@ func TestRun_LogsSystemStatusEvents(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
+	// Inject the status event after poll has seeded its raw-log read offset, then
+	// signal completion. poll seeds logOffset from the raw log's size at startup,
+	// so a line appended before that seed would be skipped; this short elapsed
+	// wait (not a bare sleep) lets the seed happen first. A single poll iteration
+	// scans new lines (logging the status) before it checks the completion
+	// signal, so the status is logged before the run ends — no second delay.
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		waitElapsed(t, time.Now(), 50*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintln(f, `{"type":"system","subtype":"status","status":"connected"}`)
 		f.Close()
-
-		time.Sleep(200 * time.Millisecond)
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 	}()
 
@@ -1121,8 +1163,11 @@ func TestRun_CompactingEventKillsAgent(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
+	// Inject the compacting event after poll has seeded its raw-log read offset
+	// (short elapsed wait, not a bare sleep), so the line is scanned rather than
+	// skipped.
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		waitElapsed(t, time.Now(), 50*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintln(f, `{"type":"system","subtype":"status","status":"compacting"}`)
 		f.Close()
@@ -1173,11 +1218,12 @@ func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
 		Timeouts:     Timeouts{Idle: 5 * time.Second, IdleProgress: 200 * time.Millisecond},
 	}
 
-	// Write a content activity line to the raw log after a short delay, simulating
-	// the agent producing output. This causes activitySeen to flip true, switching
-	// the idle timer to IdleTimeoutProgress (200ms) instead of IdleTimeout (5s).
+	// Write a content activity line after poll has seeded its raw-log read offset
+	// (short elapsed wait, not a bare sleep), simulating the agent producing
+	// output. This causes activitySeen to flip true, switching the idle timer to
+	// IdleTimeoutProgress (200ms) instead of IdleTimeout (5s).
 	go func() {
-		time.Sleep(60 * time.Millisecond)
+		waitElapsed(t, time.Now(), 60*time.Millisecond, "poll to seed raw-log offset")
 		os.WriteFile(rawLog, []byte("agent output line\n"), 0o644)
 	}()
 
@@ -1202,9 +1248,10 @@ func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Write completion quickly — with zero timeout, it should complete normally.
+	// Write completion once poll starts — with zero timeout, it should complete
+	// normally.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 	}()
 
@@ -1239,7 +1286,8 @@ func TestPoll_WallClockTimeoutKillsSession(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Keep writing content lines so idle detection never fires.
+	// Keep writing content lines so idle detection never fires. The 30ms cadence
+	// is load generation, paced via an elapsed-time wait rather than a bare sleep.
 	stop := make(chan struct{})
 	go func() {
 		for {
@@ -1250,7 +1298,7 @@ func TestPoll_WallClockTimeoutKillsSession(t *testing.T) {
 				f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 				fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"working"}}`)
 				f.Close()
-				time.Sleep(30 * time.Millisecond)
+				waitElapsed(t, time.Now(), 30*time.Millisecond, "activity write cadence")
 			}
 		}
 	}()
@@ -1289,9 +1337,9 @@ func TestPoll_ZeroMaxRunDurationDisables(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Write completion after a short delay — with zero wall-clock cap, it should complete.
+	// Write completion once poll starts — with zero wall-clock cap, it should complete.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 	}()
 
@@ -1464,6 +1512,7 @@ func TestPoll_RateLimitEventsDoNotPreventIdleTimeout(t *testing.T) {
 
 	// Write rate_limit_event lines faster than the idle timeout — with the old
 	// mtime-based detection these would have prevented the timeout from firing.
+	// The 50ms cadence is load generation, paced via an elapsed-time wait.
 	stop := make(chan struct{})
 	go func() {
 		for {
@@ -1474,7 +1523,7 @@ func TestPoll_RateLimitEventsDoNotPreventIdleTimeout(t *testing.T) {
 				f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 				fmt.Fprintln(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}`)
 				f.Close()
-				time.Sleep(50 * time.Millisecond)
+				waitElapsed(t, time.Now(), 50*time.Millisecond, "rate-limit event cadence")
 			}
 		}
 	}()
@@ -1517,9 +1566,11 @@ func TestPoll_ThrottledRateLimitEventKillsSession(t *testing.T) {
 	}
 
 	resetsAt := int64(1776412800)
-	// Write the throttled event to the log before the process exits so poll sees it.
+	// Write the throttled event after poll has seeded its raw-log read offset
+	// (short elapsed wait, not a bare sleep) so it is scanned before the process
+	// exits.
 	go func() {
-		time.Sleep(80 * time.Millisecond)
+		waitElapsed(t, time.Now(), 80*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"throttled","resetsAt":%d,"rateLimitType":"daily","utilization":1.0}}%s`, resetsAt, "\n")
 		f.Close()
@@ -1556,10 +1607,13 @@ func TestPoll_AllowedWarningRateLimitEventLogsOnce(t *testing.T) {
 		Timeouts:     Timeouts{Idle: 400 * time.Millisecond},
 	}
 
-	// Write three allowed_warning events — only the first should log.
+	// Write three allowed_warning events — only the first should log. Each is
+	// spaced by an elapsed-time wait (> the 50ms poll interval) so the events
+	// land in distinct poll iterations; the first wait also lets poll seed its
+	// raw-log read offset before any event is written.
 	go func() {
 		for i := 0; i < 3; i++ {
-			time.Sleep(60 * time.Millisecond)
+			waitElapsed(t, time.Now(), 60*time.Millisecond, "spacing between rate-limit events")
 			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 			fmt.Fprintln(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1776412800,"rateLimitType":"seven_day","utilization":0.84}}`)
 			f.Close()
@@ -1606,12 +1660,16 @@ func TestPoll_RateLimitAllowedBackIn_LogsOnce(t *testing.T) {
 	}
 
 	const resetsAt = int64(1776412800)
+	// The first elapsed wait lets poll seed its raw-log read offset; the second
+	// (> the 50ms poll interval) ensures the warning event is scanned in its own
+	// poll iteration before the allowed event is written. Both replace bare
+	// sleeps with elapsed-time observables.
 	go func() {
-		time.Sleep(60 * time.Millisecond)
+		waitElapsed(t, time.Now(), 60*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%d,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":false}}`+"\n", resetsAt)
 		f.Close()
-		time.Sleep(80 * time.Millisecond)
+		waitElapsed(t, time.Now(), 80*time.Millisecond, "warning event to be scanned before allowed event")
 		f, _ = os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":%d,"rateLimitType":"five_hour","utilization":0.5,"isUsingOverage":false}}`+"\n", resetsAt)
 		f.Close()
@@ -1664,12 +1722,16 @@ func TestPoll_RateLimitConsumingExtendedUsage_LogsOnce(t *testing.T) {
 
 	const warningResetsAt = int64(1776412800)
 	const advancedResetsAt = int64(1776430800) // 5 hours later
+	// The first elapsed wait lets poll seed its raw-log read offset; the second
+	// (> the 50ms poll interval) ensures the warning event is scanned in its own
+	// poll iteration before the allowed event is written. Both replace bare
+	// sleeps with elapsed-time observables.
 	go func() {
-		time.Sleep(60 * time.Millisecond)
+		waitElapsed(t, time.Now(), 60*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%d,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":false}}`+"\n", warningResetsAt)
 		f.Close()
-		time.Sleep(80 * time.Millisecond)
+		waitElapsed(t, time.Now(), 80*time.Millisecond, "warning event to be scanned before allowed event")
 		f, _ = os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":%d,"rateLimitType":"five_hour","utilization":0.2,"isUsingOverage":false}}`+"\n", advancedResetsAt)
 		f.Close()
@@ -1721,12 +1783,16 @@ func TestPoll_RateLimitNowUsingOverage_LogsOnce(t *testing.T) {
 	}
 
 	const resetsAt = int64(1776412800)
+	// The first elapsed wait lets poll seed its raw-log read offset; the second
+	// (> the 50ms poll interval) ensures the first warning event is scanned in
+	// its own poll iteration before the overage event is written. Both replace
+	// bare sleeps with elapsed-time observables.
 	go func() {
-		time.Sleep(60 * time.Millisecond)
+		waitElapsed(t, time.Now(), 60*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%d,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":false}}`+"\n", resetsAt)
 		f.Close()
-		time.Sleep(80 * time.Millisecond)
+		waitElapsed(t, time.Now(), 80*time.Millisecond, "first warning to be scanned before overage event")
 		f, _ = os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%d,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":true}}`+"\n", resetsAt)
 		f.Close()
@@ -1770,36 +1836,15 @@ func TestStopProcessGroup_KillsChildProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for the child PID file to appear.
-	var childPid string
-	for i := 0; i < 50; i++ {
-		time.Sleep(50 * time.Millisecond)
-		data, err := os.ReadFile(childPidFile)
-		if err == nil && len(data) > 0 {
-			childPid = strings.TrimSpace(string(data))
-			break
-		}
-	}
-	if childPid == "" {
-		t.Fatal("child PID file never appeared")
-	}
+	// Wait for the child PID file to appear and be non-empty.
+	childPid := testutil.WaitForFile(t, 3*time.Second, childPidFile)
 
 	// Kill the process group.
 	stopProcessGroup(cmd)
 
-	// Allow time for signal propagation (Linux CI can be slower).
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify the child process is dead. Signal 0 checks existence.
-	checkCmd := exec.Command("kill", "-0", childPid)
-	if err := checkCmd.Run(); err == nil {
-		// Retry once after a longer wait — CI environments may be slow.
-		time.Sleep(500 * time.Millisecond)
-		checkCmd2 := exec.Command("kill", "-0", childPid)
-		if err := checkCmd2.Run(); err == nil {
-			t.Errorf("child process %s should be dead after stopProcessGroup, but it's still alive", childPid)
-		}
-	}
+	// Verify the child process becomes dead — poll kill -0 until it fails rather
+	// than sleeping a fixed window and hoping the signal has propagated.
+	testutil.WaitProcessGone(t, 3*time.Second, childPid)
 }
 
 // Verifies that stopProcessGroup kills all processes in a bash pipeline,
@@ -1824,35 +1869,26 @@ func TestStopProcessGroup_KillsPipelineProcesses(t *testing.T) {
 
 	// Wait for all 3 pipeline PIDs to appear.
 	var pids []string
-	for i := 0; i < 100; i++ {
-		time.Sleep(50 * time.Millisecond)
+	testutil.WaitFor(t, 5*time.Second, "all 3 pipeline PIDs to be written", func() bool {
 		data, _ := os.ReadFile(pidFile)
 		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 		if len(lines) >= 3 && lines[0] != "" {
 			pids = lines[:3]
-			break
+			return true
 		}
-	}
-	if len(pids) < 3 {
-		// Kill what we can and skip.
-		stopProcessGroup(cmd)
-		t.Fatal("pipeline PIDs never appeared")
-	}
+		return false
+	})
 
 	stopProcessGroup(cmd)
 
-	// Brief pause to let the kernel fully clean up.
-	time.Sleep(100 * time.Millisecond)
-
+	// Each pipeline process must become dead — poll kill -0 until it fails
+	// instead of pausing a fixed window for the kernel to clean up.
 	for _, pid := range pids {
 		pid = strings.TrimSpace(pid)
 		if pid == "" {
 			continue
 		}
-		check := exec.Command("kill", "-0", pid)
-		if err := check.Run(); err == nil {
-			t.Errorf("pipeline process %s should be dead after stopProcessGroup", pid)
-		}
+		testutil.WaitProcessGone(t, 3*time.Second, pid)
 	}
 }
 
@@ -1863,6 +1899,27 @@ func TestStopProcessGroup_NilCmd(t *testing.T) {
 }
 
 // --- Test helpers ---
+
+// waitPollStarted blocks until runWithCommand has cleared stale signals and
+// created the raw log — the observable precondition that the poll loop is about
+// to begin. runWithCommand clears signals (line order matters) and only then
+// creates rawLog, so the raw log's existence proves clearSignals has already
+// run. A producer goroutine that writes a signal file after this point cannot be
+// wiped by clearSignals, removing the need for an arbitrary startup delay.
+func waitPollStarted(t *testing.T, rawLog string) {
+	t.Helper()
+	testutil.WaitForSignalFile(t, 2*time.Second, rawLog)
+}
+
+// waitElapsed blocks until at least d has passed since start. Use it to model a
+// genuine time-based delay (e.g. "stay quiet long enough to trip the idle
+// timeout") as an elapsed-time observable rather than a bare time.Sleep.
+func waitElapsed(t *testing.T, start time.Time, d time.Duration, desc string) {
+	t.Helper()
+	testutil.WaitFor(t, d+2*time.Second, desc, func() bool {
+		return time.Since(start) >= d
+	})
+}
 
 // runWithCommand replaces the claude command with an arbitrary command for
 // testing. It directly manipulates the exec.Cmd instead of going through
@@ -1954,9 +2011,12 @@ func TestRun_CleansUpStreamingOnReturn(t *testing.T) {
 		},
 	}
 
+	// Cancel once Run() is underway — its creation of the raw log is the
+	// observable that the process and streaming goroutines have started, so we
+	// exercise the kill/cleanup path rather than cancelling on a fixed timer.
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		testutil.WaitForSignalFile(t, 2*time.Second, rawLog)
 		cancel()
 	}()
 
@@ -2024,13 +2084,7 @@ func TestRun_KillsProcessOnContextCancel(t *testing.T) {
 	// absent. The script's `sleep 1` keeps the process alive long enough to be
 	// killed once we cancel.
 	go func() {
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			if data, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(data)) != "" {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		testutil.WaitForFile(t, 5*time.Second, pidFile)
 		cancel()
 	}()
 
@@ -2059,18 +2113,7 @@ func TestRun_KillsProcessOnContextCancel(t *testing.T) {
 	// The process must be gone once Run() returns. Poll kill -0 until it fails
 	// rather than asserting after a fixed sleep — the kill may take a moment to
 	// propagate to the process group.
-	dead := false
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if exec.Command("kill", "-0", pid).Run() != nil {
-			dead = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !dead {
-		t.Errorf("process %s should be dead after Run() returns, but kill -0 still succeeds", pid)
-	}
+	testutil.WaitProcessGone(t, 2*time.Second, pid)
 }
 
 // Verifies that a second Run() call stops streaming goroutines left by the
@@ -2126,9 +2169,13 @@ func TestRun_SecondCallStopsPreviousStreaming(t *testing.T) {
 	runner.mu.Unlock()
 
 	// Run() with context cancellation so the long-running process gets killed.
+	// Cancel once Run() has started its new process — Run writes .stream-start
+	// right after launching it — so the cancel exercises the kill path on a live
+	// process instead of racing a fixed timer.
+	streamStart := filepath.Join(dir, ".stream-start")
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		testutil.WaitForSignalFile(t, 2*time.Second, streamStart)
 		cancel()
 	}()
 
@@ -2177,16 +2224,19 @@ func TestRun_WaitsForOutputAfterSignal(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Simulate: signal file appears, then raw log keeps being written for 500ms.
+	// Simulate: signal file appears once poll is running, then the raw log keeps
+	// being written for ~500ms (5 writes paced 100ms apart). The post-signal
+	// cadence is genuine load that must keep the raw log fresh, so it is paced
+	// via elapsed-time waits rather than bare sleeps.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		tmp := signals.Complete + ".tmp"
 		os.WriteFile(tmp, []byte("task finished"), 0o644)
 		os.Rename(tmp, signals.Complete)
 
 		// Agent still writing output after signal.
 		for i := 0; i < 5; i++ {
-			time.Sleep(100 * time.Millisecond)
+			waitElapsed(t, time.Now(), 100*time.Millisecond, "post-signal output cadence")
 			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
 			fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"finishing up"}}`)
 			f.Close()
@@ -2474,7 +2524,7 @@ func TestRun_DetectsNoCodeNeededSignal(t *testing.T) {
 
 	onSignalCalled := false
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		waitPollStarted(t, rawLog)
 		tmp := signals.NoCodeNeeded + ".tmp"
 		os.WriteFile(tmp, []byte("bug already fixed in main"), 0o644)
 		os.Rename(tmp, signals.NoCodeNeeded)
@@ -2600,15 +2650,17 @@ func TestPoll_HeartbeatEmittedDuringQuietRun(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Write an agent text line shortly after poll starts (simulates agent output),
-	// then go quiet for longer than the heartbeat interval before completing.
+	// Write an agent text line after poll has seeded its raw-log read offset
+	// (short elapsed wait, not a bare sleep), then stay quiet for longer than the
+	// heartbeat interval — the quiet window during which a heartbeat must fire is
+	// itself an elapsed-time observable — before signaling completion.
 	go func() {
-		time.Sleep(30 * time.Millisecond)
+		waitElapsed(t, time.Now(), 30*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"Investigating the bug"}}`)
 		f.Close()
 		// Quiet for 300ms (> 100ms heartbeat interval) before signaling completion.
-		time.Sleep(300 * time.Millisecond)
+		waitElapsed(t, time.Now(), 300*time.Millisecond, "quiet window for heartbeat to fire")
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 	}()
 
@@ -2646,11 +2698,12 @@ func TestPoll_NoHeartbeatDuringActiveOutput(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Write activity every 40ms (faster than the 120ms heartbeat interval),
-	// then complete. The heartbeat should never fire.
+	// Write activity every 40ms (faster than the 120ms heartbeat interval), then
+	// complete. The heartbeat should never fire. The 40ms cadence is load
+	// generation, paced via an elapsed-time wait rather than a bare sleep.
 	go func() {
 		for i := 0; i < 8; i++ {
-			time.Sleep(40 * time.Millisecond)
+			waitElapsed(t, time.Now(), 40*time.Millisecond, "active output cadence")
 			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 			fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"working"}}`)
 			f.Close()
@@ -2688,14 +2741,16 @@ func TestPoll_HeartbeatReportsIdleKillCountdown(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// One activity line, then quiet long enough for a heartbeat (but well under
-	// the 5s idle timeout, so the run is not killed) before completing.
+	// One activity line (written after poll seeds its raw-log read offset), then
+	// quiet long enough for a heartbeat (but well under the 5s idle timeout, so
+	// the run is not killed) before completing. Both the seed wait and the quiet
+	// window are elapsed-time observables rather than bare sleeps.
 	go func() {
-		time.Sleep(30 * time.Millisecond)
+		waitElapsed(t, time.Now(), 30*time.Millisecond, "poll to seed raw-log offset")
 		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"thinking"}}`)
 		f.Close()
-		time.Sleep(300 * time.Millisecond)
+		waitElapsed(t, time.Now(), 300*time.Millisecond, "quiet window for heartbeat to fire")
 		os.WriteFile(signals.Complete, []byte("done"), 0o644)
 	}()
 
