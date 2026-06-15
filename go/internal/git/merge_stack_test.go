@@ -15,7 +15,7 @@ func TestCollectStackFromPRs_BottomUpOrder(t *testing.T) {
 		{Number: 460, Head: "feature/c", Base: "feature/b", State: "OPEN"},
 	}
 
-	result := collectStackFromPRs(allPRs, "460")
+	result := collectStackFromPRs(allPRs, "460", "main")
 
 	if len(result.prs) != 3 {
 		t.Fatalf("expected 3 PRs, got %d", len(result.prs))
@@ -41,7 +41,7 @@ func TestCollectStackFromPRs_SkipsClosedPRs(t *testing.T) {
 		{Number: 460, Head: "feature/c", Base: "feature/b", State: "OPEN"},
 	}
 
-	result := collectStackFromPRs(allPRs, "460")
+	result := collectStackFromPRs(allPRs, "460", "main")
 
 	if len(result.prs) != 2 {
 		t.Fatalf("expected 2 PRs (CLOSED skipped), got %d", len(result.prs))
@@ -59,7 +59,7 @@ func TestCollectStackFromPRs_NonMainBaseBranch(t *testing.T) {
 		{Number: 100, Head: "feature/x", Base: "develop", State: "OPEN"},
 	}
 
-	result := collectStackFromPRs(allPRs, "100")
+	result := collectStackFromPRs(allPRs, "100", "main")
 
 	if result.baseBranch != "develop" {
 		t.Errorf("expected baseBranch=develop, got %s", result.baseBranch)
@@ -74,14 +74,40 @@ func TestCollectStackFromPRs_InvalidPRNumber(t *testing.T) {
 		{Number: 1, Head: "feature/a", Base: "main", State: "OPEN"},
 	}
 
-	result := collectStackFromPRs(allPRs, "#321")
+	result := collectStackFromPRs(allPRs, "#321", "main")
 	if len(result.prs) != 0 {
 		t.Errorf("expected empty stack for non-numeric input, got %d PRs", len(result.prs))
 	}
 
-	result = collectStackFromPRs(allPRs, "abc")
+	result = collectStackFromPRs(allPRs, "abc", "main")
 	if len(result.prs) != 0 {
 		t.Errorf("expected empty stack for non-numeric input, got %d PRs", len(result.prs))
+	}
+}
+
+// Regression (ralph-ezc6): a historical closed PR whose head IS the default
+// branch (here #9 "main -> stale-branch") must not redirect the resolved stack
+// base. ListAllPRs returns all PR states, so such a ghost is present in the
+// lookup; the walk must stop at the default branch instead of following it.
+// Before the fix, 'ralph merge 695' resolved the base to the ghost's base and
+// the assertValidBase guard refused to merge the (correct) #694/#695 stack.
+func TestCollectStackFromPRs_ClosedHeadIsDefaultBranch_DoesNotRedirectBase(t *testing.T) {
+	allPRs := []PRInfo{
+		{Number: 694, Head: "feature/bottom", Base: "main", State: "OPEN"},
+		{Number: 695, Head: "feature/top", Base: "feature/bottom", State: "OPEN"},
+		{Number: 9, Head: "main", Base: "stale-branch", State: "CLOSED"},
+	}
+
+	result := collectStackFromPRs(allPRs, "695", "main")
+
+	if result.baseBranch != "main" {
+		t.Errorf("expected baseBranch=main (walk must stop at default branch), got %s", result.baseBranch)
+	}
+	if len(result.prs) != 2 {
+		t.Fatalf("expected 2 open PRs in chain, got %d: %+v", len(result.prs), result.prs)
+	}
+	if result.prs[0].number != 694 || result.prs[1].number != 695 {
+		t.Errorf("expected chain [694, 695] bottom-up, got %+v", result.prs)
 	}
 }
 

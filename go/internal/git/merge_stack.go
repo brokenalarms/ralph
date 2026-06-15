@@ -202,13 +202,14 @@ func (r *repo) collectStack(ctx context.Context, topPR string) stackResult {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to list PRs: %v", err)
 		return stackResult{}
 	}
-	return collectStackFromPRs(allPRs, topPR)
+	return collectStackFromPRs(allPRs, topPR, r.baseBranch)
 }
 
 // collectStackFromPRs is the pure logic of stack collection: given a
-// slice of PRInfo and a top PR number, walks the base chain and returns
-// the stack in bottom-up order.
-func collectStackFromPRs(allPRs []PRInfo, topPR string) stackResult {
+// slice of PRInfo, a top PR number, and the repository default branch,
+// walks the base chain and returns the stack in bottom-up order. The
+// default branch terminates the walk — it is always the bottom of a stack.
+func collectStackFromPRs(allPRs []PRInfo, topPR, defaultBranch string) stackResult {
 	type prInfo struct {
 		number int
 		head   string
@@ -242,6 +243,15 @@ func collectStackFromPRs(allPRs []PRInfo, topPR string) stackResult {
 	currentBase := start.base
 
 	for i := 0; i < 20; i++ {
+		// The default branch is always the bottom of a stack — stop here.
+		// Without this guard the walk looks up byHead[defaultBranch] and, if a
+		// historical PR exists whose HEAD is the default branch (e.g. a
+		// long-closed "main -> some-branch" PR), follows ITS base and redirects
+		// the resolved stack base away from the default. ListAllPRs returns all
+		// PR states, so such ghosts are present in byHead.
+		if defaultBranch != "" && currentBase == defaultBranch {
+			break
+		}
 		pr, found := byHead[currentBase]
 		if !found {
 			break
