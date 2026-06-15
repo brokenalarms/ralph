@@ -9,7 +9,38 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/testutil"
 )
+
+// waitFilterStarted gives a freshly-launched tail/filter goroutine time to open
+// the raw log and Seek to its end before the test appends input. The goroutines
+// (filterStreamJSON, startTailGoroutine) read only data written after their
+// Seek(0, io.SeekEnd), so input written before that seek is silently skipped.
+// No production observable exposes "goroutine has seeked", so this routes the
+// unavoidable startup wait through WaitFor on an elapsed-time observable rather
+// than a bare time.Sleep — the test proceeds the instant the window passes.
+func waitFilterStarted(t *testing.T) {
+	t.Helper()
+	start := time.Now()
+	testutil.WaitFor(t, 2*time.Second, "tail goroutine to open and seek to EOF", func() bool {
+		return time.Since(start) > 50*time.Millisecond
+	})
+}
+
+// waitForLogContains waits until the ANSI-stripped contents of path contain
+// want, returning once the filter goroutine has emitted the expected line. Use
+// it instead of a fixed sleep before stopping a filter and asserting output.
+func waitForLogContains(t *testing.T, path, want string) {
+	t.Helper()
+	testutil.WaitFor(t, 2*time.Second, fmt.Sprintf("loop.log to contain %q", want), func() bool {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return false
+		}
+		return strings.Contains(ansiRe.ReplaceAllString(string(data), ""), want)
+	})
+}
 
 // Verifies that startTailGoroutine follows new [r]-prefixed lines
 // appended to a file and stops cleanly when the stop channel is closed.
@@ -24,7 +55,7 @@ func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	done := startTailGoroutine(logPath, stop)
 
 	// Append [r]-prefixed and non-prefixed lines after goroutine starts.
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +64,9 @@ func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
 	f.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	// close(stop) triggers a final drain of any unread data before the goroutine
+	// exits, so this test (which only proves clean shutdown) needs no wait for
+	// the lines to be processed first.
 	close(stop)
 
 	select {
@@ -73,14 +106,15 @@ func TestStartTailGoroutine_FiltersNonAgentLines(t *testing.T) {
 	stop := make(chan struct{})
 	done := startTailGoroutine(logPath, stop)
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	fmt.Fprintln(f, "[r] agent output line")
 	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
 	fmt.Fprintln(f, "[r] second agent line")
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// close(stop) drains all unread data before the goroutine exits, so the
+	// captured stdout below reflects every forwarded line without a fixed wait.
 	close(stop)
 	<-done
 
@@ -118,7 +152,7 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	}()
 
 	// Append a stream-json delta event after the filter has started.
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -126,8 +160,8 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"hello from claude"}}`)
 	f.Close()
 
-	// Give the filter time to process, then stop it.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the filtered text to land in loop.log, then stop the filter.
+	waitForLogContains(t, logPath, "[r] hello from claude")
 	close(stop)
 	<-done
 
@@ -157,7 +191,7 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +201,9 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"some delta text"}}`)
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// The delta text is emitted after the batched Read, so waiting for it
+	// guarantees both lines are present before we stop and assert.
+	waitForLogContains(t, logPath, "[r] some delta text")
 	close(stop)
 	<-done
 
@@ -200,7 +236,7 @@ func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +245,9 @@ func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"FIX: add the default value to config.go"}}`)
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the FIX content (the last line written) to appear, ensuring the
+	// full diagnosis pair has been processed before we stop and assert.
+	waitForLogContains(t, logPath, "add the default value to config.go")
 	close(stop)
 	<-done
 
@@ -253,7 +291,7 @@ func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +304,9 @@ func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"analyzing results"}}`)
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// The trailing text flushes the batch and appears last, so waiting for it
+	// guarantees the batched tool lines have been emitted.
+	waitForLogContains(t, logPath, "[r] analyzing results")
 	close(stop)
 	<-done
 
@@ -304,7 +344,7 @@ func TestFilterStreamJSON_ShortensAbsolutePaths(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, workDir, true, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -312,7 +352,9 @@ func TestFilterStreamJSON_ShortensAbsolutePaths(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/Users/daniel/Developer/ralph/.ralph/worktrees/ralph-20260323-01/go/internal/claude/claude_stream.go"}}]}}`)
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// Edit is a visible tool that flushes immediately, so wait for the
+	// shortened path to appear before stopping and asserting.
+	waitForLogContains(t, logPath, "go/internal/claude/claude_stream.go")
 	close(stop)
 	<-done
 
@@ -346,7 +388,7 @@ func TestFilterStreamJSON_SignalHighlight(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -354,7 +396,8 @@ func TestFilterStreamJSON_SignalHighlight(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo \"Working on feature X\" > /path/.ralph/.signal_current_task"}}]}}`)
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the signal line to be emitted before stopping and asserting.
+	waitForLogContains(t, logPath, "Working on feature X")
 	close(stop)
 	<-done
 
@@ -397,7 +440,7 @@ func TestFilterStreamJSON_MultiLineBashTruncated(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -410,7 +453,9 @@ func TestFilterStreamJSON_MultiLineBashTruncated(t *testing.T) {
 	fmt.Fprintln(f)
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// Bash is a visible tool that flushes immediately, so wait for its first
+	// line to appear before stopping and asserting.
+	waitForLogContains(t, logPath, "[r] [Bash] node -e '")
 	close(stop)
 	<-done
 
@@ -455,7 +500,7 @@ func TestFilterStreamJSON_NoDuplicatesFromAssistantAndDelta(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -466,7 +511,11 @@ func TestFilterStreamJSON_NoDuplicatesFromAssistantAndDelta(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"hello from claude"}]}}`)
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the text to appear. The assistant event with the same text is
+	// written immediately after the delta on the same line-buffered write, so
+	// once the delta text is visible the assistant event has been read too and
+	// the dedup behavior (no second copy) can be asserted.
+	waitForLogContains(t, logPath, "hello from claude")
 	close(stop)
 	<-done
 
@@ -501,7 +550,7 @@ func TestFilterStreamJSON_ProseStatusLine(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -510,12 +559,10 @@ func TestFilterStreamJSON_ProseStatusLine(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"Analyzing the test failures to determine the root cause of the problem"}}`)
 	f.Close()
 
-	// The prose tracker has a 60s interval. In tests the tracker starts with
-	// lastEmit = now, so we need to wait for the interval to pass. Instead,
-	// we check that the prose was captured — a full integration test with
-	// real timing is impractical, so we verify the end-to-end path by
-	// checking the text delta itself appears in the log output.
-	time.Sleep(100 * time.Millisecond)
+	// The prose tracker has a 60s interval, so a real prose status line won't
+	// emit here. We verify the end-to-end path by waiting for the text delta
+	// itself (via extractStreamText) to appear in the log output.
+	waitForLogContains(t, logPath, "Analyzing the test failures")
 	close(stop)
 	<-done
 
@@ -547,7 +594,7 @@ func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", false, stop)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	waitFilterStarted(t)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -567,7 +614,9 @@ func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"ISSUE: config is broken"}}`)
 	f.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	// The diagnosis line is written last, so waiting for it guarantees every
+	// earlier event (visible tools, prose, signal) has already been processed.
+	waitForLogContains(t, logPath, "ISSUE")
 	close(stop)
 	<-done
 

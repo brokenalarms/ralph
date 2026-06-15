@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -448,6 +449,11 @@ type stubRepo struct {
 	cfg StubRepoConfig
 	gh  gitHub
 
+	// headMu guards the head fields, which a test may mutate from a goroutine
+	// (simulating a commit landing mid-run) while the SUT reads HeadRev
+	// concurrently.
+	headMu sync.Mutex
+
 	// Mutable state. Initialized from cfg, mutated by SUT-driven Ops methods
 	// so subsequent reads reflect what the SUT did.
 	worktreeBranch     string
@@ -594,7 +600,11 @@ func (s *stubRepo) PRDiffForTask(ctx context.Context, taskID string) string {
 
 // --- Diff and status queries ---
 
-func (s *stubRepo) HeadRev() string                                 { return s.headRev }
+func (s *stubRepo) HeadRev() string {
+	s.headMu.Lock()
+	defer s.headMu.Unlock()
+	return s.headRev
+}
 func (s *stubRepo) HasDiff() bool                                   { return s.cfg.HasDiff }
 func (s *stubRepo) HasUncommittedChanges() bool                     { return s.cfg.HasUncommitted }
 func (s *stubRepo) ChangedFiles(_, _ string) []string               { return s.cfg.ChangedFiles }
@@ -693,11 +703,15 @@ func (s *stubRepo) TagTaskEnd(_ string)   {}
 // CommitAll advances the fake head so subsequent HeadRev calls reflect that
 // a commit was made.
 func (s *stubRepo) CommitAll(_ string) {
+	s.headMu.Lock()
+	defer s.headMu.Unlock()
 	s.commitSeq++
 	s.headRev = fmt.Sprintf("stub-head-%d", s.commitSeq)
 }
 
 func (s *stubRepo) EmptyCommit(_ string) {
+	s.headMu.Lock()
+	defer s.headMu.Unlock()
 	s.commitSeq++
 	s.headRev = fmt.Sprintf("stub-head-%d", s.commitSeq)
 }
