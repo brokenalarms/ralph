@@ -25,3 +25,23 @@ jobs:
 
       - name: Run Go tests
         run: cd go && go test ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Use the toolchain the module requires (go.mod's go directive) so the
+      # linter is built with the same Go as the project — prebuilt golangci-lint
+      # binaries are built with an older Go and cannot typecheck this module.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Install golangci-lint (built with the module's Go)
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+
+      - name: Lint (enforces no time.Sleep in tests — see go/.golangci.yml)
+        run: cd go && "$(go env GOPATH)/bin/golangci-lint" run ./...

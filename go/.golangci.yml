@@ -1,0 +1,30 @@
+# Enforces project test conventions. Currently a single rule: tests must not
+# use a fixed time.Sleep as a synchronization proxy — see AGENTS.md
+# ("Test synchronization"). Synchronize via internal/testutil.WaitFor* instead.
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - forbidigo
+
+linters-settings:
+  forbidigo:
+    # A custom forbid list REPLACES forbidigo's defaults (fmt.Print, etc.), so
+    # only time.Sleep is forbidden here.
+    forbid:
+      - p: 'time\.Sleep'
+        msg: 'no fixed time.Sleep in tests — synchronize via testutil.WaitFor* (see AGENTS.md "Test synchronization")'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # The time.Sleep rule targets TEST synchronization only. time.Sleep is
+    # legitimate in production code (polling intervals, backoff) and inside the
+    # testutil.WaitFor* helpers themselves, so suppress forbidigo on every
+    # non-test file (anything not ending in _test.go).
+    - path-except: _test\.go
+      linters:
+        - forbidigo
