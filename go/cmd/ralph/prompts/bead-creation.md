@@ -315,9 +315,29 @@ collided and one PR had to be discarded — this model prevents it.)
    Reclaiming is the duplicate-work race in the other direction: you'd be
    fighting the loop for a bead it already owns.
 
-**Self-work stays owned.** If you will do the bead yourself (hands-on fix),
-leave it assigned to `ralph-task` and never release it — do the work, ship the
-PR, and it closes on merge. No race, because it was never in the loop's inbox.
+**Self-work stays owned — and you close it yourself.** If you will do the bead
+yourself (hands-on fix), leave it assigned to `ralph-task` and never release it.
+Nothing auto-closes a self-work bead: the orchestrator's auto-close runs ONLY
+for beads it worked through its own verify→ship→merge pipeline (i.e.
+`ralph-loop`-owned beads). A `ralph-task` self-work bead never enters that
+pipeline, so it has no closer but you. Therefore:
+
+1. **Title the PR `[<bead-id>] <summary>`** — prefix the hands-on PR title with
+   the bracketed bead id, exactly as the loop does for its own PRs. Without it
+   the merge commit is invisible to a `git log --grep=<bead-id>` search, so the
+   work cannot be traced back to the bead. The id prefix is mandatory on every
+   self-work PR.
+2. **At PR creation, set the external-ref immediately:**
+   `bd update <id> --external-ref <pr-url>`. This is what lets a later session
+   detect the merge and close the bead — without it the bead is orphaned.
+3. **Close on confirmed merge.** If the PR merges before the session ends, close
+   the bead then: `bd close <id> --reason "fixed in <pr-url>"`. If the PR is
+   still open at session end, leave the bead open — the **"Self-work awaiting
+   close"** startup check (see the task-manager startup protocol) detects the
+   merge on a later session and closes it. NEVER `bd close` a self-work bead
+   whose PR has not merged.
+
+No race, because the bead was never in the loop's inbox.
 
 ### Referencing beads
 

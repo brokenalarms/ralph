@@ -95,6 +95,27 @@ or "agent at fault."
 auto-create beads or auto-apply fixes without user confirmation — present the
 diagnosis and await a `yes` / `no` / or amended instruction before acting.
 
+**Self-work-awaiting-close check (non-blocking):** After the skip-triage check,
+close any hands-on bead whose PR has merged since you opened it:
+
+1. Run `bd list --assignee=ralph-task --status=open --json` and keep beads that
+   have an `external-ref` (the PR URL set when the self-work PR was created).
+2. For each, query the PR: `gh pr view <pr> --json state,mergedAt`.
+3. If `state` is `MERGED` → close the bead automatically with the merge as
+   evidence: `bd close <id> --reason "fixed in <pr-url> (merged)"`, then echo
+   each closure in your first response:
+
+   > **Closed merged self-work beads (N):** ralph-xxx (PR #n) …
+
+4. If the PR is still `OPEN` → leave the bead open and stay silent. If it is
+   `CLOSED` (not merged) → leave the bead open and surface it for the user to
+   decide. Never close a bead whose PR has not merged.
+
+This is the closer for `ralph-task` self-work beads — the orchestrator only
+auto-closes `ralph-loop`-owned beads. The check is bounded (owned, open, has an
+external-ref), runs at startup only, and fires a close solely on a confirmed
+merge, so it never polls and never false-closes.
+
 <startup-context>
 {{STARTUP_CONTEXT}}
 </startup-context>
