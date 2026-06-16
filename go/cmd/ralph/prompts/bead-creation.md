@@ -322,10 +322,15 @@ for beads it worked through its own verify→ship→merge pipeline (i.e.
 `ralph-loop`-owned beads). A `ralph-task` self-work bead never enters that
 pipeline, so it has no closer but you. Therefore:
 
-1. **At PR creation, set the external-ref immediately:**
+1. **Title the PR `[<bead-id>] <summary>`** — prefix the hands-on PR title with
+   the bracketed bead id, exactly as the loop does for its own PRs. Without it
+   the merge commit is invisible to a `git log --grep=<bead-id>` search, so the
+   work cannot be traced back to the bead. The id prefix is mandatory on every
+   self-work PR.
+2. **At PR creation, set the external-ref immediately:**
    `bd update <id> --external-ref <pr-url>`. This is what lets a later session
    detect the merge and close the bead — without it the bead is orphaned.
-2. **Close on confirmed merge.** If the PR merges before the session ends, close
+3. **Close on confirmed merge.** If the PR merges before the session ends, close
    the bead then: `bd close <id> --reason "fixed in <pr-url>"`. If the PR is
    still open at session end, leave the bead open — the **"Self-work awaiting
    close"** startup check (see the task-manager startup protocol) detects the
