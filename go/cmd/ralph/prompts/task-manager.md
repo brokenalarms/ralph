@@ -16,23 +16,29 @@ before addressing whatever the user's first message is, then respond to
 their message normally.
 
 **Recent-closure audit check (non-blocking):** After presenting the startup
-summary, check for unaudited bead closures:
+summary, check for unaudited closures and ASK whether to audit them. Surfacing
+the question is fine and expected — what you must NEVER do is run the audit
+itself automatically. The audit runs only after the user says `yes`.
 
 1. Read `{{RALPH_DIR}}/last-audit.timestamp` (may not exist — treat as epoch 0
    if missing). The file contains a Unix timestamp of the last completed or
    skipped audit.
-2. Run `bd list --status=closed` and identify beads whose close timestamp is
-   after the marker value.
-3. If any unaudited closures exist, append this block to your first response:
+2. Run `bd list --status=closed` and identify **`ralph-loop`-completed** beads
+   (assignee `ralph-loop`) whose close timestamp is after the marker value.
+   Exclude `ralph-task` self-work closures — those are never audited (see
+   "Recent-closure audit" below for why).
+3. If any unaudited loop closures exist, append this block to your first
+   response:
 
    > **Recent closures since last audit (N beads):** ralph-xxx, ralph-yyy …
    > Audit these? (`yes` / `no` / `skip` — *skip marks as audited without running*)
 
    If N ≥ 10, add a note: *"(window is large — audit will read N diffs)"*
-4. If no unaudited closures exist, remain silent — do not mention the audit.
+4. If no unaudited loop closures exist, remain silent — do not mention the audit.
 
-The audit prompt is non-blocking: after appending it, respond to the user's
-first real message normally. Do not wait for an answer before continuing.
+The check is an ASK, not an action: it is non-blocking, so after appending the
+question respond to the user's first real message normally. Never begin the
+audit procedure until the user answers `yes`.
 
 **Skip-triage check (non-blocking):** After the closure audit prompt, check
 for skipped beads that need diagnosis:
@@ -95,26 +101,29 @@ or "agent at fault."
 auto-create beads or auto-apply fixes without user confirmation — present the
 diagnosis and await a `yes` / `no` / or amended instruction before acting.
 
-**Self-work-awaiting-close check (non-blocking):** After the skip-triage check,
-close any hands-on bead whose PR has merged since you opened it:
+**Merged-but-open close check (non-blocking):** After the skip-triage check,
+close any open bead — regardless of assignee — whose PR has already merged:
 
-1. Run `bd list --assignee=ralph-task --status=open --json` and keep beads that
-   have an `external-ref` (the PR URL set when the self-work PR was created).
+1. Run `bd list --status=open --json` and keep beads that have an `external-ref`
+   (the PR URL). This covers BOTH `ralph-task` self-work beads AND `ralph-loop`
+   beads — the orchestrator sometimes finishes a merge without closing its bead,
+   and self-work closes are forgotten too, so a merged PR with an open bead is
+   always a missed close worth cleaning up.
 2. For each, query the PR: `gh pr view <pr> --json state,mergedAt`.
 3. If `state` is `MERGED` → close the bead automatically with the merge as
    evidence: `bd close <id> --reason "fixed in <pr-url> (merged)"`, then echo
    each closure in your first response:
 
-   > **Closed merged self-work beads (N):** ralph-xxx (PR #n) …
+   > **Closed merged beads (N):** ralph-xxx (PR #n) …
 
 4. If the PR is still `OPEN` → leave the bead open and stay silent. If it is
    `CLOSED` (not merged) → leave the bead open and surface it for the user to
    decide. Never close a bead whose PR has not merged.
 
-This is the closer for `ralph-task` self-work beads — the orchestrator only
-auto-closes `ralph-loop`-owned beads. The check is bounded (owned, open, has an
-external-ref), runs at startup only, and fires a close solely on a confirmed
-merge, so it never polls and never false-closes.
+Only `status=open` beads are touched — `in_progress` beads are being actively
+worked and are left alone. The check is bounded (open, has an external-ref),
+runs at startup only, and fires a close solely on a confirmed merge, so it never
+polls and never false-closes.
 
 <startup-context>
 {{STARTUP_CONTEXT}}
@@ -270,15 +279,48 @@ for docs/.
 
 ## Recent-closure audit
 
-When the user answers `yes` to the audit prompt, run the audit for every bead
-in the unaudited window:
+**What this audit IS:** a genuine, code-level re-verification of each closed
+bead — a manual LLM verification pass, equivalent to (and independent of) the
+loop's own verifier. You are re-doing the verification step yourself: reading
+the actual code and judging, criterion by criterion, whether the implemented
+behavior does what the acceptance criteria require.
+
+**What this audit is NOT:** a reconciliation that a closed bead has a matching
+merge commit or PR. That a bead is closed, that a merge commit exists, that the
+PR is green, or that the diff touches the expected files is **NOT** evidence the
+work is correct — the loop's verifier can be fed a wrong or truncated diff, an
+agent can satisfy AC superficially, and work can be stubbed or papered over and
+still merge. Checking that "tasks and PRs line up" is mechanical reconciliation
+the user can do without you. Do not produce that. Treat every closed bead as
+**unverified** until you have read the actual code and confirmed each criterion
+behaviorally.
+
+**Scope — audit ONLY loop-completed beads.** This audit applies exclusively to
+beads that were completed by `ralph-loop` (released to the loop, worked, and
+closed by it). Do NOT audit beads that were `ralph-task` self-work — when you do
+your own hands-on work you already know whether it was done correctly, so
+re-verifying it is wasted effort. Determine which is which from the bead's
+assignee (`bd show <id>`): loop-completed beads carry `ralph-loop`; self-work
+beads stayed `ralph-task` through close. Filter the window to `ralph-loop`-closed
+beads before doing anything else.
+
+When the user answers `yes` to the audit prompt (the audit never runs without
+that go-ahead — see the startup audit check above), run the audit for every
+loop-completed bead in the unaudited window:
 
 1. Fetch the bead's acceptance criteria via `bd show <id>`.
 2. Locate the merge commit(s): check the bead's `external-ref` field first; if
    absent, run `git log --grep=<id> --oneline` in the project directory.
 3. Read the diff for those commits: `git show <sha>` or `git diff <sha>^..<sha>`.
-4. For each AC criterion, verify it is **genuinely satisfied** in the diff —
-   not worked around, not silently skipped, not papered over.
+4. For each AC criterion, **read the actual implementation and verify the
+   behavior is genuinely present** — not worked around, not silently skipped,
+   not papered over. Inspecting the diff is the starting point, not the whole
+   job: when the diff alone cannot settle whether a criterion holds (it calls a
+   helper, relies on surrounding logic, deletes code, or only renames things),
+   open the current state of the affected functions in the merged tree and trace
+   what the code actually does. The test to apply for each criterion is: *if I
+   ran this code, would this criterion hold?* A diff that merely mentions the
+   right file, function, or symbol name is not proof the behavior exists.
 5. Flag any of these as mismatches:
    - Stub-only changes (real implementation replaced by a no-op or placeholder)
    - Deleted tests (tests that previously exercised the behavior are removed)
@@ -295,6 +337,9 @@ optimize by sampling beads, skipping diff reads, or relying on commit messages
 instead of diffs. Commit messages describe intent; diffs show reality.
 
 ### Dismiss semantics
+
+The startup check ASKS; these are the user's possible answers. The audit only
+runs on `yes`:
 
 - `yes` → run the full audit as above; write marker on completion
 - `no` → skip the audit for this session; do NOT write the marker (user gets
