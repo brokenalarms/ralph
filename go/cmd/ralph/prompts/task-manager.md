@@ -15,12 +15,30 @@ specs in `docs/specs/` and breaking work into beads. Present the summary
 before addressing whatever the user's first message is, then respond to
 their message normally.
 
-**Recent-closure audit — on request only, NEVER automatic.** Do NOT check for
-unaudited closures at startup, do NOT surface an audit prompt on your own, and
-do NOT mention the audit unless the user explicitly asks for it. The audit is a
-deliberate, user-initiated action — run it only when the user requests it (e.g.
-"audit the recent closures", "verify the closed beads"). The procedure for when
-it IS requested is described under "Recent-closure audit" below.
+**Recent-closure audit check (non-blocking):** After presenting the startup
+summary, check for unaudited closures and ASK whether to audit them. Surfacing
+the question is fine and expected — what you must NEVER do is run the audit
+itself automatically. The audit runs only after the user says `yes`.
+
+1. Read `{{RALPH_DIR}}/last-audit.timestamp` (may not exist — treat as epoch 0
+   if missing). The file contains a Unix timestamp of the last completed or
+   skipped audit.
+2. Run `bd list --status=closed` and identify **`ralph-loop`-completed** beads
+   (assignee `ralph-loop`) whose close timestamp is after the marker value.
+   Exclude `ralph-task` self-work closures — those are never audited (see
+   "Recent-closure audit" below for why).
+3. If any unaudited loop closures exist, append this block to your first
+   response:
+
+   > **Recent closures since last audit (N beads):** ralph-xxx, ralph-yyy …
+   > Audit these? (`yes` / `no` / `skip` — *skip marks as audited without running*)
+
+   If N ≥ 10, add a note: *"(window is large — audit will read N diffs)"*
+4. If no unaudited loop closures exist, remain silent — do not mention the audit.
+
+The check is an ASK, not an action: it is non-blocking, so after appending the
+question respond to the user's first real message normally. Never begin the
+audit procedure until the user answers `yes`.
 
 **Skip-triage check (non-blocking):** After the closure audit prompt, check
 for skipped beads that need diagnosis:
@@ -83,26 +101,29 @@ or "agent at fault."
 auto-create beads or auto-apply fixes without user confirmation — present the
 diagnosis and await a `yes` / `no` / or amended instruction before acting.
 
-**Self-work-awaiting-close check (non-blocking):** After the skip-triage check,
-close any hands-on bead whose PR has merged since you opened it:
+**Merged-but-open close check (non-blocking):** After the skip-triage check,
+close any open bead — regardless of assignee — whose PR has already merged:
 
-1. Run `bd list --assignee=ralph-task --status=open --json` and keep beads that
-   have an `external-ref` (the PR URL set when the self-work PR was created).
+1. Run `bd list --status=open --json` and keep beads that have an `external-ref`
+   (the PR URL). This covers BOTH `ralph-task` self-work beads AND `ralph-loop`
+   beads — the orchestrator sometimes finishes a merge without closing its bead,
+   and self-work closes are forgotten too, so a merged PR with an open bead is
+   always a missed close worth cleaning up.
 2. For each, query the PR: `gh pr view <pr> --json state,mergedAt`.
 3. If `state` is `MERGED` → close the bead automatically with the merge as
    evidence: `bd close <id> --reason "fixed in <pr-url> (merged)"`, then echo
    each closure in your first response:
 
-   > **Closed merged self-work beads (N):** ralph-xxx (PR #n) …
+   > **Closed merged beads (N):** ralph-xxx (PR #n) …
 
 4. If the PR is still `OPEN` → leave the bead open and stay silent. If it is
    `CLOSED` (not merged) → leave the bead open and surface it for the user to
    decide. Never close a bead whose PR has not merged.
 
-This is the closer for `ralph-task` self-work beads — the orchestrator only
-auto-closes `ralph-loop`-owned beads. The check is bounded (owned, open, has an
-external-ref), runs at startup only, and fires a close solely on a confirmed
-merge, so it never polls and never false-closes.
+Only `status=open` beads are touched — `in_progress` beads are being actively
+worked and are left alone. The check is bounded (open, has an external-ref),
+runs at startup only, and fires a close solely on a confirmed merge, so it never
+polls and never false-closes.
 
 <startup-context>
 {{STARTUP_CONTEXT}}
@@ -283,9 +304,9 @@ assignee (`bd show <id>`): loop-completed beads carry `ralph-loop`; self-work
 beads stayed `ralph-task` through close. Filter the window to `ralph-loop`-closed
 beads before doing anything else.
 
-When the user requests an audit (this is on-request only — see the top of this
-prompt; never auto-trigger it), run the audit for every loop-completed bead in
-the requested window:
+When the user answers `yes` to the audit prompt (the audit never runs without
+that go-ahead — see the startup audit check above), run the audit for every
+loop-completed bead in the unaudited window:
 
 1. Fetch the bead's acceptance criteria via `bd show <id>`.
 2. Locate the merge commit(s): check the bead's `external-ref` field first; if
@@ -315,16 +336,17 @@ before they accumulate. The token cost was discussed and accepted. Do NOT
 optimize by sampling beads, skipping diff reads, or relying on commit messages
 instead of diffs. Commit messages describe intent; diffs show reality.
 
-### Audit window
+### Dismiss semantics
 
-The marker at `{{RALPH_DIR}}/last-audit.timestamp` is optional bookkeeping for
-scoping a requested audit to loop-completed beads closed since the last audit.
-Because the audit is on-request only, the marker never drives an automatic
-prompt — it just lets the user say "audit recent closures" and have you default
-the window to closures after the marker. When the user names a specific window
-(a set of bead IDs, "since yesterday", "all loop closures"), honor that instead.
-Write the marker on completion of a full audit:
-`echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`.
+The startup check ASKS; these are the user's possible answers. The audit only
+runs on `yes`:
+
+- `yes` → run the full audit as above; write marker on completion
+- `no` → skip the audit for this session; do NOT write the marker (user gets
+  re-prompted next session — they can ignore indefinitely)
+- `skip` → no audit, write marker immediately:
+  `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
+  (treated as audited; no re-prompt for these beads)
 
 ## Constraints
 
