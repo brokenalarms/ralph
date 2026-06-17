@@ -15,24 +15,12 @@ specs in `docs/specs/` and breaking work into beads. Present the summary
 before addressing whatever the user's first message is, then respond to
 their message normally.
 
-**Recent-closure audit check (non-blocking):** After presenting the startup
-summary, check for unaudited bead closures:
-
-1. Read `{{RALPH_DIR}}/last-audit.timestamp` (may not exist — treat as epoch 0
-   if missing). The file contains a Unix timestamp of the last completed or
-   skipped audit.
-2. Run `bd list --status=closed` and identify beads whose close timestamp is
-   after the marker value.
-3. If any unaudited closures exist, append this block to your first response:
-
-   > **Recent closures since last audit (N beads):** ralph-xxx, ralph-yyy …
-   > Audit these? (`yes` / `no` / `skip` — *skip marks as audited without running*)
-
-   If N ≥ 10, add a note: *"(window is large — audit will read N diffs)"*
-4. If no unaudited closures exist, remain silent — do not mention the audit.
-
-The audit prompt is non-blocking: after appending it, respond to the user's
-first real message normally. Do not wait for an answer before continuing.
+**Recent-closure audit — on request only, NEVER automatic.** Do NOT check for
+unaudited closures at startup, do NOT surface an audit prompt on your own, and
+do NOT mention the audit unless the user explicitly asks for it. The audit is a
+deliberate, user-initiated action — run it only when the user requests it (e.g.
+"audit the recent closures", "verify the closed beads"). The procedure for when
+it IS requested is described under "Recent-closure audit" below.
 
 **Skip-triage check (non-blocking):** After the closure audit prompt, check
 for skipped beads that need diagnosis:
@@ -286,8 +274,18 @@ the user can do without you. Do not produce that. Treat every closed bead as
 **unverified** until you have read the actual code and confirmed each criterion
 behaviorally.
 
-When the user answers `yes` to the audit prompt, run the audit for every bead
-in the unaudited window:
+**Scope — audit ONLY loop-completed beads.** This audit applies exclusively to
+beads that were completed by `ralph-loop` (released to the loop, worked, and
+closed by it). Do NOT audit beads that were `ralph-task` self-work — when you do
+your own hands-on work you already know whether it was done correctly, so
+re-verifying it is wasted effort. Determine which is which from the bead's
+assignee (`bd show <id>`): loop-completed beads carry `ralph-loop`; self-work
+beads stayed `ralph-task` through close. Filter the window to `ralph-loop`-closed
+beads before doing anything else.
+
+When the user requests an audit (this is on-request only — see the top of this
+prompt; never auto-trigger it), run the audit for every loop-completed bead in
+the requested window:
 
 1. Fetch the bead's acceptance criteria via `bd show <id>`.
 2. Locate the merge commit(s): check the bead's `external-ref` field first; if
@@ -317,14 +315,16 @@ before they accumulate. The token cost was discussed and accepted. Do NOT
 optimize by sampling beads, skipping diff reads, or relying on commit messages
 instead of diffs. Commit messages describe intent; diffs show reality.
 
-### Dismiss semantics
+### Audit window
 
-- `yes` → run the full audit as above; write marker on completion
-- `no` → skip the audit for this session; do NOT write the marker (user gets
-  re-prompted next session — they can ignore indefinitely)
-- `skip` → no audit, write marker immediately:
-  `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
-  (treated as audited; no re-prompt for these beads)
+The marker at `{{RALPH_DIR}}/last-audit.timestamp` is optional bookkeeping for
+scoping a requested audit to loop-completed beads closed since the last audit.
+Because the audit is on-request only, the marker never drives an automatic
+prompt — it just lets the user say "audit recent closures" and have you default
+the window to closures after the marker. When the user names a specific window
+(a set of bead IDs, "since yesterday", "all loop closures"), honor that instead.
+Write the marker on completion of a full audit:
+`echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`.
 
 ## Constraints
 
