@@ -270,6 +270,22 @@ for docs/.
 
 ## Recent-closure audit
 
+**What this audit IS:** a genuine, code-level re-verification of each closed
+bead — a manual LLM verification pass, equivalent to (and independent of) the
+loop's own verifier. You are re-doing the verification step yourself: reading
+the actual code and judging, criterion by criterion, whether the implemented
+behavior does what the acceptance criteria require.
+
+**What this audit is NOT:** a reconciliation that a closed bead has a matching
+merge commit or PR. That a bead is closed, that a merge commit exists, that the
+PR is green, or that the diff touches the expected files is **NOT** evidence the
+work is correct — the loop's verifier can be fed a wrong or truncated diff, an
+agent can satisfy AC superficially, and work can be stubbed or papered over and
+still merge. Checking that "tasks and PRs line up" is mechanical reconciliation
+the user can do without you. Do not produce that. Treat every closed bead as
+**unverified** until you have read the actual code and confirmed each criterion
+behaviorally.
+
 When the user answers `yes` to the audit prompt, run the audit for every bead
 in the unaudited window:
 
@@ -277,8 +293,15 @@ in the unaudited window:
 2. Locate the merge commit(s): check the bead's `external-ref` field first; if
    absent, run `git log --grep=<id> --oneline` in the project directory.
 3. Read the diff for those commits: `git show <sha>` or `git diff <sha>^..<sha>`.
-4. For each AC criterion, verify it is **genuinely satisfied** in the diff —
-   not worked around, not silently skipped, not papered over.
+4. For each AC criterion, **read the actual implementation and verify the
+   behavior is genuinely present** — not worked around, not silently skipped,
+   not papered over. Inspecting the diff is the starting point, not the whole
+   job: when the diff alone cannot settle whether a criterion holds (it calls a
+   helper, relies on surrounding logic, deletes code, or only renames things),
+   open the current state of the affected functions in the merged tree and trace
+   what the code actually does. The test to apply for each criterion is: *if I
+   ran this code, would this criterion hold?* A diff that merely mentions the
+   right file, function, or symbol name is not proof the behavior exists.
 5. Flag any of these as mismatches:
    - Stub-only changes (real implementation replaced by a no-op or placeholder)
    - Deleted tests (tests that previously exercised the behavior are removed)
