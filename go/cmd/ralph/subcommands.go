@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -404,12 +407,24 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
+	sessionID, err := generateSessionID()
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "Failed to generate session ID: %v", err)
+		return 1
+	}
+
 	r := newInteractiveAgent(log, projectDir, taskModel)
-	exitCode, err := r.Interactive(workDir, systemPrompt)
+	exitCode, err := r.Interactive(workDir, systemPrompt, "--session-id", sessionID)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Task manager failed: %v", err)
 		return 1
 	}
+
+	// Let the terminal finish processing any ANSI escape sequences from
+	// the CLI's exit message before printing the resume hint.
+	time.Sleep(100 * time.Millisecond)
+
+	printTaskResumeHint(os.Stdout, workDir, sessionID)
 	return exitCode
 }
 
@@ -537,6 +552,29 @@ func preloadTaskContext(projectDir string, log *logging.Logger) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// generateSessionID returns a random v4 UUID formatted as 8-4-4-4-12 hex.
+// Uses crypto/rand — no external module required.
+func generateSessionID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx
+	h := hex.EncodeToString(b[:])
+	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32]), nil
+}
+
+// printTaskResumeHint writes a visually dominant boxed resume command to w.
+// The command includes the worktree path so it works from any directory.
+func printTaskResumeHint(w io.Writer, workDir, sessionID string) {
+	cmd := fmt.Sprintf("cd %s && claude --resume %s", workDir, sessionID)
+	line := strings.Repeat("─", len(cmd)+4)
+	fmt.Fprintf(w, "\n%s%s┌%s┐%s\n", logging.Cyan, logging.Bold, line, logging.Reset)
+	fmt.Fprintf(w, "%s%s│  %s  │%s\n", logging.Cyan, logging.Bold, cmd, logging.Reset)
+	fmt.Fprintf(w, "%s%s└%s┘%s\n\n", logging.Cyan, logging.Bold, line, logging.Reset)
 }
 
 func findBD() (string, error) {
