@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -955,6 +956,65 @@ func TestHandleTmuxAttach_RefusesInsideTmux(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "must be run from outside tmux") {
 		t.Errorf("error message missing 'must be run from outside tmux': %s", buf.String())
+	}
+}
+
+// Proves: generateSessionID returns a v4 UUID in 8-4-4-4-12 hex format with
+// correct version and variant bits — so ralph can own the session ID before
+// passing it to claude via --session-id for worktree-aware resume commands.
+func TestGenerateSessionID_ValidV4UUID(t *testing.T) {
+	id, err := generateSessionID()
+	if err != nil {
+		t.Fatalf("generateSessionID should not error, got: %v", err)
+	}
+
+	parts := strings.Split(id, "-")
+	if len(parts) != 5 {
+		t.Fatalf("UUID should have 5 parts separated by '-', got: %s", id)
+	}
+	expected := []int{8, 4, 4, 4, 12}
+	for i, p := range parts {
+		if len(p) != expected[i] {
+			t.Errorf("UUID part %d should be %d hex chars, got %d in %s", i, expected[i], len(p), id)
+		}
+		if _, err := hex.DecodeString(p); err != nil {
+			t.Errorf("UUID part %d should be valid hex, got: %q", i, p)
+		}
+	}
+
+	// Version 4: high nibble of third group must be '4'.
+	if parts[2][0] != '4' {
+		t.Errorf("UUID version nibble should be '4', got %c in %s", parts[2][0], id)
+	}
+
+	// Variant 10xx: high nibble of fourth group must be 8, 9, a, or b.
+	v := parts[3][0]
+	if v != '8' && v != '9' && v != 'a' && v != 'b' {
+		t.Errorf("UUID variant nibble should be 8/9/a/b, got %c in %s", v, id)
+	}
+
+	// Two calls must produce distinct IDs.
+	id2, _ := generateSessionID()
+	if id == id2 {
+		t.Error("generateSessionID should return unique IDs on each call")
+	}
+}
+
+// Proves: printTaskResumeHint outputs a directory-aware resume command so the
+// user can copy and run it from any directory after a task-manager session ends.
+func TestPrintTaskResumeHint_ContainsResumeCommand(t *testing.T) {
+	var buf strings.Builder
+	workDir := "/some/worktree/path"
+	sessionID := "12345678-1234-4567-89ab-123456789abc"
+
+	printTaskResumeHint(&buf, workDir, sessionID)
+
+	out := buf.String()
+	if !strings.Contains(out, "cd "+workDir) {
+		t.Errorf("resume hint should contain 'cd %s', got:\n%s", workDir, out)
+	}
+	if !strings.Contains(out, "claude --resume "+sessionID) {
+		t.Errorf("resume hint should contain 'claude --resume %s', got:\n%s", sessionID, out)
 	}
 }
 
