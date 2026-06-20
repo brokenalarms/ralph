@@ -326,9 +326,10 @@ func TestSelectNextTask_HaltsOnInconsistentResumeState(t *testing.T) {
 }
 
 // selectNextTask halts with halted_blocked_by_in_progress when bd ready is empty
-// because the only open tasks are blocked by an in_progress task the loop owns.
-// Proves: the loop does not enter the silent wait-for-tasks poll in this case.
-func TestSelectNextTask_HaltsOnBlockedByInProgress(t *testing.T) {
+// because the only open tasks are blocked by an in_progress task held by a non-loop
+// actor (human or external process). Proves: the loop does not enter the silent
+// wait-for-tasks poll, and does not try to self-recover an external hold.
+func TestSelectNextTask_HaltsOnBlockedByExternalInProgress(t *testing.T) {
 	falseVal := false
 	backend := &testutil.StubBackend{
 		Remaining:          2,         // CountRemaining > 0: tasks exist
@@ -336,7 +337,7 @@ func TestSelectNextTask_HaltsOnBlockedByInProgress(t *testing.T) {
 		Total:              2,
 		NextID:             "",
 		NextTask:           "",
-		InProgressTasks:    []tasks.TaskInfo{{ID: "ralph-stuck", Title: "Stuck task"}},
+		AllInProgressTasks: []tasks.TaskInfo{{ID: "ralph-stuck", Title: "Stuck task", Assignee: "human-user"}},
 		OpenDependents:     []string{"ralph-blocked"},
 	}
 	l, _ := newTestLoopForSelection(t, backend)
@@ -352,7 +353,7 @@ func TestSelectNextTask_HaltsOnBlockedByInProgress(t *testing.T) {
 	})
 
 	if action != actionDone {
-		t.Fatalf("expected actionDone when blocked by in_progress, got %v", action)
+		t.Fatalf("expected actionDone when blocked by external in_progress, got %v", action)
 	}
 	status, _ := l.state.Read("status")
 	if status != "halted_blocked_by_in_progress" {
@@ -360,6 +361,71 @@ func TestSelectNextTask_HaltsOnBlockedByInProgress(t *testing.T) {
 	}
 	if waitHookCalled {
 		t.Error("expected waitForTasks NOT to be entered when blocked by in_progress task")
+	}
+}
+
+// reopenableBackend is a StubBackend that simulates the state transition when
+// ReopenTask is called: the task moves from in_progress to open, so it
+// disappears from AllInProgressTasks and becomes selectable via HasRemaining.
+type reopenableBackend struct {
+	testutil.StubBackend
+	reopenCalls []string
+}
+
+func (b *reopenableBackend) ReopenTask(id string) error {
+	b.reopenCalls = append(b.reopenCalls, id)
+	// After reopen: task is open (not in_progress), clears the blocking stall.
+	b.AllInProgressTasks = nil
+	b.HasRemainingResult = nil // reverts to Remaining > 0 (task is now selectable)
+	return nil
+}
+
+// selectNextTask reopens a loop-owned orphaned in_progress claim and re-enters
+// selection instead of halting. Proves: a claim abandoned by a prior loop
+// session (assignee=ralph-loop, status=in_progress, blocking a dependent) is
+// self-recovered without human intervention.
+func TestSelectNextTask_LoopOwnedOrphanedClaim_ReopensAndContinues(t *testing.T) {
+	falseVal := false
+	backend := &reopenableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:          2,         // CountRemaining > 0: tasks exist
+			HasRemainingResult: &falseVal, // bd ready empty: orphaned claim blocks selection
+			Total:              2,
+			NextID:             "ralph-orphaned",
+			NextTask:           "Orphaned task",
+			AllInProgressTasks: []tasks.TaskInfo{{ID: "ralph-orphaned", Title: "Orphaned task", Assignee: "ralph-loop"}},
+			OpenDependents:     []string{"ralph-blocked"},
+		},
+	}
+	l, _ := newTestLoopForSelection(t, &backend.StubBackend)
+	l.taskBackend = backend // override with the stateful backend
+
+	waitHookCalled := false
+	l.waitHook = &stubWaitHook{fn: func() { waitHookCalled = true }}
+
+	tc, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  1,
+		maxIterations: 100,
+		wait:          false,
+		completedIDs:  map[string]bool{},
+	})
+
+	// The orphaned claim is reopened — loop does NOT halt.
+	if action != actionProceed {
+		t.Fatalf("expected actionProceed after self-recovering orphaned claim, got %v", action)
+	}
+	if tc.id != "ralph-orphaned" {
+		t.Errorf("expected task ralph-orphaned to be re-selected, got %q", tc.id)
+	}
+	status, _ := l.state.Read("status")
+	if status == "halted_blocked_by_in_progress" {
+		t.Error("loop-owned orphaned claim must NOT produce halted_blocked_by_in_progress")
+	}
+	if len(backend.reopenCalls) == 0 || backend.reopenCalls[0] != "ralph-orphaned" {
+		t.Errorf("expected ReopenTask(ralph-orphaned), got reopenCalls=%v", backend.reopenCalls)
+	}
+	if waitHookCalled {
+		t.Error("waitForTasks must NOT be entered during self-recovery")
 	}
 }
 
@@ -374,7 +440,7 @@ func TestSelectNextTask_EmptyBacklog_DoesNotFalselyHalt(t *testing.T) {
 		Total:              0,
 		NextID:             "",
 		NextTask:           "",
-		InProgressTasks:    nil, // no in_progress tasks
+		AllInProgressTasks: nil, // no in_progress tasks blocking anything
 		OpenDependents:     nil,
 	}
 	l, _ := newTestLoopForSelection(t, backend)

@@ -6,6 +6,7 @@ type TaskInfo struct {
 	ID       string
 	Title    string
 	Priority *int
+	Assignee string // populated by list queries; empty when not requested
 }
 
 // Backend abstracts task tracking so ralph can drive iteration.
@@ -111,6 +112,11 @@ type Backend interface {
 	// to the given assignee. Used to detect stuck-loop conditions where no tasks are
 	// ready because they are all blocked by an in_progress task the loop owns.
 	ListInProgressByAssignee(assignee string) ([]TaskInfo, error)
+
+	// ListAllInProgress returns TaskInfo (with Assignee populated) for all
+	// in_progress tasks across all assignees. Used to detect stall conditions
+	// where a non-loop actor holds an in_progress task that blocks ready work.
+	ListAllInProgress() ([]TaskInfo, error)
 
 	// IsReady reports whether a task is ready to work on: its dependencies array
 	// is empty OR every entry has status=closed. Returns false (no error) for any
