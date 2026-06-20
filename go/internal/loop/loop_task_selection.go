@@ -101,8 +101,11 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		if p.runIteration > 0 {
 			l.flushUnpushedWork(ctx, p.lastTaskMerged)
 		}
-		if l.detectStuckInProgress() {
+		switch l.detectStuckInProgress() {
+		case stuckHalt:
 			return taskContext{}, actionDone, waited
+		case stuckRetry:
+			return l.selectNextTaskInner(ctx, p, attempts+1, waited)
 		}
 		if !p.wait {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Success}, "All tasks complete!")
@@ -136,8 +139,11 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 
 	if taskID == "" && nextTask == "" {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task backend returned empty — no task to run")
-		if l.detectStuckInProgress() {
+		switch l.detectStuckInProgress() {
+		case stuckHalt:
 			return taskContext{}, actionDone, waited
+		case stuckRetry:
+			return l.selectNextTaskInner(ctx, p, attempts+1, waited)
 		}
 		if p.wait {
 			if resumed := l.waitForTasks(ctx); !resumed {
@@ -167,21 +173,44 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 	}, actionProceed, waited
 }
 
+// stuckOutcome is the result of detectStuckInProgress.
+type stuckOutcome int
+
+const (
+	stuckNone  stuckOutcome = iota // no stuck state detected
+	stuckRetry                     // loop-owned claims reopened; caller must re-enter selection
+	stuckHalt                      // external actor holds the bead; caller must halt
+)
+
 // detectStuckInProgress checks whether the empty ready queue is caused by
-// in_progress tasks (owned by the loop) that have open dependents. When a stall
-// is detected it logs the stuck and blocked task IDs, writes
-// halted_blocked_by_in_progress status, and returns true. Returns false when no
-// stall is detected or the detection query fails.
-func (l *Loop) detectStuckInProgress() bool {
+// in_progress tasks that have open dependents.
+//   - stuckNone: no blocking in_progress tasks detected.
+//   - stuckRetry: loop-owned orphaned claims were reopened; caller should re-enter selection.
+//   - stuckHalt: non-loop actor holds a stuck task; caller should write
+//     halted_blocked_by_in_progress and exit.
+func (l *Loop) detectStuckInProgress() stuckOutcome {
 	stuck, err := tasks.DetectBlockedByInProgress(l.taskBackend)
 	if err != nil || stuck == nil {
-		return false
+		return stuckNone
 	}
-	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error},
-		"Halting: stuck in_progress task(s) [%s] are blocking [%s] — close or reassign the stuck task(s) to unblock",
-		strings.Join(stuck.StuckTaskIDs, ", "), strings.Join(stuck.BlockedTaskIDs, ", "))
-	l.state.Write("status", "halted_blocked_by_in_progress")
-	return true
+	if len(stuck.ExternalStuckTaskIDs) > 0 {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error},
+			"Halting: stuck in_progress task(s) [%s] are blocking [%s] — close or reassign the stuck task(s) to unblock",
+			strings.Join(stuck.ExternalStuckTaskIDs, ", "), strings.Join(stuck.BlockedTaskIDs, ", "))
+		l.state.Write("status", "halted_blocked_by_in_progress")
+		return stuckHalt
+	}
+	for _, id := range stuck.LoopOwnedStuckTaskIDs {
+		if reopenErr := l.taskBackend.ReopenTask(id); reopenErr != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error},
+				"Failed to reopen orphaned claim %s: %v — halting", id, reopenErr)
+			l.state.Write("status", "halted_blocked_by_in_progress")
+			return stuckHalt
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Info},
+			"Self-recovered orphaned claim %s (reopened) — re-entering selection", id)
+	}
+	return stuckRetry
 }
 
 // validateResumeState checks whether a resumed task is genuinely resumable.

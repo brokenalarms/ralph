@@ -866,18 +866,35 @@ func (b *BD) ListInProgressByAssignee(assignee string) ([]TaskInfo, error) {
 	if err != nil {
 		return nil, nil
 	}
+	return parseInProgressJSON(out), nil
+}
+
+// ListAllInProgress returns TaskInfo (with Assignee populated) for all
+// in_progress tasks across all assignees. Returns nil (not an error) on bd
+// call failure, since this is used for opportunistic stall detection.
+func (b *BD) ListAllInProgress() ([]TaskInfo, error) {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "list", "--status=in_progress", "--json")
+	if err != nil {
+		return nil, nil
+	}
+	return parseInProgressJSON(out), nil
+}
+
+// parseInProgressJSON parses bd list --json output into TaskInfo slices,
+// populating the Assignee field from the issue JSON.
+func parseInProgressJSON(out string) []TaskInfo {
 	var issues []bdIssue
 	if jsonErr := json.Unmarshal([]byte(out), &issues); jsonErr != nil {
-		return nil, nil
+		return nil
 	}
 	var result []TaskInfo
 	for _, issue := range issues {
 		if issue.ID == "" {
 			continue
 		}
-		result = append(result, TaskInfo{ID: issue.ID, Title: issue.Title, Priority: issue.Priority})
+		result = append(result, TaskInfo{ID: issue.ID, Title: issue.Title, Priority: issue.Priority, Assignee: issue.Assignee})
 	}
-	return result, nil
+	return result
 }
 
 // IsReady reports whether task id is ready to work on. It calls bd show <id>

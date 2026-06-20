@@ -38,6 +38,7 @@ func (b *minimalBackend) SetMetadata(_, _, _ string) error          { return nil
 func (b *minimalBackend) GetMetadata(_, _ string) (string, error)   { return "", nil }
 func (b *minimalBackend) GetOpenDependents(_ string) ([]string, error)          { return nil, nil }
 func (b *minimalBackend) ListInProgressByAssignee(_ string) ([]TaskInfo, error) { return nil, nil }
+func (b *minimalBackend) ListAllInProgress() ([]TaskInfo, error)                { return nil, nil }
 func (b *minimalBackend) IsReady(_ string) (bool, error)                        { return true, nil }
 func (b *minimalBackend) Label() string                                          { return "beads" }
 func (b *minimalBackend) SetResumeTaskID(id string) {
