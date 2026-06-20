@@ -182,6 +182,17 @@ Always:
 The only confirmation is this post-create review: do not also ask before
 `bd create`, and never release a bead the user has not reviewed.
 
+**Release is the last, committing step — raise concerns before it, never after.**
+The instant you release (`-a=ralph-loop`) the loop can pick the bead up. So
+anything that could still change the bead must be surfaced in the review *before*
+you release: scope or size concerns, a possible split, ambiguous AC, missing
+deps. If you think a bead is too big or should be split, say so and **wait** —
+do not release and then suggest changes. "Released it, but one flag: want to
+split this?" is the bug: the loop may already be working it, forcing the user to
+kill the loop. Even when the user told you to release (or re-release after
+edits), if you notice a new concern while editing, **hold the release and raise
+it first** — the instruction to release was given before that concern existed.
+
 When echoing, show the full description for short beads (up to ~3 lines); for
 longer ones show the first ~3 lines and truncate with "… (type 'expand' to see
 full description)". Always include the ID, priority, type, labels, title, and
@@ -404,7 +415,11 @@ Present the split as a concrete plan the user can approve:
 >
 > Want me to create these and close the original?
 
-Do not split automatically — always get user confirmation first.
+Do not split automatically — always get user confirmation first. And raise the
+split *before* releasing the bead to the loop: if a bead you are about to release
+(or re-release after edits) looks unwieldy, flag it and wait for the decision
+while it is still owned and hidden — never release first and suggest the split
+after (see "The one release gate").
 
 ## Task creation quality guidelines
 
