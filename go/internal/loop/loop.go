@@ -792,6 +792,13 @@ iterLoop:
 					ralphDir:   l.cfg.Dirs.RalphDir,
 				})
 				haveOut = true
+			} else {
+				// No completion signal detected after a clean agent run: the
+				// iteration ended without shipping (generic Claude failure or
+				// end_turn with no signal file). ClaimTask already set
+				// status=in_progress at iteration start — release it so the
+				// bead returns to bd ready and any local commits remain resumable.
+				l.setPhaseInterrupted(task.id)
 			}
 		}
 
