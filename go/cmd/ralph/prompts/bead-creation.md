@@ -81,8 +81,11 @@ loop.
 
 ### Pre-creation architecture echo
 
-For substantive beads, echo back the proposed architectural approach and
-wait for explicit user confirmation before calling `bd create`.
+For substantive beads, echo back the proposed architectural approach during
+triage so the user can redirect before you encode it. This aligns direction and
+gets written into the description — it is NOT the release gate. The single gate
+is always the post-create review of the materialized bead (see "The one release
+gate" below).
 
 **Triggers — echo is required when ANY of these apply:**
 - Type = feature
@@ -99,12 +102,11 @@ fix path. The diagnosis was the back-and-forth; no architecture echo needed.
 3. **Call-site impact** — who calls the changed thing and what changes for them
 4. **AC sketch** — one line per acceptance criterion
 
-**Flow:** echo → wait for explicit user confirmation or corrections → `bd create`
-(owned) → release immediately. The architecture echo IS the confirmation — when
-the user approves it and the created bead matches what they approved, do NOT
-re-ask before releasing (that double-confirm is a bug). Only re-echo and wait
-again if you change the bead after creating it. See "Confirm the final content
-once" below.
+**Flow:** align on approach (if substantive) → `bd create` (owned) → echo the
+materialized bead and **wait** → release on approval. Do NOT add a separate
+"shall I create?" confirmation before `bd create`: a pre-create gate *plus* the
+post-create review is the double-confirm bug. Approach-alignment is triage, not
+a release gate — the single gate is the post-create review.
 
 The architecture echo content gets written into the bead description verbatim
 so the executing agent reads exactly what the user approved.
@@ -146,40 +148,39 @@ Every bead must have:
 - A priority (0–4). Do not use "high"/"medium"/"low".
 - **Ownership** — create every bead with `-a=ralph-task` so it is born owned by
   the task manager and hidden from the loop (see "Bead ownership"). It is
-  released to the loop once its content is confirmed — and that confirmation
-  happens exactly once (see "Confirm the final content once"): if a pre-create
-  architecture echo already locked the content, releasing needs no second ask.
+  released to the loop only after the user approves the **materialized** bead in
+  the single post-create review (see "The one release gate").
 
-**Confirm the final content once.** The thing being confirmed is the bead's
-final content (title, description, AC, deps) — and it only needs confirming
-once. The owned phase exists so you can safely *iterate* content the loop
-can't see yet; it is NOT a second approval gate for content the user already
-signed off. Pick the path that matches how the content reached its final state:
+**The one release gate: review the materialized bead.** There is exactly one
+confirmation gate, and it is always *after* create: you create the bead owned,
+echo the materialized bead (real title, description, AC, deps, labels), and
+**wait** for the user to review and amend before releasing it to the loop.
 
-- **Content already locked before create** — a pre-create architecture echo the
-  user approved, or an explicit "create it/them" on a fully-specified plan — and
-  the created bead matches it → create owned, then **release immediately** with
-  `bd update <id> -a=ralph-loop`. Echo the result as a statement, not a question;
-  do NOT ask "Looks good?" and wait. Re-confirming unchanged content is the
-  double-confirm bug. (For a bead you will work yourself, leave it owned and
-  start the work instead of releasing.)
-- **Content NOT yet locked** — no pre-create echo, or the plan was loose → echo
-  back and **wait** so the user can review and amend before releasing, while the
-  bead is still owned and hidden:
-  > Created **ralph-abc** · P2 task · `orchestrator` `git`
-  > **ralph loop: force-reset worktree after merge**
-  > Resets the worktree to origin/main after each squash-merge so stale
-  > branches don't accumulate.
-  >
-  > Looks good? (enter to release to the loop, or type changes)
-- **You iterate after creating** (edit AC, add deps, split) → the confirmation
-  attaches to the *changed* version: echo the update and wait before releasing.
-  Apply changes with `bd update` (title, description, priority, labels, type,
-  deps) — still owned and hidden, so revising is safe, no race.
+This gate is non-negotiable because the task manager tends to create beads
+eagerly, before the AC is exactly nailed down — and the pre-create AC *sketch*
+is that same eager judgment, not the real thing. Only the materialized bead
+shows the actual `--acceptance` text, so reviewing it after create is the
+reliable catch for under-specified beads — and the bead is still owned and
+hidden while you wait, so the loop can never pick up a half-baked version.
 
-Whichever path: confirm the final content exactly once. Never re-ask about
-content that has not changed since the user approved it, and never release
-content the user has not yet approved.
+Always:
+
+1. **Create owned** (`-a=ralph-task`) — never create-then-release in one breath.
+2. **Echo the materialized bead and wait:**
+   > Created **ralph-abc** · P2 task · `orchestrator` `git`
+   > **ralph loop: force-reset worktree after merge**
+   > Resets the worktree to origin/main after each squash-merge so stale
+   > branches don't accumulate.
+   >
+   > Looks good? (enter to release to the loop, or type changes)
+3. **On approval** → release with `bd update <id> -a=ralph-loop`. (For a bead you
+   will work yourself, leave it owned and start the work instead of releasing.)
+4. **On changes** → apply with `bd update` (title, description, priority, labels,
+   type, deps), re-echo, and wait again. Still owned and hidden, so revising is
+   safe — no rush, no race. Iterate until the user approves.
+
+The only confirmation is this post-create review: do not also ask before
+`bd create`, and never release a bead the user has not reviewed.
 
 When echoing, show the full description for short beads (up to ~3 lines); for
 longer ones show the first ~3 lines and truncate with "… (type 'expand' to see
