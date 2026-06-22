@@ -103,7 +103,7 @@ func executionInstructions(v Vars) (string, error) {
 
 // BuildTaskManagerPrompt assembles the system prompt for the interactive
 // task manager pane, substituting project and ralph directory paths.
-// startupContext is the pre-loaded output of bd prime/list/ready — injected
+// startupContext is the pre-loaded output of bd list/ready — injected
 // so the task manager can present the summary without making tool calls.
 func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupContext string) (string, error) {
 	tmpl, err := readTemplate(promptsDir, "task-manager.md")
