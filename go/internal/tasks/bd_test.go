@@ -757,8 +757,15 @@ func TestBD_ProjectContext_AssemblesAllSections(t *testing.T) {
 	if !strings.Contains(got, "max_iterations") {
 		t.Error("expected ralph config in project context")
 	}
-	if !strings.Contains(got, "bd prime output") {
-		t.Error("expected bd prime output in project context")
+	// bd prime is intentionally NOT injected: its canned boilerplate carries a
+	// SESSION-CLOSE push mandate and a "use bd remember" directive that
+	// contradict ralph's own agent rules. The structured sections above supply
+	// the live project state the agent actually needs.
+	if strings.Contains(got, "bd prime output") {
+		t.Error("bd prime output must not be injected into project context")
+	}
+	if strings.Contains(got, "bd workflow context") {
+		t.Error("the bd workflow context section must not appear in project context")
 	}
 }
 
