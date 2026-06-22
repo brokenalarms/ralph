@@ -86,7 +86,7 @@ type Backend interface {
 	GetFullContext(id string) (string, error)
 
 	// ProjectContext returns pre-assembled context about the project's task
-	// state for prompt injection (open/closed beads, config, bd prime output).
+	// state for prompt injection (config, open beads, recently closed beads).
 	ProjectContext() (string, error)
 
 	// GetExternalRef returns the external reference (e.g. "gh-123") for a task.

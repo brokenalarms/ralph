@@ -183,8 +183,34 @@ is broken or the user explicitly asks for a fix.
 
 ## Task backend
 
-Run `bd prime` for workflow context. `bd` auto-discovers `.beads/` by
-walking up the directory tree, so it works from the worktree.
+`bd` auto-discovers `.beads/` by walking up the directory tree, so it works
+from the worktree. Do NOT run `bd prime` — its canned workflow boilerplate
+includes a session-end push mandate and a `bd remember` directive that
+contradict ralph's rules (see "Persistent knowledge" and "Constraints"). The
+commands below are the orchestrator's full working set; for anything rarer,
+run `bd <command> --help`.
+
+**Inspect / find work**
+- `bd list` — filters: `--status=open|in_progress|closed`, `--assignee=<who>`,
+  `--label=<label>`, `--json` (combinable)
+- `bd ready` — beads with no active blockers
+- `bd show <id>` — full bead: status, assignee, description, AC, deps, comments
+- `bd state <id> phase` — read the ralph phase dimension (e.g. `implementing`)
+- `bd search <keywords>` — find existing beads before creating a new one
+
+**Create (always owned)**
+- `bd create --title="…" --description="…" --type=bug|task|feature
+  --priority=0..4 --acceptance="…" --labels=<a>,<b> -a=ralph-task`
+- `--deps=<id>[,<id>]` at create, or `bd dep add <id> <depends-on>` while iterating
+
+**Update / release**
+- `bd update <id> --title/--description/--priority/--labels/--notes/--external-ref`
+- `bd update <id> -a=ralph-loop` — release a reviewed bead to the loop
+- Never use `bd edit` — it opens `$EDITOR` and blocks.
+
+**Close**
+- `bd close <id> --reason "fixed in <pr-url>"` (set `--external-ref` first for
+  self-work PRs so a later session can detect the merge)
 
 ## Priority reference
 

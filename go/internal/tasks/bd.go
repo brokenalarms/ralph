@@ -760,10 +760,6 @@ func (b *BD) ProjectContext() (string, error) {
 		sections = append(sections, "## Recently closed beads\n```\n"+out+"\n```")
 	}
 
-	if out, err := run(ctx, b.ProjectDir, "prime"); err == nil && out != "" {
-		sections = append(sections, "## bd workflow context\n"+out)
-	}
-
 	return strings.Join(sections, "\n\n"), nil
 }
 

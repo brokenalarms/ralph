@@ -524,9 +524,14 @@ func readTaskIDFromState(statePath string) string {
 	return id
 }
 
-// preloadTaskContext runs bd prime, bd list, and bd ready before launching
-// Claude so the task manager can present the startup summary without making
-// tool calls — preventing the response from disrupting user typing.
+// preloadTaskContext runs bd list and bd ready before launching Claude so the
+// task manager can present the startup summary without making tool calls —
+// preventing the response from disrupting user typing.
+//
+// bd prime is deliberately excluded: its canned workflow boilerplate carries a
+// SESSION-CLOSE push mandate (bd dolt push / git push) and a "use bd remember"
+// directive that contradict ralph's own rules, and the task-manager prompt
+// already supplies all of the orchestrator's bd workflow guidance.
 func preloadTaskContext(projectDir string, log *logging.Logger) string {
 	bdBin, err := findBD()
 	if err != nil {
@@ -535,7 +540,7 @@ func preloadTaskContext(projectDir string, log *logging.Logger) string {
 	}
 
 	var parts []string
-	for _, subcmd := range []string{"prime", "list", "ready"} {
+	for _, subcmd := range []string{"list", "ready"} {
 		cmd := exec.Command(bdBin, subcmd)
 		cmd.Dir = projectDir
 		out, err := cmd.CombinedOutput()
