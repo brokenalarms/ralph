@@ -360,12 +360,17 @@ pipeline, so it has no closer but you. Therefore:
 2. **At PR creation, set the external-ref immediately:**
    `bd update <id> --external-ref <pr-url>`. This is what lets a later session
    detect the merge and close the bead — without it the bead is orphaned.
-3. **Close on confirmed merge.** If the PR merges before the session ends, close
-   the bead then: `bd close <id> --reason "fixed in <pr-url>"`. If the PR is
-   still open at session end, leave the bead open — the **"Self-work awaiting
-   close"** startup check (see the task-manager startup protocol) detects the
-   merge on a later session and closes it. NEVER `bd close` a self-work bead
-   whose PR has not merged.
+3. **Close on confirmed merge — this is mandatory, and you keep forgetting it.**
+   The moment the PR merges, run `bd close <id> --reason "fixed in <pr-url>"`.
+   Treat "the self-work is done" as meaning "PR merged AND bead closed" — never
+   just "PR merged". Before you report a hands-on fix as finished or switch back
+   to light triage, check the bead's status is `closed` (or that its PR is
+   genuinely still open). If the PR merges during the session, close it in that
+   same session — do not punt to a later startup check when you can close it now.
+   Only if the PR is still open at session end do you leave the bead open — the
+   **"Self-work awaiting close"** startup check detects the merge on a later
+   session and closes it. NEVER `bd close` a self-work bead whose PR has not
+   merged.
 
 No race, because the bead was never in the loop's inbox.
 
