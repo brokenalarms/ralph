@@ -1018,6 +1018,37 @@ func TestPrintTaskResumeHint_ContainsResumeCommand(t *testing.T) {
 	}
 }
 
+// Proves: handleTask does not delete the worktree on exit, so the printed
+// resume command remains valid. handleReview keeps its cleanup (regression guard).
+func TestHandleTask_NoWorktreeRemovalOnExit(t *testing.T) {
+	src, err := os.ReadFile("subcommands.go")
+	if err != nil {
+		t.Fatalf("could not read subcommands.go: %v", err)
+	}
+	content := string(src)
+
+	taskStart := strings.Index(content, "\nfunc handleTask(")
+	unskipStart := strings.Index(content, "\nfunc handleUnskip(")
+	if taskStart == -1 || unskipStart == -1 {
+		t.Fatal("expected functions not found in subcommands.go")
+	}
+	handleTaskBody := content[taskStart:unskipStart]
+	if strings.Contains(handleTaskBody, "RemoveWorktree") {
+		t.Error("handleTask must not call RemoveWorktree — worktree deletion must be deferred to Claude's exit prompt")
+	}
+
+	// Regression guard: handleReview must keep its worktree cleanup defer.
+	reviewStart := strings.Index(content, "\nfunc handleReview(")
+	postReviewStart := strings.Index(content, "\nfunc postReviewCleanup(")
+	if reviewStart == -1 || postReviewStart == -1 {
+		t.Fatal("expected functions not found in subcommands.go")
+	}
+	handleReviewBody := content[reviewStart:postReviewStart]
+	if !strings.Contains(handleReviewBody, "RemoveWorktree") {
+		t.Error("handleReview must still contain RemoveWorktree cleanup — regression in review path")
+	}
+}
+
 // handleLoop starts normally when a stale PID file exists (dead process).
 // Verifies stale cleanup by confirming the PID file is removed.
 func TestHandleLoop_CleansUpStalePID(t *testing.T) {

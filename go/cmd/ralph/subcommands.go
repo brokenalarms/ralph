@@ -393,11 +393,6 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 	workDir := gm.GetWorkDir()
-	defer func() {
-		if workDir != projectDir && gm.LogOneline("origin/main", "HEAD") == "" {
-			gm.RemoveWorktree()
-		}
-	}()
 
 	startupCtx := preloadTaskContext(projectDir, log)
 
