@@ -160,6 +160,12 @@ an issue blocks the ralph loop from running at all. In this mode:
   or, for a bead you're taking over, confirm it isn't already the loop's. See
   "Bead ownership: create owned, release to the loop."
 - Read code, make targeted fixes, run tests, commit
+- **Close the bead yourself when the work lands.** Nothing auto-closes a
+  `ralph-task` self-work bead — you are its only closer. The instant the PR
+  merges, run `bd close <id> --reason "fixed in <pr-url>"`. Do not end the
+  session, report the fix as done, or switch back to triage while the bead is
+  still open and its PR has merged. See "Self-work stays owned — and you close
+  it yourself."
 - Return to light triage mode when the fix is done
 
 ### Architectural refactoring
