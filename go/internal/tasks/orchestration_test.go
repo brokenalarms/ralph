@@ -1,6 +1,10 @@
 package tasks
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/brokenalarms/ralph/internal/config"
+)
 
 // minimalBackend is an inline stub satisfying Backend for orchestration tests.
 // Only SetResumeTaskID and GetNextTaskInfo need real implementations here;
@@ -79,6 +83,54 @@ func TestNext_SetsResumeIDWhenNonEmpty(t *testing.T) {
 
 	if b.resumeIDSet != "ralph-abc" {
 		t.Errorf("SetResumeTaskID = %q, want ralph-abc", b.resumeIDSet)
+	}
+}
+
+// inProgressBackend stubs ListAllInProgress with a fixed set for orphan tests.
+type inProgressBackend struct {
+	minimalBackend
+	inProgress []TaskInfo
+}
+
+func (b *inProgressBackend) ListAllInProgress() ([]TaskInfo, error) { return b.inProgress, nil }
+
+// Proves: OrphanedLoopClaims returns only ralph-loop-assigned in_progress beads,
+// excludes the resume target, and ignores beads assigned to any other actor.
+func TestOrphanedLoopClaims_FiltersLoopOwnedExcludingResume(t *testing.T) {
+	b := &inProgressBackend{inProgress: []TaskInfo{
+		{ID: "loop-orphan", Assignee: config.LoopAssignee},
+		{ID: "resume-target", Assignee: config.LoopAssignee},
+		{ID: "task-owned", Assignee: config.TaskAssignee},
+		{ID: "external", Assignee: "someone-else"},
+		{ID: "", Assignee: config.LoopAssignee},
+	}}
+
+	got, err := OrphanedLoopClaims(b, "resume-target")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got) != 1 || got[0] != "loop-orphan" {
+		t.Errorf("OrphanedLoopClaims = %v, want [loop-orphan] (loop-owned, not resume target, non-empty)", got)
+	}
+}
+
+// Proves: with no resume target, every loop-owned in_progress bead is an orphan,
+// while non-loop assignees are still excluded.
+func TestOrphanedLoopClaims_NoResumeTarget(t *testing.T) {
+	b := &inProgressBackend{inProgress: []TaskInfo{
+		{ID: "a", Assignee: config.LoopAssignee},
+		{ID: "b", Assignee: config.LoopAssignee},
+		{ID: "c", Assignee: config.TaskAssignee},
+	}}
+
+	got, err := OrphanedLoopClaims(b, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("OrphanedLoopClaims = %v, want [a b]", got)
 	}
 }
 

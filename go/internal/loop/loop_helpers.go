@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 // binaryHashChanged returns true when the on-disk binary at os.Executable()
@@ -76,6 +77,33 @@ func (l *Loop) initialize(ctx context.Context) error {
 	l.state.ClearCompletedTasksFile()
 
 	return l.initWorktree(ctx)
+}
+
+// reconcileOrphanedClaims reopens loop-owned in_progress beads stranded by a
+// prior session that crashed, was killed, or abandoned an iteration without
+// releasing the claim. Runs exactly once at startup, before the iteration loop.
+//
+// The genuine resume target (current_task_id) is excluded so a real mid-task
+// resume still resumes its in_progress bead. Every other ralph-loop/in_progress
+// bead is a stale orphan: it is invisible to `bd ready` (which excludes
+// in_progress) and, when it has no open dependents, is never recovered by
+// detectStuckInProgress — so without this it stays stranded permanently.
+// Reopening (status=open, assignee=ralph-loop preserved) returns it to the
+// loop's `bd ready` inbox to be re-selected by priority.
+func (l *Loop) reconcileOrphanedClaims() {
+	resumeID, _ := l.state.Read("current_task_id")
+	orphans, err := tasks.OrphanedLoopClaims(l.taskBackend, resumeID)
+	if err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Orphan reconcile: failed to list in_progress claims: %v", err)
+		return
+	}
+	for _, id := range orphans {
+		if reopenErr := l.taskBackend.ReopenTask(id); reopenErr != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Orphan reconcile: failed to reopen %s: %v", id, reopenErr)
+			continue
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Reopened orphaned loop claim %s left in_progress by a prior session", id)
+	}
 }
 
 // initWorktree restores worktree state on resume and syncs to the correct base.

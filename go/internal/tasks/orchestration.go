@@ -117,3 +117,30 @@ func DetectBlockedByInProgress(b Backend) (*StuckState, error) {
 		BlockedTaskIDs:        blockedIDs,
 	}, nil
 }
+
+// OrphanedLoopClaims returns the IDs of in_progress beads still assigned to the
+// loop (config.LoopAssignee), excluding excludeID. The loop is the single writer
+// of ralph-loop/in_progress within a project (PID-guarded), so at startup any
+// such bead other than the genuine resume target (excludeID) is a stale claim
+// left by a prior session that crashed, was killed, or abandoned an iteration
+// without releasing the claim. These beads are invisible to `bd ready` (which
+// excludes in_progress) and — lacking open dependents — are never recovered by
+// DetectBlockedByInProgress, so without an explicit reconcile they remain
+// stranded permanently. Reopening them (status=open, assignee preserved) returns
+// them to the loop's `bd ready` inbox.
+func OrphanedLoopClaims(b Backend, excludeID string) ([]string, error) {
+	all, err := b.ListAllInProgress()
+	if err != nil {
+		return nil, err
+	}
+	var orphans []string
+	for _, task := range all {
+		if task.ID == "" || task.ID == excludeID {
+			continue
+		}
+		if task.Assignee == config.LoopAssignee {
+			orphans = append(orphans, task.ID)
+		}
+	}
+	return orphans, nil
+}
