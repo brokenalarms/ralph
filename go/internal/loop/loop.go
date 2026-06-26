@@ -563,6 +563,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Recover any loop-owned in_progress beads stranded by a prior session
+	// (crash, kill, or an abandon that did not release the claim). Without this
+	// an orphan with no open dependents is invisible to `bd ready` and never
+	// reaches detectStuckInProgress, so it stays in_progress forever.
+	l.reconcileOrphanedClaims()
+
 	if l.cfg.Evolve {
 		if h, err := l.binaryHasher.Hash(); err == nil {
 			l.startupBinaryHash = h
