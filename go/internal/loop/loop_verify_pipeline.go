@@ -273,31 +273,26 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 }
 
 // fetchVerifyDiff returns the diff and its label to feed the LLM verifier.
-// Prefers the PR diff (which covers prior iterations), then the
-// iteration-anchored diff when signalTimeHead is known (headBefore..HEAD —
-// contains the agent's work and cannot include unrelated commits that merged
-// to origin/<base> mid-iteration), then the branch diff against the merge-base
-// (origin/<base>...HEAD). The branch diff covers all commits the task branch
-// has made regardless of which iteration produced them — the right fallback
-// when signalTimeHead is not set and the iteration-local headBefore..HEAD diff
-// is empty (prior-iteration commits only). The iteration-local headBefore diff
-// is the last resort only if the branch diff is also empty. Returns empty
+// Prefers the PR diff (which covers prior iterations), then the branch diff
+// against the merge-base (origin/<base>...HEAD — three-dot, covering all
+// iterations and safe against mid-iteration merges), then the iteration-local
+// headBefore..HEAD as a last resort when DiffFromBase is empty. Returns empty
 // strings when none are available — LLMVerifyPR treats that as a no-op pass.
 func (l *Loop) fetchVerifyDiff(ctx context.Context, taskID, headBefore, signalTimeHead string) (string, string) {
 	if diff := l.git.PRDiffForTask(ctx, taskID); diff != "" {
 		return diff, "PR"
 	}
-	// When signalTimeHead is set it has already been confirmed as an ancestor
-	// of HEAD by the caller. headBefore..HEAD is anchored at the iteration
-	// start and cannot include unrelated commits from origin/<base>.
-	if signalTimeHead != "" {
-		if diff := l.git.DiffFull(headBefore, "HEAD"); diff != "" {
-			return diff, "branch"
-		}
-	}
+	// DiffFromBase is three-dot (git diff origin/<base>...HEAD): it diffs
+	// against the merge-base and excludes commits that landed on origin/<base>
+	// after the branch diverged, so it is both branch-complete and safe against
+	// mid-iteration merges. Prefer it over the iteration-local two-dot diff,
+	// which is anchored at headBefore and silently drops earlier iterations'
+	// commits for multi-iteration no-PR branches.
 	if diff := l.git.DiffFromBase(); diff != "" {
 		return diff, "branch"
 	}
+	// Last resort: iteration-local headBefore..HEAD. Used only when DiffFromBase
+	// is empty (e.g. the branch has no commits ahead of origin/<base> yet).
 	if diff := l.git.DiffFull(headBefore, "HEAD"); diff != "" {
 		return diff, "iteration"
 	}

@@ -76,20 +76,40 @@ func TestFetchVerifyDiff_AllEmpty(t *testing.T) {
 	}
 }
 
-// When signalTimeHead is set and the iteration diff is non-empty,
-// fetchVerifyDiff prefers it over DiffFromBase — it cannot include unrelated
-// commits that merged to origin/<base> mid-iteration.
+// When signalTimeHead is set and both DiffFromBase and DiffFull are non-empty,
+// fetchVerifyDiff prefers DiffFromBase (three-dot, branch-complete) over the
+// iteration-local DiffFull. DiffFromBase is safe against mid-iteration merges
+// because it uses the merge-base, and it covers all iterations' commits.
 func TestFetchVerifyDiff_SignalTimeHead_PrefersIterationDiffOverBase(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{
 		PRDiffForTaskResult: "",
-		DiffFromBaseResult:  "base-diff-with-unrelated",
-		DiffFullResult:      "agent-work-diff",
+		DiffFromBaseResult:  "full-branch-diff",
+		DiffFullResult:      "partial-iteration-diff",
 	})
 	l := newDiffTestLoop(gm)
 
 	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "signal-sha")
-	if diff != "agent-work-diff" || source != "branch" {
-		t.Fatalf("expected (agent-work-diff, branch), got (%q, %q)", diff, source)
+	if diff != "full-branch-diff" || source != "branch" {
+		t.Fatalf("expected (full-branch-diff, branch), got (%q, %q)", diff, source)
+	}
+}
+
+// Multi-iteration regression: when the final iteration commits a partial slice
+// (non-empty headBefore..HEAD), the verifier must still receive the complete
+// branch diff (origin/<base>...HEAD), not the iteration-local slice. Reproduces
+// the tabi/tabi-36jq case where test files committed in prior iterations were
+// absent from the diff fed to the verifier.
+func TestFetchVerifyDiff_MultiIterationFinalCommit_PrefersBranchDiff(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		PRDiffForTaskResult: "",                    // no PR
+		DiffFromBaseResult:  "full-branch-diff",   // all iterations' work
+		DiffFullResult:      "partial-slice-diff", // final iteration only
+	})
+	l := newDiffTestLoop(gm)
+
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "signal-sha")
+	if diff != "full-branch-diff" || source != "branch" {
+		t.Fatalf("expected (full-branch-diff, branch), got (%q, %q)", diff, source)
 	}
 }
 
