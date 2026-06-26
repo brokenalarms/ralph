@@ -441,6 +441,8 @@ type StubRepoConfig struct {
 //	gm.(git.StubInspector).GetBranchForTaskCalls()
 type StubInspector interface {
 	GetBranchForTaskCalls() int
+	GetRemoveWorktreeCalls() int
+	GetFlushUnpushedWorkCalls() int
 }
 
 // stubRepo is an unexported fake of Ops. Tests receive it only through the
@@ -460,14 +462,25 @@ type stubRepo struct {
 	prevBranch         string
 	branchRenamed      bool
 	headRev            string
-	knownPRNumber      int
-	commitSeq          int
-	branchForTaskCalls int
+	knownPRNumber          int
+	commitSeq              int
+	branchForTaskCalls     int
+	removeWorktreeCalls    int
+	flushUnpushedWorkCalls int
 }
 
 // GetBranchForTaskCalls returns the number of times BranchForTask has been
 // called. Used by tests to assert that evolve fired before branch setup.
 func (s *stubRepo) GetBranchForTaskCalls() int { return s.branchForTaskCalls }
+
+// GetRemoveWorktreeCalls returns the number of times RemoveWorktree has been
+// called. Used by tests to assert that a skipped task tears down its worktree.
+func (s *stubRepo) GetRemoveWorktreeCalls() int { return s.removeWorktreeCalls }
+
+// GetFlushUnpushedWorkCalls returns the number of times FlushUnpushedWork has
+// been called. Used by tests to assert that a skipped task's branch is not
+// flushed/auto-merged by the wait-mode safety-net.
+func (s *stubRepo) GetFlushUnpushedWorkCalls() int { return s.flushUnpushedWorkCalls }
 
 // Compile-time check that *stubRepo satisfies Ops.
 var _ Ops = (*stubRepo)(nil)
@@ -764,6 +777,7 @@ func (s *stubRepo) MergeWithRetry(_ context.Context, _ MergeRetryOpts) (bool, er
 }
 
 func (s *stubRepo) FlushUnpushedWork(_ context.Context, _, _ string, _ bool) (bool, error) {
+	s.flushUnpushedWorkCalls++
 	return s.cfg.FlushMerged, s.cfg.FlushErr
 }
 
@@ -814,8 +828,8 @@ func (s *stubRepo) Init(_ context.Context) error          { return s.cfg.InitErr
 func (s *stubRepo) InitTask(_ context.Context) error      { return s.cfg.InitErr }
 func (s *stubRepo) SetupWorktree(_ context.Context) error { return nil }
 
-// RemoveWorktree is a no-op: there is no real worktree to remove.
-func (s *stubRepo) RemoveWorktree() {}
+// RemoveWorktree records the call; there is no real worktree to remove.
+func (s *stubRepo) RemoveWorktree() { s.removeWorktreeCalls++ }
 
 // --- GitHub availability and PR listing ---
 

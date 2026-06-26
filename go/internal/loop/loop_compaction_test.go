@@ -88,4 +88,15 @@ func TestLoop_CompactingEventSkipsTask(t *testing.T) {
 	if skipReasons[0] != "compaction_detected" {
 		t.Errorf("expected skip reason 'compaction_detected', got %q", skipReasons[0])
 	}
+
+	// The skip must tear down the worktree so the agent's partial commits are
+	// abandoned. Otherwise the branch survives and the wait-mode flush safety-net
+	// (selectNextTask → FlushUnpushedWork) auto-merges unverified work to main.
+	insp, ok := gm.(git.StubInspector)
+	if !ok {
+		t.Fatal("stub git must implement StubInspector")
+	}
+	if insp.GetRemoveWorktreeCalls() == 0 {
+		t.Error("expected worktree teardown after compaction skip (RemoveWorktree), but it was never called — partial commits would survive for the flush safety-net to merge")
+	}
 }
