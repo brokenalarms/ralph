@@ -14,10 +14,11 @@ import (
 type loopAction int
 
 const (
-	actionProceed loopAction = iota // continue to next phase
-	actionRetry                     // re-run the current iteration
-	actionDone                      // exit the loop
-	actionSkip                      // task skipped by analyzer, continue to next task
+	actionProceed        loopAction = iota // continue to next phase
+	actionRetry                            // re-run the current iteration
+	actionDone                             // exit the loop
+	actionSkip                             // task skipped by analyzer, continue to next task
+	actionCompactionShip                   // compaction fired but branch has verified commits — ship them
 )
 
 // taskContext holds the selected task and metadata for one iteration.

@@ -687,6 +687,13 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed on iteration %d, continuing...", runIteration)
 	}
 	if result.Compacted {
+		baseBranch := l.git.DetectDefaultBranch()
+		if l.git.LogOneline("origin/"+baseBranch, "HEAD") != "" {
+			if passed, _ := l.verifyCompletion(ctx, headBefore); passed {
+				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Compaction detected but branch has verified commits — routing through ship pipeline")
+				return actionCompactionShip
+			}
+		}
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.Model}, "Agent triggered compaction — this indicates a context leak. Skipping task.")
 		l.skipTask(taskID, "compaction_detected")
 		return actionSkip

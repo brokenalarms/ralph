@@ -509,7 +509,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 
 	runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, runIteration)
 	if runAction != actionProceed {
-		return agentRunResult{action: runAction, agentInvoked: true}
+		return agentRunResult{action: runAction, prep: prep, result: result, agentInvoked: true}
 	}
 	elapsed := time.Since(taskStart)
 	l.limiter.Increment()
@@ -764,11 +764,30 @@ iterLoop:
 			} else {
 				l.consecutiveNoAgentIters++
 			}
+			skipSignalCheck := false
 			if agentRun.action != actionProceed {
 				if agentRun.action == actionRetry {
 					continue
 				}
-				if agentRun.action == actionSkip {
+				if agentRun.action == actionCompactionShip {
+					// Compaction fired after the agent committed verified work.
+					// Route through completeTask so the work ships normally.
+					// skipSignalCheck prevents the else-branch from reopening
+					// a task that completeTask just closed.
+					out = l.completeTask(ctx, completeTaskParams{
+						result:     agentRun.result,
+						headBefore: agentRun.prep.headBefore,
+						workDir:    agentRun.prep.workDir,
+						rawLogPath: agentRun.prep.rawLogPath,
+						diffStat:   l.git.DiffStatRange(agentRun.prep.headBefore, l.git.HeadRev()),
+						taskID:     task.id,
+						nextTask:   task.title,
+						notify:     l.cfg.Notify,
+						ralphDir:   l.cfg.Dirs.RalphDir,
+					})
+					haveOut = true
+					skipSignalCheck = true
+				} else if agentRun.action == actionSkip {
 					// A skipped task's partial commits must be abandoned, not left
 					// on the worktree branch. The flush safety-net (selectNextTask →
 					// FlushUnpushedWork) pushes and auto-merges any branch ahead of
@@ -789,12 +808,16 @@ iterLoop:
 					l.state.WriteRunBranch("")
 					currentTaskID = ""
 					continue iterLoop
+				} else {
+					break
 				}
-				break
 			}
 			consecutiveSkipCount = 0
 
-			if agentRun.result.SignalDetected {
+			if skipSignalCheck {
+				// completeTask already ran for actionCompactionShip — skip the
+				// signal-detection gate to avoid reopening the just-closed task.
+			} else if agentRun.result.SignalDetected {
 				out = l.completeTask(ctx, completeTaskParams{
 					result:     agentRun.result,
 					headBefore: agentRun.prep.headBefore,
