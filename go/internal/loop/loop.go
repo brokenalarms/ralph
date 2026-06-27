@@ -769,6 +769,15 @@ iterLoop:
 					continue
 				}
 				if agentRun.action == actionSkip {
+					// A skipped task's partial commits must be abandoned, not left
+					// on the worktree branch. The flush safety-net (selectNextTask →
+					// FlushUnpushedWork) pushes and auto-merges any branch ahead of
+					// origin/main when no ready tasks remain, with no verification
+					// gate — so a surviving skipped branch ships unverified work.
+					// Tear down here (mirroring the signalSkipped path) so the next
+					// iteration starts from a clean worktree.
+					l.teardownWorktree()
+					worktreeNeedsSetup = true
 					// Task skipped by analyzer. Track consecutive skips for cascade detection.
 					consecutiveSkipCount++
 					if consecutiveSkipCount >= 3 {
