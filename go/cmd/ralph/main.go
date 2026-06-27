@@ -165,6 +165,8 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		CopilotOpportunisticTimeout: cfg.ReviewerOpportunisticTimeout,
 		CodeRabbitTimeout:           cfg.CodeRabbitReviewTimeout,
 		AdminMergeOnCIInfraFailure:  cfg.AdminMergeOnCIInfraFailure,
+		ConfigVerify:                cfg.Verify,
+		TestTimeout:                 cfg.TestTimeout,
 	})
 
 	// Phase 4 — git pre-flight checks and worktree setup. gm.Init bundles

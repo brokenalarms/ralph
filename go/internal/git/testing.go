@@ -517,6 +517,8 @@ func NewForTest(cfg Config, ghCfg StubGitHubConfig) Ops {
 		copilotGatedTimeout:         cfg.CopilotGatedTimeout,
 		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
 		codeRabbitTimeout:           cfg.CodeRabbitTimeout,
+		configVerify:                cfg.ConfigVerify,
+		testTimeout:                 cfg.TestTimeout,
 		github:                      newStubGitHub(ghCfg),
 		state:                       newStateStore(cfg.RalphDir),
 	}

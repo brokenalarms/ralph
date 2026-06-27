@@ -1426,3 +1426,155 @@ func TestAutoMerge_AdminMergeOnCIInfraFailure_NoEffectOnRealFailure(t *testing.T
 		t.Error("PR must not be merged when CI failure is real (non-zero job steps)")
 	}
 }
+
+// When no GitHub CI checks are present after the grace period, the loop must
+// run the locally-detected test suite before merging. A failing test suite
+// blocks the merge and returns an error — unverified code must never ship.
+func TestAutoMerge_NoCIConfigured_TestsFail_BlocksMerge(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	// Return the PR's HeadSHA so the fast path is taken (skips rebase+push).
+	runner.On("rev-parse HEAD", "stub-sha-201", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 201,
+			Branch: "ralph/test/01-noci-fail",
+			Title:  "no-CI tests-fail test",
+			State:  PRStateOpen,
+		}},
+		// No Checks entry — ListChecks returns nil, simulating no CI configured.
+	})
+
+	workDir := t.TempDir()
+	repo := newRepoForTest(
+		Config{
+			ProjectDir:      workDir,
+			WorkDir:         workDir,
+			BaseBranch:      "main",
+			Logger:          discardLog{},
+			NoCIGracePeriod: 5 * time.Millisecond,
+			CIPollTimeout:   200 * time.Millisecond,
+			ConfigVerify:    "/usr/bin/false",
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-noci-fail"),
+		withKnownPRNumber(201),
+	)
+
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
+	if merged {
+		t.Error("expected merged=false when local tests fail with no CI")
+	}
+	if err == nil {
+		t.Fatal("expected error when local tests fail with no CI")
+	}
+	// The PR must remain open — failing tests must block the merge.
+	pr, _ := gh.GetPR(context.Background(), "", 201)
+	if pr == nil || pr.State != PRStateOpen {
+		t.Errorf("expected PR 201 to remain open after local test failure, got state=%v", pr.State)
+	}
+}
+
+// When no GitHub CI checks are present and no test command is detected in the
+// project, the merge is allowed — absence of tests is not treated as failure.
+func TestAutoMerge_NoCIConfigured_NoTestCommand_Merges(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("rev-parse HEAD", "stub-sha-202", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 202,
+			Branch: "ralph/test/01-noci-notests",
+			Title:  "no-CI no-tests test",
+			State:  PRStateOpen,
+		}},
+	})
+
+	// Empty temp dir: no package.json, no Makefile → DetectTestCommand returns nil.
+	workDir := t.TempDir()
+	repo := newRepoForTest(
+		Config{
+			ProjectDir:      workDir,
+			WorkDir:         workDir,
+			BaseBranch:      "main",
+			Logger:          discardLog{},
+			NoCIGracePeriod: 5 * time.Millisecond,
+			CIPollTimeout:   200 * time.Millisecond,
+			ConfigVerify:    "", // no verify command
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-noci-notests"),
+		withKnownPRNumber(202),
+	)
+
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error when no test command detected, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected PR to be merged when no CI and no test command")
+	}
+	pr, _ := gh.GetPR(context.Background(), "", 202)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 202 to be merged when no tests configured, got state=%v", pr.State)
+	}
+}
+
+// When no GitHub CI checks are present and the locally-detected test suite
+// passes, the merge proceeds normally.
+func TestAutoMerge_NoCIConfigured_TestsPass_Merges(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("rev-parse HEAD", "stub-sha-203", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 203,
+			Branch: "ralph/test/01-noci-pass",
+			Title:  "no-CI tests-pass test",
+			State:  PRStateOpen,
+		}},
+	})
+
+	workDir := t.TempDir()
+	repo := newRepoForTest(
+		Config{
+			ProjectDir:      workDir,
+			WorkDir:         workDir,
+			BaseBranch:      "main",
+			Logger:          discardLog{},
+			NoCIGracePeriod: 5 * time.Millisecond,
+			CIPollTimeout:   200 * time.Millisecond,
+			ConfigVerify:    "/usr/bin/true", // always exits 0
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-noci-pass"),
+		withKnownPRNumber(203),
+	)
+
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error when tests pass with no CI, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected PR to be merged when no CI and tests pass")
+	}
+	pr, _ := gh.GetPR(context.Background(), "", 203)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 203 to be merged when tests pass, got state=%v", pr.State)
+	}
+}

@@ -176,6 +176,8 @@ func newRepoForTest(cfg Config, gh gitHub, opts ...repoTestOpt) *repo {
 		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
 		codeRabbitTimeout:           cfg.CodeRabbitTimeout,
 		adminMergeOnCIInfraFailure:  cfg.AdminMergeOnCIInfraFailure,
+		configVerify:                cfg.ConfigVerify,
+		testTimeout:                 cfg.TestTimeout,
 		github:                      gh,
 		runner:                      tc.runner,
 		state:                       tc.state,
