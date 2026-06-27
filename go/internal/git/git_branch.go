@@ -52,7 +52,7 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 		setStackHead(ctx, r, meta.CompletedBranches)
 	}
 
-	baseRef := "origin/" + r.detectDefaultBranch()
+	baseRef := "origin/" + r.baseBranch
 	if r.prevBranch != "" {
 		baseRef = "origin/" + r.prevBranch
 	}

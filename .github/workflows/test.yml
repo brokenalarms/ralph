@@ -45,3 +45,6 @@ jobs:
 
       - name: Lint (enforces no time.Sleep in tests — see go/.golangci.yml)
         run: cd go && "$(go env GOPATH)/bin/golangci-lint" run ./...
+
+      - name: Base-branch SOT lint (single source of truth — docs/specs/architecture.md §6)
+        run: ./scripts/lint-base-branch.sh
