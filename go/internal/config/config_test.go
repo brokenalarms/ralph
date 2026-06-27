@@ -501,6 +501,67 @@ func TestLoadConfigSetsValuesFromTOML(t *testing.T) {
 	}
 }
 
+// A boolean flag set to "false" in config.toml must stay OFF. Bool flag Apply
+// funcs are presence-based (they ignore the value and set true), so the loader
+// must honor the explicit value — otherwise "key = false" enables the flag.
+// Regression: bare `ralph loop` failed with
+// "--admin-merge-on-ci-infra-failure requires --auto-merge" because
+// "admin_merge_on_ci_infra_failure = false" was read as true.
+func TestLoadConfigBoolFalseStaysOff(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("admin_merge_on_ci_infra_failure = false\nnotify = false\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+
+	if cfg.AdminMergeOnCIInfraFailure {
+		t.Error("admin_merge_on_ci_infra_failure = false must stay off")
+	}
+	if cfg.Notify {
+		t.Error("notify = false must stay off")
+	}
+}
+
+// A boolean flag set to a truthy value in config.toml must turn ON.
+func TestLoadConfigBoolTrueTurnsOn(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("admin_merge_on_ci_infra_failure = true\nnotify = true\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+
+	if !cfg.AdminMergeOnCIInfraFailure {
+		t.Error("admin_merge_on_ci_infra_failure = true must turn the flag on")
+	}
+	if !cfg.Notify {
+		t.Error("notify = true must turn the flag on")
+	}
+}
+
+// The presence-based truthy spellings (1/yes/on) must enable a value-ignoring
+// bool flag loaded from config — admin_merge uses the presence-based Apply.
+func TestLoadConfigBoolTruthySpellings(t *testing.T) {
+	for _, v := range []string{"1", "yes", "on", "TRUE"} {
+		dir := t.TempDir()
+		tomlPath := filepath.Join(dir, "config.toml")
+		os.WriteFile(tomlPath, []byte("admin_merge_on_ci_infra_failure = "+v+"\n"), 0o644)
+
+		cfg, _ := Parse(nil)
+		if err := cfg.LoadConfigFile(tomlPath); err != nil {
+			t.Fatalf("LoadConfigFile(%q): %v", v, err)
+		}
+		if !cfg.AdminMergeOnCIInfraFailure {
+			t.Errorf("admin_merge_on_ci_infra_failure = %q must turn the flag on", v)
+		}
+	}
+}
+
 // Verifies that CLI args take precedence over config file values,
 // matching bats test "CLI args override config file values".
 func TestCLIArgsOverrideConfigFile(t *testing.T) {
