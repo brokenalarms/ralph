@@ -627,6 +627,26 @@ func (r *repo) prTitle(taskID, taskDesc string) string {
 	return prTitle(taskID, taskDesc, r.worktreeBranch)
 }
 
+// runLocalTestsBeforeMerge runs the project test suite when no CI is configured,
+// gating the merge on local test results. Returns nil when tests pass or when no
+// test command is detected — absence of tests is treated as a pass, not a failure.
+func (r *repo) runLocalTestsBeforeMerge(ctx context.Context) error {
+	timeout := r.testTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	result := verify.RunTests(ctx, timeout, r.configVerify, r.workDir, r.projectDir)
+	if result.ScriptMissing {
+		r.logger.Emit(logging.Opts{Domain: logging.CI}, "No test command detected — treating as pass")
+		return nil
+	}
+	if !result.Passed {
+		return fmt.Errorf("local tests failed before merge: %s\n%s", result.Reason, result.Details)
+	}
+	r.logger.Emit(logging.Opts{Domain: logging.CI}, "Local tests passed — proceeding to merge")
+	return nil
+}
+
 // AutoMergeCurrentBranch rebases onto main, pushes, waits for CI, and
 // merges. If main moves between CI passing and the merge attempt, loops
 // back to rebase+push again. Returns typed errors (CIFailureError,
@@ -686,8 +706,13 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	// passing, skip the rebase+push cycle — no new tree to test, no push needed.
 	// This avoids the no-op push → stale pushedAt filter → infinite poll cycle.
 	if prDetail != nil && prDetail.HeadSHA != "" && prDetail.HeadSHA == r.HeadRev() {
-		_, fastStatus, _ := r.AwaitCI(ctx, prNumber, repoURL, time.Time{})
+		fastChecks, fastStatus, _ := r.AwaitCI(ctx, prNumber, repoURL, time.Time{})
 		if fastStatus == CIPassed {
+			if len(fastChecks) == 0 {
+				if localErr := r.runLocalTestsBeforeMerge(ctx); localErr != nil {
+					return false, localErr
+				}
+			}
 			r.logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI already passing on %s — merging", prDetail.HeadSHA)
 			return r.executeMerge(ctx, prNumber, repoURL)
 		}
@@ -736,6 +761,11 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
 	if status == CIPassed {
+		if len(checks) == 0 {
+			if localErr := r.runLocalTestsBeforeMerge(ctx); localErr != nil {
+				return false, localErr
+			}
+		}
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI passed — merging")
 	}
 

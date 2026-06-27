@@ -47,6 +47,8 @@ type Config struct {
 	CopilotOpportunisticTimeout time.Duration
 	CodeRabbitTimeout           time.Duration
 	AdminMergeOnCIInfraFailure  bool
+	ConfigVerify                string
+	TestTimeout                 time.Duration
 }
 
 // repo implements Ops. Constructed by New(); tests in the git package
@@ -79,6 +81,8 @@ type repo struct {
 	copilotOpportunisticTimeout time.Duration
 	codeRabbitTimeout           time.Duration
 	adminMergeOnCIInfraFailure  bool
+	configVerify                string
+	testTimeout                 time.Duration
 }
 
 // New creates a git module from data-only Config. Constructs all internal
@@ -103,6 +107,8 @@ func New(cfg Config) Ops {
 		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
 		codeRabbitTimeout:           cfg.CodeRabbitTimeout,
 		adminMergeOnCIInfraFailure:  cfg.AdminMergeOnCIInfraFailure,
+		configVerify:                cfg.ConfigVerify,
+		testTimeout:                 cfg.TestTimeout,
 		github: &ghCLI{
 			logger:                      cfg.Logger,
 			CopilotGatedTimeout:         cfg.CopilotGatedTimeout,
