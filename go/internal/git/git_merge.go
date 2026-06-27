@@ -31,7 +31,7 @@ func (r *repo) resolveBaseBranch() string {
 	if r.prevBranch != "" {
 		return r.prevBranch
 	}
-	return r.detectDefaultBranch()
+	return r.baseBranch
 }
 
 // assertValidBase returns an error when base is not the configured BaseBranch
@@ -553,7 +553,7 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	}
 
 	// Check if stacked (PR targets non-default branch — merge skipped).
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	prDetail, _ := gh.GetPR(ctx, nwo, result.PRNumber)
 	prBase := ""
 	if prDetail != nil {
@@ -688,7 +688,7 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	}
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 
 	prDetail, _ := gh.GetPR(ctx, nwo, prNumber)
 	prBase := ""
@@ -934,7 +934,7 @@ func (r *repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (
 		RepoURL:        repoURL,
 		WorktreeBranch: r.worktreeBranch,
 		WorkDir:        r.workDir,
-		DefaultBranch:  r.detectDefaultBranch(),
+		DefaultBranch:  r.baseBranch,
 		MergeOpts:      r.mergeOpts(),
 		AwaitCI:        r.AwaitCI,
 	}, r.logger)
@@ -960,7 +960,7 @@ func (r *repo) executeMergeWithAdminOverride(ctx context.Context, prNumber int, 
 		RepoURL:        repoURL,
 		WorktreeBranch: r.worktreeBranch,
 		WorkDir:        r.workDir,
-		DefaultBranch:  r.detectDefaultBranch(),
+		DefaultBranch:  r.baseBranch,
 		MergeOpts:      opts,
 		AwaitCI:        r.AwaitCI,
 	}, r.logger)
@@ -1248,7 +1248,7 @@ func (r *repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, a
 		} else {
 			// origin/<branch> absent (e.g. deleted after squash-merge). Bail if
 			// HEAD has no commits ahead of origin/main — nothing left to flush.
-			defaultBranch := r.detectDefaultBranch()
+			defaultBranch := r.baseBranch
 			mainRef := "origin/" + defaultBranch
 			count := strings.TrimSpace(r.gitOutput(r.workDir, "rev-list", mainRef+"..HEAD", "--count"))
 			if count == "0" {
@@ -1276,7 +1276,7 @@ func (r *repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, a
 // after a PR merge, then moves the worktree to the placeholder branch and
 // deletes the stale task branch. It does not modify the ProjectDir checkout.
 func (r *repo) PostMergeUpdateMain() {
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	r.gitCmd(r.projectDir, "fetch", "origin", defaultBranch)
 
 	// Sync worktree with updated main. If rebase conflicts, reset —

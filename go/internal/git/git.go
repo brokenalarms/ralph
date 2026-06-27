@@ -233,7 +233,7 @@ func (r *repo) SetupWorktree(ctx context.Context) error {
 		_ = r.gitCmdErr(r.projectDir, "branch", "-D", r.worktreeBranch)
 	}
 
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", defaultBranch)
 
 	if !r.refExists(r.projectDir, "origin/"+defaultBranch) &&
@@ -366,7 +366,7 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 		}
 	}
 
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", defaultBranch)
 
 	if !r.refExists(r.projectDir, "origin/"+defaultBranch) &&
@@ -494,7 +494,7 @@ func (r *repo) validateStackParent(ctx context.Context) {
 	// (1) Confirm the remote branch still exists by fetching it.
 	if err := r.FetchBranch(parent); err != nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git},
-			"Stack parent %s no longer on remote — falling back to %s", parent, r.detectDefaultBranch())
+			"Stack parent %s no longer on remote — falling back to %s", parent, r.baseBranch)
 		r.SetPrevBranch("")
 		return
 	}
@@ -503,7 +503,7 @@ func (r *repo) validateStackParent(ctx context.Context) {
 	// via a regular merge — the branch is redundant as a stack parent.
 	if r.BranchIsAncestorOfMain(parent) {
 		r.logger.Emit(logging.Opts{Domain: logging.Git},
-			"Stack parent %s has landed on main — falling back to %s", parent, r.detectDefaultBranch())
+			"Stack parent %s has landed on main — falling back to %s", parent, r.baseBranch)
 		r.SetPrevBranch("")
 		return
 	}
@@ -523,7 +523,7 @@ func (r *repo) validateStackParent(ctx context.Context) {
 		}
 	}
 	r.logger.Emit(logging.Opts{Domain: logging.Git},
-		"Stack parent %s has no open PR — falling back to %s", parent, r.detectDefaultBranch())
+		"Stack parent %s has no open PR — falling back to %s", parent, r.baseBranch)
 	r.SetPrevBranch("")
 }
 
@@ -537,7 +537,7 @@ func (r *repo) EnsureUpToDate(ctx context.Context) error {
 	r.validateStackParent(ctx)
 
 	// Rebase onto stack head if set, otherwise the default branch.
-	baseBranch := r.detectDefaultBranch()
+	baseBranch := r.baseBranch
 	if r.prevBranch != "" {
 		baseBranch = r.prevBranch
 	}
@@ -550,7 +550,7 @@ func (r *repo) EnsureUpToDate(ctx context.Context) error {
 			// Stack head branch missing from remote — likely merged and deleted.
 			// Fall back to the default branch silently.
 			r.SetPrevBranch("")
-			baseBranch = r.detectDefaultBranch()
+			baseBranch = r.baseBranch
 			if err2 := r.gitCmdErrCtx(ctx, r.workDir, "fetch", "origin", baseBranch); err2 != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -678,7 +678,7 @@ func (r *repo) RenameBranchTo(name string) {
 // can rebase them safely — preserving work across loop restarts.
 // No-ops silently when the worktree is already at the target ref.
 func (r *repo) ResetToDefaultBranch() {
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	_ = r.gitCmdErr(r.workDir, "fetch", "origin", defaultBranch)
 	target := "origin/" + defaultBranch
 	if !r.refExists(r.workDir, target) {
@@ -711,7 +711,7 @@ func (r *repo) ResetToDefaultBranch() {
 // local commits are known ghosts from a drained stack and must be discarded,
 // not preserved. All other callers must use ResetToDefaultBranch.
 func (r *repo) forceResetToDefaultBranch() {
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	_ = r.gitCmdErr(r.workDir, "fetch", "origin", defaultBranch)
 	target := "origin/" + defaultBranch
 	if !r.refExists(r.workDir, target) {
@@ -759,7 +759,7 @@ func (r *repo) SetPrevBranch(branch string) {
 // ignores the upstream-tracking config (which is preserved across renames and
 // gives false negatives when a task branch inherits origin/main as upstream).
 func (r *repo) branchSafeToDelete(branch string) bool {
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	for _, ref := range []string{"origin/" + defaultBranch, defaultBranch} {
 		if !r.refExists(r.projectDir, ref) {
 			continue
@@ -846,7 +846,7 @@ func (r *repo) PrepareForNextTask(nextTaskID, baseRef string) {
 				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", oldBranch)
 			}
 		} else {
-			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Preserving local branch %s — unmerged commits ahead of %s", oldBranch, r.detectDefaultBranch())
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Preserving local branch %s — unmerged commits ahead of %s", oldBranch, r.baseBranch)
 		}
 	}
 }

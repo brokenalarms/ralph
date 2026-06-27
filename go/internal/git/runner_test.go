@@ -84,27 +84,57 @@ func TestManager_UsesInjectedRunner(t *testing.T) {
 	}
 }
 
-// detectDefaultBranch returns BaseBranch directly — no git calls, no fallback.
+// DetectDefaultBranch returns BaseBranch directly — no git calls, no fallback.
 func TestManager_DetectDefaultBranch_ReturnsBaseBranch(t *testing.T) {
 	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
 		nil,
 	)
-	branch := repo.detectDefaultBranch()
+	branch := repo.DetectDefaultBranch()
 	if branch != "main" {
 		t.Errorf("expected main, got %q", branch)
 	}
 }
 
-// detectDefaultBranch with BaseBranch: "develop" returns "develop".
+// DetectDefaultBranch with BaseBranch: "develop" returns "develop".
 func TestManager_DetectDefaultBranch_ExplicitDevelop(t *testing.T) {
 	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "develop", Logger: discardLog{}},
 		nil,
 	)
-	branch := repo.detectDefaultBranch()
+	branch := repo.DetectDefaultBranch()
 	if branch != "develop" {
 		t.Errorf("expected develop, got %q", branch)
+	}
+}
+
+// DiffFromBase (the verifier's no-PR diff source) must build its range from the
+// configured base branch, NOT from a re-derivation of origin/HEAD. This is the
+// regression that fed the verifier origin/develop...HEAD on a main-based loop —
+// a 500-file garbage diff that false-rejected completed work into stagnation.
+func TestDiffFromBase_UsesConfiguredBase_NotOriginHEAD(t *testing.T) {
+	r := newStubRunner()
+	// Simulate a repo whose remote default (origin/HEAD) is "develop" while the
+	// loop is configured to operate on "main".
+	r.On("symbolic-ref --short refs/remotes/origin/HEAD", "origin/develop", nil)
+
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		nil,
+		withRunner(r),
+	)
+	repo.workDir = t.TempDir()
+
+	_ = repo.DiffFromBase()
+
+	if !r.CalledWith("diff", "origin/main...HEAD") {
+		t.Errorf("DiffFromBase must diff against the configured base (origin/main...HEAD); calls: %v", r.Called())
+	}
+	if r.CalledWith("diff", "origin/develop...HEAD") {
+		t.Error("DiffFromBase must NOT use origin/develop (the re-derived remote default) — that is the stagnation regression")
+	}
+	if r.CalledWith("symbolic-ref", "--short", "refs/remotes/origin/HEAD") {
+		t.Error("DiffFromBase must not re-derive the base via symbolic-ref origin/HEAD")
 	}
 }
 

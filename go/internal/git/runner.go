@@ -101,13 +101,11 @@ func (r *repo) refExists(dir, ref string) bool {
 	return r.gitCmdErr(dir, "rev-parse", "--verify", ref) == nil
 }
 
-// DetectDefaultBranch returns the resolved default branch name.
+// DetectDefaultBranch returns the configured base branch. The base is the
+// single source of truth: resolved once at startup into cfg.BaseBranch,
+// threaded into git.New as r.baseBranch, and never re-derived from git.
 func (r *repo) DetectDefaultBranch() string {
-	return r.detectDefaultBranch()
-}
-
-func (r *repo) detectDefaultBranch() string {
-	return detectDefaultBranch(r.projectDir, r.baseBranch, r.run())
+	return r.baseBranch
 }
 
 // OriginRev returns the commit hash of origin/<branch>.
@@ -157,7 +155,7 @@ func (r *repo) LocalBranchHasCommits(branch string) bool {
 	if !r.refExists(r.workDir, "refs/heads/"+branch) {
 		return false
 	}
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	count := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+defaultBranch+".."+branch)
 	return count != "" && count != "0"
 }
@@ -202,7 +200,7 @@ func (r *repo) RemoteBranchHasCommits(branch string) bool {
 	if !r.refExists(r.workDir, remote) {
 		return false
 	}
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	count := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+defaultBranch+".."+remote)
 	return count != "" && count != "0"
 }
@@ -211,7 +209,7 @@ func (r *repo) RemoteBranchHasCommits(branch string) bool {
 // origin's default branch (i.e., main is an ancestor). Returns false if the
 // branch has diverged — caller should treat it as stale and start fresh.
 func (r *repo) RemoteBranchIsOnMain(branch string) bool {
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	remote := "origin/" + branch
 
 	// Main is ancestor of branch — branch is cleanly ahead.
@@ -231,7 +229,7 @@ func (r *repo) RemoteBranchIsOnMain(branch string) bool {
 // ancestor of origin's default branch — meaning its work has already
 // landed on main (via merge or squash-merge).
 func (r *repo) BranchIsAncestorOfMain(branch string) bool {
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	remote := "origin/" + branch
 	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil
 }
@@ -246,7 +244,7 @@ func (r *repo) IsCommitAncestorOf(sha, ref string) bool {
 // of main with unmerged work. Returns false for landed branches (equal
 // to or behind main) and diverged branches (neither is ancestor).
 func (r *repo) BranchIsAheadOfMain(branch string) bool {
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	remote := "origin/" + branch
 	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, remote) == nil
 }
@@ -258,7 +256,7 @@ func (r *repo) BranchIsAheadOfMain(branch string) bool {
 // main AND main has commits not on branch). Use this in Ship to avoid
 // skipping PR creation for diverged branches with real unmerged work.
 func (r *repo) BranchHasUnmergedWork(branch string) bool {
-	defaultBranch := r.detectDefaultBranch()
+	defaultBranch := r.baseBranch
 	out := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+defaultBranch+"..origin/"+branch)
 	return strings.TrimSpace(out) != "0" && strings.TrimSpace(out) != ""
 }
@@ -296,11 +294,4 @@ func parseWorktreeForBranch(porcelainOutput, branch string) string {
 		}
 	}
 	return ""
-}
-
-// detectDefaultBranch returns the configured base branch.
-// BaseBranch is always set after config parsing (--base-branch defaults to "develop"),
-// so no fallback to git symbolic-ref or hardcoded values is needed.
-func detectDefaultBranch(_, override string, _ ...Runner) string {
-	return override
 }

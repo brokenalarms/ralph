@@ -186,7 +186,7 @@ func (r *repo) DiffFull(from, to string) string {
 // made relative to the base regardless of which iteration produced it — the
 // same coverage a PR diff gives. Used by the verifier when no PR exists yet.
 func (r *repo) DiffFromBase() string {
-	remote := "origin/" + r.detectDefaultBranch()
+	remote := "origin/" + r.baseBranch
 	return r.gitOutput(r.workDir, "diff", remote+"...HEAD")
 }
 
@@ -194,7 +194,7 @@ func (r *repo) DiffFromBase() string {
 // branch (or the default branch), showing what diverges. Used to give a
 // conflict resolution agent context about the conflicting changes.
 func (r *repo) ConflictDiff() string {
-	baseBranch := r.detectDefaultBranch()
+	baseBranch := r.baseBranch
 	if r.prevBranch != "" {
 		baseBranch = r.prevBranch
 	}
@@ -216,7 +216,7 @@ func (r *repo) RecentChangedFiles(n int) string {
 }
 
 func (r *repo) ValidateRemoteBranch(ctx context.Context) error {
-	branch := r.detectDefaultBranch()
+	branch := r.baseBranch
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
 	if !r.refExists(r.projectDir, "origin/"+branch) {
 		return fmt.Errorf("base branch %q does not exist on remote — create it or set --base-branch", branch)
