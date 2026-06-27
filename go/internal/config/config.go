@@ -246,6 +246,21 @@ func (c *Config) CLISet(key string) bool {
 	return c.cliSet[key]
 }
 
+// BaseBranchSource reports where the resolved base branch came from, for
+// startup diagnostics. Call after LoadConfigFile. A CLI flag always wins, so it
+// is reported first; otherwise the value came from the environment or the
+// config file (config.toml takes precedence over the env var when both are set,
+// since LoadConfigFile runs after Defaults applies the env var).
+func (c *Config) BaseBranchSource() string {
+	if c.CLISet("base_branch") {
+		return "--base-branch flag"
+	}
+	if os.Getenv("RALPH_BASE_BRANCH") != "" {
+		return "RALPH_BASE_BRANCH env"
+	}
+	return "config.toml"
+}
+
 // ErrHelp is returned when -h/--help is passed.
 var ErrHelp = fmt.Errorf("help requested")
 

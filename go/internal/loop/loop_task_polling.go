@@ -83,6 +83,11 @@ func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxI
 		l.logger.DashedSeparator(logging.Yellow)
 	}
 
+	baseBranch := ""
+	if l.git != nil {
+		baseBranch = l.git.DetectDefaultBranch()
+	}
+
 	l.logger.IterationBanner(logging.BannerOpts{
 		RunIteration: runIteration,
 		MaxIteration: maxIter,
@@ -94,6 +99,7 @@ func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxI
 		TaskChanged:  task.changed,
 		Priority:     task.info.Priority,
 		Version:      p.version,
+		BaseBranch:   baseBranch,
 		WarnPhase:    lastAction == analyzer.Warn,
 		Description:  l.taskDescription(task.id),
 	})

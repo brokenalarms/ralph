@@ -289,6 +289,7 @@ func (l *Loop) fetchVerifyDiff(ctx context.Context, taskID, headBefore, signalTi
 	// which is anchored at headBefore and silently drops earlier iterations'
 	// commits for multi-iteration no-PR branches.
 	if diff := l.git.DiffFromBase(); diff != "" {
+		l.logger.Emit(logging.Opts{Domain: logging.Test}, "Verify diff: origin/%s...HEAD in %s (branch)", l.git.DetectDefaultBranch(), l.git.GetWorkDir())
 		return diff, "branch"
 	}
 	// Last resort: iteration-local headBefore..HEAD. Used only when DiffFromBase
