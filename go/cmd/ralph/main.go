@@ -138,6 +138,12 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	defer logFileWriter.Close()
 	log = logging.New(logFileWriter)
 
+	// Surface the resolved base branch and its source. The base is the anchor
+	// for every rebase, PR target, and verify diff; when it silently resolves to
+	// the wrong branch the verifier is fed a garbage diff and stagnates, so make
+	// it visible at startup (the per-iteration banner repeats it).
+	log.Emit(logging.Opts{Domain: logging.Git}, "Base branch: %s (source: %s)", cfg.BaseBranch, cfg.BaseBranchSource())
+
 	backend, err := initTaskBackend(cfg, promptsDir, ralphDir, log)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Task backend init failed: %v", err)

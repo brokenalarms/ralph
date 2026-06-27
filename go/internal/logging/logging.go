@@ -369,6 +369,7 @@ type BannerOpts struct {
 	TaskChanged  bool
 	Priority     *int
 	Version      string
+	BaseBranch   string
 	WarnPhase    bool
 	Description  string
 }
@@ -387,8 +388,12 @@ func (l *Logger) IterationBanner(o BannerOpts) {
 	if o.Version != "" {
 		versionTag = fmt.Sprintf(" | Ralph v%s", o.Version)
 	}
-	l.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
-		o.RunIteration, o.MaxIteration, o.Lifetime, o.Completed, o.Total, versionTag)
+	baseTag := ""
+	if o.BaseBranch != "" {
+		baseTag = fmt.Sprintf(" | base: %s", o.BaseBranch)
+	}
+	l.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s%s ---",
+		o.RunIteration, o.MaxIteration, o.Lifetime, o.Completed, o.Total, versionTag, baseTag)
 
 	if o.Description != "" {
 		l.EmitDescription(o.Description)
