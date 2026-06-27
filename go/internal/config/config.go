@@ -270,6 +270,19 @@ func parseDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
+// configBoolTrue reports whether a config-file value for a boolean flag should
+// enable it. Bool flag Apply funcs are presence-based (value-ignoring), so the
+// loader must interpret the explicit config value itself. Anything not clearly
+// truthy — including "false", "0", and "" — leaves the flag at its default.
+func configBoolTrue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // LoadConfigFile reads a TOML-like config file (key = value per line) and
 // applies values to the Config using the Flags registry. CLI-set values
 // (tracked via cliSet) take precedence and are not overwritten.
@@ -310,6 +323,14 @@ func (c *Config) LoadConfigFile(path string) error {
 
 		fd := configMap[key]
 		if fd == nil {
+			continue
+		}
+		// Boolean flags use presence-based Apply: it ignores the value and sets
+		// the field true, matching the CLI where the flag's mere presence means
+		// true. In a config file the value is explicit, so honor it — a falsy
+		// value must leave the flag at its default (off), not enable it. Without
+		// this guard, "key = false" calls Apply(c, "false") and turns the flag on.
+		if fd.Kind == KindBool && !configBoolTrue(value) {
 			continue
 		}
 		_ = fd.Apply(c, value)
