@@ -757,147 +757,33 @@ func TestListOpenPRBranches_Paginates(t *testing.T) {
 	}
 }
 
-// SearchPR forces GET so gh api sends -f fields as URL query parameters instead
-// of a POST body. The search/issues endpoint is GET-only: POST returns HTTP 404.
-// The query uses space-separated qualifiers so gh's URL-encoding produces valid
-// GitHub search syntax ('+' would be percent-encoded to %2B and break parsing).
-func TestSearchPR_ForcesGETAndSpaceSeparatedQuery(t *testing.T) {
-	bin := t.TempDir()
-	logFile := filepath.Join(bin, "gh.log")
-	gitPath := filepath.Join(bin, "git")
-	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
-	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ghPath := filepath.Join(bin, "gh")
-	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '42'\n"
-	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-
-	g := &ghCLI{}
-	_, err := g.SearchPR(context.Background(), bin, "my-task-id")
-	if err != nil {
-		t.Fatalf("SearchPR returned error: %v", err)
-	}
-
-	raw, _ := os.ReadFile(logFile)
-	invocation := string(raw)
-
-	if !strings.Contains(invocation, "--method GET") && !strings.Contains(invocation, "-X GET") {
-		t.Errorf("SearchPR must force GET method (--method GET or -X GET), got: %q", invocation)
-	}
-	if strings.Contains(invocation, "my-task-id+repo:") {
-		t.Errorf("SearchPR must not use '+'-joined qualifiers in q= value (breaks under GET encoding), got: %q", invocation)
-	}
-	if !strings.Contains(invocation, "my-task-id repo:owner/repo type:pr") {
-		t.Errorf("SearchPR must use space-separated qualifiers in q= value, got: %q", invocation)
-	}
-}
-
-// PRDiffForTask returns a non-empty diff when SearchPR finds a matching PR,
-// proving fetchVerifyDiff can select the PR diff branch on resumed tasks.
-func TestPRDiffForTask_ReturnsDiffWhenPRFound(t *testing.T) {
+// PRDiffForRef resolves the PR from the EXACT external-ref stored on the task
+// (a PR URL like ".../pull/715" or "gh-715") and returns its diff. There is no
+// GitHub search: identity is a 1:1 pointer, so it can never resolve to a
+// different task's PR. A ref that does not resolve to a PR number returns "",
+// letting the verify pipeline fall through to the local branch diff. Regression
+// guard for the tabi-q35a stagnation, where a fuzzy task-ID search returned a
+// dependency's PR and the verifier was fed the wrong diff until the loop halted.
+func TestPRDiffForRef_ResolvesExactPRFromRef(t *testing.T) {
 	gh := newStubGitHub(StubGitHubConfig{
-		Available:      true,
-		SearchPRResult: 42,
-		PRDiffOutput:   "diff --git a/file.go b/file.go\n+added line",
+		Available:    true,
+		PRDiffOutput: "diff --git a/file.go b/file.go\n+added line",
 	})
 	repo := newRepoForTest(Config{BaseBranch: "main"}, gh)
 
-	diff := repo.PRDiffForTask(context.Background(), "my-task-id")
-	if diff == "" {
-		t.Error("PRDiffForTask must return a non-empty diff when SearchPR finds a matching PR")
-	}
+	diff := repo.PRDiffForRef(context.Background(), "https://github.com/owner/repo/pull/715")
 	if !strings.Contains(diff, "+added line") {
-		t.Errorf("PRDiffForTask returned unexpected diff: %q", diff)
-	}
-}
-
-// SearchPR uses gh api search/issues instead of gh pr list --search,
-// finding a PR by task ID and returning its number.
-func TestSearchPR_UsesGhAPI(t *testing.T) {
-	bin := t.TempDir()
-	logFile := filepath.Join(bin, "gh.log")
-	gitPath := filepath.Join(bin, "git")
-	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
-	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ghPath := filepath.Join(bin, "gh")
-	// The fake gh binary returns the number as if --jq ".items[0].number // empty" ran.
-	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '42'\n"
-	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-
-	g := &ghCLI{}
-	prNumber, err := g.SearchPR(context.Background(), bin, "my-task-id")
-	if err != nil {
-		t.Fatalf("SearchPR returned error: %v", err)
-	}
-	if prNumber != 42 {
-		t.Errorf("expected PR number 42, got %d", prNumber)
+		t.Errorf("PRDiffForRef must return the PR diff for a valid ref, got: %q", diff)
 	}
 
-	raw, _ := os.ReadFile(logFile)
-	invocation := string(raw)
-	if strings.Contains(invocation, "pr list") {
-		t.Errorf("SearchPR must not use 'gh pr list', got: %q", invocation)
+	if got := repo.PRDiffForRef(context.Background(), "gh-715"); !strings.Contains(got, "+added line") {
+		t.Errorf("PRDiffForRef must accept the gh-<n> ref form, got: %q", got)
 	}
-	if !strings.Contains(invocation, "api") {
-		t.Errorf("expected 'gh api' invocation, got: %q", invocation)
+	if got := repo.PRDiffForRef(context.Background(), ""); got != "" {
+		t.Errorf("PRDiffForRef must return empty for an empty ref, got: %q", got)
 	}
-	if !strings.Contains(invocation, "search/issues") {
-		t.Errorf("expected search/issues endpoint, got: %q", invocation)
-	}
-	if !strings.Contains(invocation, "my-task-id") {
-		t.Errorf("expected query in args, got: %q", invocation)
-	}
-}
-
-// SearchPR must not blindly take .items[0] from GitHub's full-text search:
-// search/issues matches PR titles, bodies, and comments and tokenizes a
-// hyphenated task ID, so the first hit can be an unrelated PR that merely
-// mentions the task. The jq must select the first item whose TITLE literally
-// contains the task ID, so only this task's own "[<taskID>] …" PR matches and a
-// task with no PR returns 0 (letting the verify pipeline use the branch diff).
-// Regression guard for the tabi-q35a stagnation: a dependency PR's diff was fed
-// to the verifier, which rejected correct committed work three times per
-// iteration until the loop halted on stagnation.
-func TestSearchPR_MatchesExactTitleNotFirstFuzzyHit(t *testing.T) {
-	bin := t.TempDir()
-	logFile := filepath.Join(bin, "gh.log")
-	gitPath := filepath.Join(bin, "git")
-	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
-	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ghPath := filepath.Join(bin, "gh")
-	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '42'\n"
-	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-
-	g := &ghCLI{}
-	if _, err := g.SearchPR(context.Background(), bin, "tabi-q35a"); err != nil {
-		t.Fatalf("SearchPR returned error: %v", err)
-	}
-
-	raw, _ := os.ReadFile(logFile)
-	invocation := string(raw)
-
-	if strings.Contains(invocation, ".items[0].number") {
-		t.Errorf("SearchPR must not take the first fuzzy hit (.items[0]); it can be an unrelated PR. Got: %q", invocation)
-	}
-	if !strings.Contains(invocation, "select(.title | contains(") {
-		t.Errorf("SearchPR jq must guard on the PR title containing the task ID, got: %q", invocation)
-	}
-	if !strings.Contains(invocation, `contains("tabi-q35a")`) {
-		t.Errorf("SearchPR jq title guard must use the literal task ID, got: %q", invocation)
+	if got := repo.PRDiffForRef(context.Background(), "not-a-pr-ref"); got != "" {
+		t.Errorf("PRDiffForRef must return empty when the ref has no PR number, got: %q", got)
 	}
 }
 

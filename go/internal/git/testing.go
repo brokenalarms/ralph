@@ -60,7 +60,6 @@ type StubGitHubConfig struct {
 	PollReviewResult *AutoReview
 	FetchThreadIDs   map[int]string
 	PRDiffOutput     string
-	SearchPRResult   int
 
 	// Fault injection — single error per method.
 	CreatePRErr           error
@@ -74,7 +73,6 @@ type StubGitHubConfig struct {
 	GetPRErr              error
 	ListAllPRsErr         error
 	ListOpenPRBranchesErr error
-	SearchPRErr           error
 	PRDiffErr             error
 	GetJobStepCountErr    error
 	DetectReviewersErr    error
@@ -229,10 +227,6 @@ func (s *stubGitHub) FindPR(_ context.Context, branch, _ string) (int, string, s
 		}
 	}
 	return 0, "", "", nil
-}
-
-func (s *stubGitHub) SearchPR(_ context.Context, _, _ string) (int, error) {
-	return s.cfg.SearchPRResult, s.cfg.SearchPRErr
 }
 
 func (s *stubGitHub) PRDiff(_ context.Context, _ string, _ int) (string, error) {
@@ -430,8 +424,8 @@ type StubRepoConfig struct {
 	PRChainHealthy    bool
 	PRChainHealthyMsg string
 
-	// PRDiffForTaskResult is returned by PRDiffForTask.
-	PRDiffForTaskResult string
+	// PRDiffForRefResult is returned by PRDiffForRef.
+	PRDiffForRefResult string
 }
 
 // StubInspector exposes internal call counters on the test stub so loop-level
@@ -609,8 +603,8 @@ func (s *stubRepo) PRChainIsHealthy(_ context.Context, prNumber int) (bool, stri
 	return true, ""
 }
 
-func (s *stubRepo) PRDiffForTask(ctx context.Context, taskID string) string {
-	return s.cfg.PRDiffForTaskResult
+func (s *stubRepo) PRDiffForRef(ctx context.Context, externalRef string) string {
+	return s.cfg.PRDiffForRefResult
 }
 
 // --- Diff and status queries ---
