@@ -858,6 +858,49 @@ func TestSearchPR_UsesGhAPI(t *testing.T) {
 	}
 }
 
+// SearchPR must not blindly take .items[0] from GitHub's full-text search:
+// search/issues matches PR titles, bodies, and comments and tokenizes a
+// hyphenated task ID, so the first hit can be an unrelated PR that merely
+// mentions the task. The jq must select the first item whose TITLE literally
+// contains the task ID, so only this task's own "[<taskID>] …" PR matches and a
+// task with no PR returns 0 (letting the verify pipeline use the branch diff).
+// Regression guard for the tabi-q35a stagnation: a dependency PR's diff was fed
+// to the verifier, which rejected correct committed work three times per
+// iteration until the loop halted on stagnation.
+func TestSearchPR_MatchesExactTitleNotFirstFuzzyHit(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	gitPath := filepath.Join(bin, "git")
+	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ghPath := filepath.Join(bin, "gh")
+	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '42'\n"
+	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	if _, err := g.SearchPR(context.Background(), bin, "tabi-q35a"); err != nil {
+		t.Fatalf("SearchPR returned error: %v", err)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+
+	if strings.Contains(invocation, ".items[0].number") {
+		t.Errorf("SearchPR must not take the first fuzzy hit (.items[0]); it can be an unrelated PR. Got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "select(.title | contains(") {
+		t.Errorf("SearchPR jq must guard on the PR title containing the task ID, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, `contains("tabi-q35a")`) {
+		t.Errorf("SearchPR jq title guard must use the literal task ID, got: %q", invocation)
+	}
+}
+
 // PollReview returns nil without error when the timeout expires and no review
 // from the given bot username has arrived, so the loop proceeds to merge.
 func TestPollReview_Timeout_ReturnsNil(t *testing.T) {

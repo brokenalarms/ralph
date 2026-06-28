@@ -793,7 +793,20 @@ func (g *ghCLI) SearchPR(ctx context.Context, workDir, query string) (int, error
 		return 0, fmt.Errorf("cannot determine owner/repo from remote URL")
 	}
 	q := fmt.Sprintf("%s repo:%s type:pr", query, nwo)
-	out, err := g.runGHCmd(ctx, []string{"api", "--method", "GET", "search/issues", "-f", "q=" + q, "--jq", ".items[0].number // empty"})
+	// GitHub's search/issues is a full-text, token-based search over PR titles,
+	// bodies, AND comments — it does not anchor on the literal query. A hyphenated
+	// task ID like "tabi-q35a" tokenizes to "tabi" + "q35a", so a bare ".items[0]"
+	// pick can return an unrelated PR that merely mentions the task (e.g. a
+	// dependency PR whose body references it) or shares the "tabi" token. When the
+	// task has no PR of its own, that wrong PR's diff is then fed to the verifier,
+	// which correctly rejects it (the diff lacks this task's work) and the loop
+	// stagnates on otherwise-correct, committed work. Guard against this by
+	// selecting the first item whose TITLE literally contains the task ID — ralph
+	// titles every task PR "[<taskID>] <summary>", so only this task's own PR
+	// matches. No match → 0, and the verify pipeline falls through to the
+	// always-correct branch diff (origin/<base>...HEAD).
+	jq := fmt.Sprintf("[.items[] | select(.title | contains(%q)) | .number] | first // empty", query)
+	out, err := g.runGHCmd(ctx, []string{"api", "--method", "GET", "search/issues", "-f", "q=" + q, "--jq", jq})
 	if err != nil {
 		return 0, fmt.Errorf("gh api search failed: %w", err)
 	}
