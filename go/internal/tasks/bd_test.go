@@ -1253,8 +1253,8 @@ func TestBD_GetNextTask_NoBDListCalls(t *testing.T) {
 	}
 }
 
-// Proves: when resumeTaskID is set and the task is still in_progress, it is
-// returned directly without falling through to bd ready.
+// Proves: when resumeTaskID is set and the task is still in_progress and unblocked,
+// it is returned directly without falling through to bd ready.
 func TestBD_GetNextTaskInfo_ResumesLastTaskID(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
@@ -1264,6 +1264,10 @@ func TestBD_GetNextTaskInfo_ResumesLastTaskID(t *testing.T) {
 		case "show":
 			if len(args) >= 2 && args[1] == "ralph-resume" {
 				return `[{"id":"ralph-resume","title":"Resumed task","priority":1,"status":"in_progress","type":"bug"}]`, nil
+			}
+		case "blocked":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[]`, nil
 			}
 		case "ready":
 			if strings.Contains(strings.Join(args, " "), "--json") {
@@ -1291,6 +1295,7 @@ func TestBD_GetNextTaskInfo_ResumesLastTaskID(t *testing.T) {
 // NOT resume it — it falls through to bd ready so the prerequisite is selected
 // first. Guards against a stale current_task_id resuming a dependent task ahead
 // of its prerequisite (e.g. tabi-huv8 resumed while tabi-l0cy was reopened).
+// IsReady now uses bd blocked --json (status-agnostic) to check blocked state.
 func TestBD_GetNextTaskInfo_BlockedResumeTaskFallsThrough(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
@@ -1299,7 +1304,12 @@ func TestBD_GetNextTaskInfo_BlockedResumeTaskFallsThrough(t *testing.T) {
 		switch args[0] {
 		case "show":
 			if len(args) >= 2 && args[1] == "ralph-huv8" {
-				return `[{"id":"ralph-huv8","title":"Dependent task","priority":2,"status":"in_progress","type":"task","blocked_by":[{"status":"open"}]}]`, nil
+				return `[{"id":"ralph-huv8","title":"Dependent task","priority":2,"status":"in_progress","type":"task"}]`, nil
+			}
+		case "blocked":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				// ralph-huv8 is in_progress but blocked — bd blocked lists it regardless of status.
+				return `[{"id":"ralph-huv8","status":"in_progress"}]`, nil
 			}
 		case "ready":
 			if strings.Contains(strings.Join(args, " "), "--json") {
@@ -2011,11 +2021,11 @@ func TestBD_Init_CallsEnsureExportGitAddDisabled(t *testing.T) {
 	}
 }
 
-// Proves: IsReady returns true when all deps are closed.
+// Proves: IsReady returns true when the id is not in bd blocked --json output.
 func TestBD_IsReady_AllDepsClosed(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
-			return `[{"id":"ralph-abc","title":"Do thing","blocked_by":[{"id":"ralph-dep1","status":"closed"},{"id":"ralph-dep2","status":"closed"}]}]`, nil
+		if len(args) >= 2 && args[0] == "blocked" && args[1] == "--json" {
+			return `[{"id":"ralph-other","status":"open"}]`, nil
 		}
 		return "", nil
 	}
@@ -2025,15 +2035,15 @@ func TestBD_IsReady_AllDepsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !ready {
-		t.Error("expected IsReady=true when all deps are closed")
+		t.Error("expected IsReady=true when id is not in bd blocked output")
 	}
 }
 
-// Proves: IsReady returns false when any dep is open.
+// Proves: IsReady returns false when the id appears in bd blocked --json output.
 func TestBD_IsReady_OpenDep(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
-			return `[{"id":"ralph-abc","title":"Do thing","blocked_by":[{"id":"ralph-dep1","status":"closed"},{"id":"ralph-dep2","status":"open"}]}]`, nil
+		if len(args) >= 2 && args[0] == "blocked" && args[1] == "--json" {
+			return `[{"id":"ralph-abc","status":"open"}]`, nil
 		}
 		return "", nil
 	}
@@ -2043,15 +2053,16 @@ func TestBD_IsReady_OpenDep(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ready {
-		t.Error("expected IsReady=false when any dep is open")
+		t.Error("expected IsReady=false when id appears in bd blocked output")
 	}
 }
 
-// Proves: IsReady returns false when any dep is in_progress.
+// Proves: IsReady returns false for an in_progress id that appears in bd blocked --json.
+// bd blocked is status-agnostic: in_progress tasks are included when blocked.
 func TestBD_IsReady_InProgressDep(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
-			return `[{"id":"ralph-abc","title":"Do thing","blocked_by":[{"id":"ralph-dep1","status":"in_progress"}]}]`, nil
+		if len(args) >= 2 && args[0] == "blocked" && args[1] == "--json" {
+			return `[{"id":"ralph-abc","status":"in_progress"}]`, nil
 		}
 		return "", nil
 	}
@@ -2061,15 +2072,15 @@ func TestBD_IsReady_InProgressDep(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ready {
-		t.Error("expected IsReady=false when any dep is in_progress")
+		t.Error("expected IsReady=false when in_progress id appears in bd blocked output")
 	}
 }
 
-// Proves: IsReady returns true when deps array is empty.
+// Proves: IsReady returns true when bd blocked --json returns an empty list.
 func TestBD_IsReady_NoDeps(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
-			return `[{"id":"ralph-abc","title":"Do thing","blocked_by":[]}]`, nil
+		if len(args) >= 2 && args[0] == "blocked" && args[1] == "--json" {
+			return `[]`, nil
 		}
 		return "", nil
 	}
@@ -2079,15 +2090,16 @@ func TestBD_IsReady_NoDeps(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !ready {
-		t.Error("expected IsReady=true when deps array is empty")
+		t.Error("expected IsReady=true when bd blocked returns empty list")
 	}
 }
 
-// Proves: GetFullContext includes open blocking dependencies and excludes closed ones.
+// Proves: GetFullContext includes open blocking dependencies (dependency_type=blocks)
+// and excludes closed ones. Uses the bd 1.0.3 dependencies field, not blocked_by.
 func TestBD_GetFullContext_OpenDepsIncludedClosedExcluded(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
-			return `[{"title":"Fix the auth module","description":"Rewrite auth","acceptance_criteria":"Auth passes","blocked_by":[{"id":"ralph-dep1","title":"Dep open","status":"open"},{"id":"ralph-dep2","title":"Dep closed","status":"closed"}]}]`, nil
+			return `[{"title":"Fix the auth module","description":"Rewrite auth","acceptance_criteria":"Auth passes","dependencies":[{"id":"ralph-dep1","title":"Dep open","status":"open","dependency_type":"blocks"},{"id":"ralph-dep2","title":"Dep closed","status":"closed","dependency_type":"blocks"},{"id":"ralph-dep3","title":"Dep depends-on","status":"open","dependency_type":"depends_on"}]}]`, nil
 		}
 		return "", nil
 	}
@@ -2107,6 +2119,9 @@ func TestBD_GetFullContext_OpenDepsIncludedClosedExcluded(t *testing.T) {
 	}
 	if strings.Contains(ctx, "Dep closed") {
 		t.Errorf("GetFullContext output must not contain closed dependency title, got: %q", ctx)
+	}
+	if strings.Contains(ctx, "ralph-dep3") {
+		t.Errorf("GetFullContext output must not contain depends_on dependency (not a blocker), got: %q", ctx)
 	}
 }
 
