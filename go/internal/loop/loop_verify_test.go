@@ -456,11 +456,17 @@ func TestOnSignal_PriorIterationCommits_Proceeds(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
+	// DiffFromBaseResult is set to simulate realistic multi-iteration work: prior
+	// iterations committed something, so the branch diff is non-empty even though
+	// headBefore == HeadRev (this iteration added nothing new). An empty
+	// DiffFromBase with commits ahead is a tooling fault (caught by the
+	// empty-diff guard in runVerifyPipeline), not this path.
 	gm := git.NewStub(git.StubRepoConfig{
-		ProjectDir:       dir,
-		WorkDir:          dir,
-		HeadRev:          "same-sha",
-		LogOnelineResult: "abc1234 prior iteration commit",
+		ProjectDir:         dir,
+		WorkDir:            dir,
+		HeadRev:            "same-sha",
+		DiffFromBaseResult: "+prior iteration work",
+		LogOnelineResult:   "abc1234 prior iteration commit",
 	})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -1152,6 +1158,72 @@ func TestRunVerifyPipeline_WorktreeBranchButProjectDir_InfraAbort(t *testing.T) 
 	}
 	if llmCalled {
 		t.Error("LLM verifier must not be invoked when the worktree invariant is violated — a stale projectDir diff must never reach the verifier")
+	}
+	if backend.SkippedTask != "" {
+		t.Errorf("task must not be skipped on infra abort, got SkippedTask=%q", backend.SkippedTask)
+	}
+}
+
+// When the verify diff is empty but the branch has commits ahead of base,
+// runVerifyPipeline must abort as a tooling error — not pass silently or set
+// a skip reason. Reproduces the case where unfetched origin, wrong workdir,
+// or base misresolution produces an empty diff on a branch with real work.
+func TestRunVerifyPipeline_EmptyDiffAheadOfBase_AbortsAsToolingError(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:         dir,
+		WorkDir:            dir,
+		DiffFromBaseResult: "",
+		DiffFullResult:     "",
+		LogOnelineResult:   "abc123 fix something",
+	})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
+	llmCalls := 0
+	logger := logging.New(nil)
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(_ context.Context, _, _, _ string) (string, error) {
+				llmCalls++
+				return "YES: looks good", nil
+			}},
+		}),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "test-123",
+		nextTask:   "Test task",
+	})
+	if skipReason != "" {
+		l.skipTask("test-123", skipReason)
+	}
+
+	if verified {
+		t.Fatal("expected runVerifyPipeline to abort (return false) on empty diff with branch ahead of base")
+	}
+	if skipReason != "" {
+		t.Fatalf("infra abort must not produce a skip reason, got %q", skipReason)
+	}
+	if llmCalls > 0 {
+		t.Fatalf("LLM verifier must not be called on tooling error, got %d calls", llmCalls)
 	}
 	if backend.SkippedTask != "" {
 		t.Errorf("task must not be skipped on infra abort, got SkippedTask=%q", backend.SkippedTask)
