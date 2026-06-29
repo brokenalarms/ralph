@@ -9,25 +9,72 @@ import (
 )
 
 // newDiffTestLoop builds a Loop wired only with the git stub fetchVerifyDiff
-// needs. fetchVerifyDiff touches l.git exclusively, so the other modules are
-// left nil.
+// needs. With no task backend, the external-ref PR-recovery path is inert, so
+// these loops exercise the local-diff sources exclusively.
 func newDiffTestLoop(gm git.Ops) *Loop {
 	return New(Config{}, Modules{Git: gm, Logger: logging.New(nil)})
 }
 
-// When a PR exists, the PR diff is the preferred source regardless of the
-// branch/iteration diffs.
-func TestFetchVerifyDiff_PrefersPR(t *testing.T) {
+// newDiffTestLoopWithRef builds a Loop whose task backend returns the given
+// external-ref for any task, so the resume-recovery PR path can be exercised.
+func newDiffTestLoopWithRef(gm git.Ops, taskID, ref string) *Loop {
+	backend := newMetadataBackend()
+	if ref != "" {
+		_ = backend.SetExternalRef(taskID, ref)
+	}
+	return New(Config{}, Modules{Git: gm, Logger: logging.New(nil), TaskBackend: backend})
+}
+
+// The local branch diff is the primary, authoritative source: even when a PR
+// exists (external-ref set, PR diff available), the branch diff wins because
+// the loop just produced these commits locally. The PR is never consulted while
+// the local branch is ahead of the base.
+func TestFetchVerifyDiff_PrefersBranchOverPR(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{
-		PRDiffForTaskResult: "pr-diff",
-		DiffFromBaseResult:  "branch-diff",
-		DiffFullResult:      "iteration-diff",
+		DiffFromBaseResult: "branch-diff",
+		PRDiffForRefResult: "pr-diff",
+		DiffFullResult:     "iteration-diff",
 	})
-	l := newDiffTestLoop(gm)
+	l := newDiffTestLoopWithRef(gm, "task-1", "https://github.com/o/r/pull/715")
+
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "")
+	if diff != "branch-diff" || source != "branch" {
+		t.Fatalf("expected (branch-diff, branch), got (%q, %q)", diff, source)
+	}
+}
+
+// Resume recovery: the local branch has no commits ahead of the base (e.g. a
+// freshly recreated worktree), but a prior run pushed a PR. fetchVerifyDiff
+// resolves that PR from the exact external-ref — never a search — and returns
+// its diff labeled "PR".
+func TestFetchVerifyDiff_ResumeRecovery_UsesExternalRefPR(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		DiffFromBaseResult: "", // local branch not ahead of base
+		PRDiffForRefResult: "pr-diff",
+		DiffFullResult:     "",
+	})
+	l := newDiffTestLoopWithRef(gm, "task-1", "https://github.com/o/r/pull/715")
 
 	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "")
 	if diff != "pr-diff" || source != "PR" {
 		t.Fatalf("expected (pr-diff, PR), got (%q, %q)", diff, source)
+	}
+}
+
+// Without an external-ref there is no PR to recover, so an empty local branch
+// diff must NOT silently pull some other PR's diff — it falls through to the
+// iteration diff (or empty). Guards against reintroducing a search-based lookup.
+func TestFetchVerifyDiff_NoExternalRef_DoesNotConsultPR(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		DiffFromBaseResult: "",
+		PRDiffForRefResult: "pr-diff", // present, but must be unreachable without a ref
+		DiffFullResult:     "iteration-diff",
+	})
+	l := newDiffTestLoop(gm) // no task backend → no external-ref
+
+	diff, source := l.fetchVerifyDiff(context.Background(), "task-1", "headBefore", "")
+	if diff != "iteration-diff" || source != "iteration" {
+		t.Fatalf("expected (iteration-diff, iteration), got (%q, %q)", diff, source)
 	}
 }
 
@@ -38,9 +85,8 @@ func TestFetchVerifyDiff_PrefersPR(t *testing.T) {
 // so the verifier sees the committed work instead of falsely skipping it.
 func TestFetchVerifyDiff_NoPR_PriorIterationCommit_UsesBranchDiff(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{
-		PRDiffForTaskResult: "",            // no PR
-		DiffFromBaseResult:  "branch-diff", // commit ahead of origin/<base>
-		DiffFullResult:      "",            // headBefore == HEAD: empty iteration diff
+		DiffFromBaseResult: "branch-diff", // commit ahead of origin/<base>
+		DiffFullResult:     "",            // headBefore == HEAD: empty iteration diff
 	})
 	l := newDiffTestLoop(gm)
 
@@ -50,12 +96,11 @@ func TestFetchVerifyDiff_NoPR_PriorIterationCommit_UsesBranchDiff(t *testing.T) 
 	}
 }
 
-// When no PR and no branch diff exist, fall back to the iteration-local diff.
+// When no branch diff and no PR exist, fall back to the iteration-local diff.
 func TestFetchVerifyDiff_FallsBackToIteration(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{
-		PRDiffForTaskResult: "",
-		DiffFromBaseResult:  "",
-		DiffFullResult:      "iteration-diff",
+		DiffFromBaseResult: "",
+		DiffFullResult:     "iteration-diff",
 	})
 	l := newDiffTestLoop(gm)
 
@@ -76,15 +121,14 @@ func TestFetchVerifyDiff_AllEmpty(t *testing.T) {
 	}
 }
 
-// When signalTimeHead is set and both DiffFromBase and DiffFull are non-empty,
-// fetchVerifyDiff prefers DiffFromBase (three-dot, branch-complete) over the
-// iteration-local DiffFull. DiffFromBase is safe against mid-iteration merges
-// because it uses the merge-base, and it covers all iterations' commits.
-func TestFetchVerifyDiff_SignalTimeHead_PrefersIterationDiffOverBase(t *testing.T) {
+// When both DiffFromBase and DiffFull are non-empty, fetchVerifyDiff prefers
+// DiffFromBase (three-dot, branch-complete) over the iteration-local DiffFull.
+// DiffFromBase is safe against mid-iteration merges because it uses the
+// merge-base, and it covers all iterations' commits.
+func TestFetchVerifyDiff_PrefersBranchDiffOverIteration(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{
-		PRDiffForTaskResult: "",
-		DiffFromBaseResult:  "full-branch-diff",
-		DiffFullResult:      "partial-iteration-diff",
+		DiffFromBaseResult: "full-branch-diff",
+		DiffFullResult:     "partial-iteration-diff",
 	})
 	l := newDiffTestLoop(gm)
 
@@ -101,9 +145,8 @@ func TestFetchVerifyDiff_SignalTimeHead_PrefersIterationDiffOverBase(t *testing.
 // absent from the diff fed to the verifier.
 func TestFetchVerifyDiff_MultiIterationFinalCommit_PrefersBranchDiff(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{
-		PRDiffForTaskResult: "",                    // no PR
-		DiffFromBaseResult:  "full-branch-diff",   // all iterations' work
-		DiffFullResult:      "partial-slice-diff", // final iteration only
+		DiffFromBaseResult: "full-branch-diff",   // all iterations' work
+		DiffFullResult:     "partial-slice-diff", // final iteration only
 	})
 	l := newDiffTestLoop(gm)
 
@@ -113,14 +156,13 @@ func TestFetchVerifyDiff_MultiIterationFinalCommit_PrefersBranchDiff(t *testing.
 	}
 }
 
-// When signalTimeHead is set but the iteration diff is empty (prior-iteration
-// commits only, headBefore==HEAD this iteration), fetchVerifyDiff falls through
-// to DiffFromBase so the verifier still sees the prior-iteration work.
-func TestFetchVerifyDiff_SignalTimeHead_EmptyIterationFallsThroughToBase(t *testing.T) {
+// When the iteration diff is empty (prior-iteration commits only,
+// headBefore==HEAD this iteration), fetchVerifyDiff still surfaces the
+// prior-iteration work via DiffFromBase.
+func TestFetchVerifyDiff_EmptyIterationFallsThroughToBase(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{
-		PRDiffForTaskResult: "",
-		DiffFromBaseResult:  "prior-iteration-branch-diff",
-		DiffFullResult:      "", // headBefore == HEAD: empty iteration diff
+		DiffFromBaseResult: "prior-iteration-branch-diff",
+		DiffFullResult:     "", // headBefore == HEAD: empty iteration diff
 	})
 	l := newDiffTestLoop(gm)
 

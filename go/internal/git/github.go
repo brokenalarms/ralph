@@ -164,7 +164,6 @@ type gitHub interface {
 	EditPRBase(ctx context.Context, prNumber int, repoURL, base string) error
 	GetRunLog(ctx context.Context, prNumber int, workDir string) string
 	FindPR(ctx context.Context, branch, repoURL string) (number int, title, url string, err error)
-	SearchPR(ctx context.Context, workDir, query string) (prNumber int, err error)
 	PRDiff(ctx context.Context, repoURL string, prNumber int) (string, error)
 	GetPR(ctx context.Context, nwo string, prNumber int) (*PRDetail, error)
 	ListOpenPRBranches(ctx context.Context, repoURL string) ([]string, error)
@@ -781,40 +780,6 @@ func (g *ghCLI) FindPR(ctx context.Context, branch, repoURL string) (int, string
 		url = parts[2]
 	}
 	return num, title, url, nil
-}
-
-func (g *ghCLI) SearchPR(ctx context.Context, workDir, query string) (int, error) {
-	remoteOut, err := exec.Command("git", "-C", workDir, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return 0, fmt.Errorf("get remote URL: %w", err)
-	}
-	nwo := NWOFromRemote(strings.TrimSpace(string(remoteOut)))
-	if nwo == "" {
-		return 0, fmt.Errorf("cannot determine owner/repo from remote URL")
-	}
-	q := fmt.Sprintf("%s repo:%s type:pr", query, nwo)
-	// GitHub's search/issues is a full-text, token-based search over PR titles,
-	// bodies, AND comments — it does not anchor on the literal query. A hyphenated
-	// task ID like "tabi-q35a" tokenizes to "tabi" + "q35a", so a bare ".items[0]"
-	// pick can return an unrelated PR that merely mentions the task (e.g. a
-	// dependency PR whose body references it) or shares the "tabi" token. When the
-	// task has no PR of its own, that wrong PR's diff is then fed to the verifier,
-	// which correctly rejects it (the diff lacks this task's work) and the loop
-	// stagnates on otherwise-correct, committed work. Guard against this by
-	// selecting the first item whose TITLE literally contains the task ID — ralph
-	// titles every task PR "[<taskID>] <summary>", so only this task's own PR
-	// matches. No match → 0, and the verify pipeline falls through to the
-	// always-correct branch diff (origin/<base>...HEAD).
-	jq := fmt.Sprintf("[.items[] | select(.title | contains(%q)) | .number] | first // empty", query)
-	out, err := g.runGHCmd(ctx, []string{"api", "--method", "GET", "search/issues", "-f", "q=" + q, "--jq", jq})
-	if err != nil {
-		return 0, fmt.Errorf("gh api search failed: %w", err)
-	}
-	raw := strings.TrimSpace(string(out))
-	if raw == "" {
-		return 0, nil
-	}
-	return ParsePRNumber(raw)
 }
 
 func (g *ghCLI) PRDiff(ctx context.Context, repoURL string, prNumber int) (string, error) {

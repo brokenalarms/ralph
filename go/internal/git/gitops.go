@@ -36,7 +36,7 @@ type Ops interface {
 	GetPRBase(ctx context.Context, prNumber int) string
 	FindPRForBranch(ctx context.Context, branch string) (number int, title, url string, err error)
 	PRChainIsHealthy(ctx context.Context, prNumber int) (bool, string)
-	PRDiffForTask(ctx context.Context, taskID string) string
+	PRDiffForRef(ctx context.Context, externalRef string) string
 
 	// SetKnownPRNumber stores a known PR number so merge/PR operations
 	// skip the FindOpenPR lookup.
@@ -286,14 +286,18 @@ func (r *repo) ReplyToAndResolveComments(ctx context.Context, prNumber int, comm
 	return nil
 }
 
-// PRDiffForTask searches for a PR matching the task ID and returns its diff.
-func (r *repo) PRDiffForTask(ctx context.Context, taskID string) string {
+// PRDiffForRef returns the diff of the PR named by an exact external reference
+// (a PR URL like ".../pull/715" or "gh-715" stored on the task by a prior run).
+// The ref is a 1:1 pointer to a specific PR — there is no search and no
+// possibility of matching a different task's PR. Returns "" when the ref does
+// not resolve to a PR number or the diff cannot be fetched.
+func (r *repo) PRDiffForRef(ctx context.Context, externalRef string) string {
 	gh := r.github
 	if !gh.Available() {
 		return ""
 	}
-	prNumber, err := gh.SearchPR(ctx, r.workDir, taskID)
-	if err != nil || prNumber == 0 {
+	prNumber := parsePRNumber(externalRef)
+	if prNumber == 0 {
 		return ""
 	}
 	diff, err := gh.PRDiff(ctx, r.RemoteURL(), prNumber)

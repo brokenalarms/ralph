@@ -273,27 +273,47 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 }
 
 // fetchVerifyDiff returns the diff and its label to feed the LLM verifier.
-// Prefers the PR diff (which covers prior iterations), then the branch diff
-// against the merge-base (origin/<base>...HEAD — three-dot, covering all
-// iterations and safe against mid-iteration merges), then the iteration-local
-// headBefore..HEAD as a last resort when DiffFromBase is empty. Returns empty
-// strings when none are available — LLMVerifyPR treats that as a no-op pass.
+//
+// The diff is read from LOCAL git, not GitHub. The loop just produced this
+// task's commits, so the authoritative record of the work is already in the
+// worktree — there is no reason to re-fetch it over the network, and (crucially)
+// no reason to identify a PR by search. An earlier design preferred a PR diff
+// located by full-text searching GitHub for the task ID; that search could
+// return an unrelated PR (e.g. a dependency PR that merely mentions the task),
+// feeding the verifier the wrong diff and stalling correct work until the loop
+// halted on stagnation. PR identity now comes only from the exact external-ref
+// stored on the task — a 1:1 pointer, never a search.
+//
+// Order:
+//  1. DiffFromBase — three-dot origin/<base>...HEAD. Diffs against the
+//     merge-base, so it covers all of this branch's iterations and excludes
+//     commits that landed on the base after the branch diverged. This is the
+//     primary, exact source.
+//  2. PR diff via external-ref — resume recovery only. If the local branch has
+//     no commits ahead of the base (e.g. a freshly recreated worktree that has
+//     not re-fetched the task's commits) and a prior run already pushed a PR,
+//     fetch that PR's diff using the exact ref stored on the task.
+//  3. Iteration-local headBefore..HEAD — last resort.
+//
+// Returns empty strings when none are available — the verifier treats that as a
+// no-op pass.
 func (l *Loop) fetchVerifyDiff(ctx context.Context, taskID, headBefore, signalTimeHead string) (string, string) {
-	if diff := l.git.PRDiffForTask(ctx, taskID); diff != "" {
-		return diff, "PR"
-	}
-	// DiffFromBase is three-dot (git diff origin/<base>...HEAD): it diffs
-	// against the merge-base and excludes commits that landed on origin/<base>
-	// after the branch diverged, so it is both branch-complete and safe against
-	// mid-iteration merges. Prefer it over the iteration-local two-dot diff,
-	// which is anchored at headBefore and silently drops earlier iterations'
-	// commits for multi-iteration no-PR branches.
 	if diff := l.git.DiffFromBase(); diff != "" {
 		l.logger.Emit(logging.Opts{Domain: logging.Test}, "Verify diff: origin/%s...HEAD in %s (branch)", l.git.DetectDefaultBranch(), l.git.GetWorkDir())
 		return diff, "branch"
 	}
-	// Last resort: iteration-local headBefore..HEAD. Used only when DiffFromBase
-	// is empty (e.g. the branch has no commits ahead of origin/<base> yet).
+	// Resume recovery: the local branch is not ahead of the base, but a prior
+	// run may have pushed the work as a PR. Resolve that PR only from the exact
+	// external-ref — no search, so only this task's own PR can match.
+	if l.taskBackend != nil && taskID != "" {
+		if ref, _ := l.taskBackend.GetExternalRef(taskID); ref != "" {
+			if diff := l.git.PRDiffForRef(ctx, ref); diff != "" {
+				l.logger.Emit(logging.Opts{Domain: logging.Test}, "Verify diff: PR from external-ref %s (resume recovery)", ref)
+				return diff, "PR"
+			}
+		}
+	}
+	// Last resort: iteration-local headBefore..HEAD.
 	if diff := l.git.DiffFull(headBefore, "HEAD"); diff != "" {
 		return diff, "iteration"
 	}
