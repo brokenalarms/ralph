@@ -116,6 +116,27 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 		}
 	}
 
+	// ── Empty-diff guard ──
+	// A branch that is ahead of origin/<base> with an empty verify diff signals
+	// a tooling fault — unfetched origin, wrong workdir, or base misresolution —
+	// not absent work. Passing an empty diff to the LLM verifier would silently
+	// accept unverified work; an AC-unmet rejection would false-reject correct
+	// work. Both are wrong: abort as an infrastructure error before consuming an
+	// attempt. Observed when push/fetch is incomplete and DiffFromBase returns
+	// empty even though commits exist on the branch.
+	{
+		diff, _ := l.fetchVerifyDiff(p.ctx, p.taskID, p.headBefore, p.signalTimeHead)
+		if diff == "" {
+			baseBranch := l.git.DetectDefaultBranch()
+			if l.git.LogOneline("origin/"+baseBranch, "HEAD") != "" {
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+					"Infrastructure error: verify diff is empty but branch is ahead of origin/%s — unfetched origin, wrong workdir, or base misresolution; aborting verification without consuming an attempt",
+					baseBranch)
+				return false, ""
+			}
+		}
+	}
+
 	// ── LLM verification fix loop ──
 	verified, skipReason = l.runLLMVerifyFixLoop(p, spawn, taskDesc, taskAccept, maxLLMVerify, maxTestFix)
 	if !verified {
