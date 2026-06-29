@@ -705,14 +705,15 @@ func (b *BD) GetFullContext(id string) (string, error) {
 		return "", err
 	}
 	var items []struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		Acceptance  string `json:"acceptance_criteria"`
-		BlockedBy   []struct {
-			ID     string `json:"id"`
-			Title  string `json:"title"`
-			Status string `json:"status"`
-		} `json:"blocked_by"`
+		Title        string `json:"title"`
+		Description  string `json:"description"`
+		Acceptance   string `json:"acceptance_criteria"`
+		Dependencies []struct {
+			ID             string `json:"id"`
+			Title          string `json:"title"`
+			Status         string `json:"status"`
+			DependencyType string `json:"dependency_type"`
+		} `json:"dependencies"`
 	}
 	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
 		return "", nil
@@ -729,8 +730,8 @@ func (b *BD) GetFullContext(id string) (string, error) {
 		parts = append(parts, "ACCEPTANCE CRITERIA\n"+bead.Acceptance)
 	}
 	var openDeps []string
-	for _, dep := range bead.BlockedBy {
-		if dep.Status != "closed" && dep.ID != "" {
+	for _, dep := range bead.Dependencies {
+		if dep.DependencyType == "blocks" && dep.Status != "closed" && dep.ID != "" {
 			openDeps = append(openDeps, "- "+dep.ID+": "+dep.Title)
 		}
 	}
@@ -893,28 +894,25 @@ func parseInProgressJSON(out string) []TaskInfo {
 	return result
 }
 
-// IsReady reports whether task id is ready to work on. It calls bd show <id>
-// --json and checks the blocked_by array: returns true iff every entry has
-// status=closed (or the array is empty). Returns false (no error) for any
-// non-closed dep; returns an error only when the bd call itself fails.
+// IsReady reports whether task id is ready to work on. It calls bd blocked
+// --json (status-agnostic) and returns false if id appears in that set,
+// true otherwise. Returns an error only when the bd call itself fails.
 func (b *BD) IsReady(id string) (bool, error) {
 	if id == "" {
 		return true, nil
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "blocked", "--json")
 	if err != nil {
 		return false, err
 	}
 	var items []struct {
-		BlockedBy []struct {
-			Status string `json:"status"`
-		} `json:"blocked_by"`
+		ID string `json:"id"`
 	}
-	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil {
 		return true, nil
 	}
-	for _, dep := range items[0].BlockedBy {
-		if dep.Status != "closed" {
+	for _, item := range items {
+		if item.ID == id {
 			return false, nil
 		}
 	}
