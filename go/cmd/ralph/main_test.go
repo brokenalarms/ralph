@@ -1013,8 +1013,8 @@ func TestPrintTaskResumeHint_ContainsResumeCommand(t *testing.T) {
 	if !strings.Contains(out, "cd "+workDir) {
 		t.Errorf("resume hint should contain 'cd %s', got:\n%s", workDir, out)
 	}
-	if !strings.Contains(out, "claude --resume "+sessionID) {
-		t.Errorf("resume hint should contain 'claude --resume %s', got:\n%s", sessionID, out)
+	if !strings.Contains(out, "claude --resume "+sessionID+" --permission-mode bypassPermissions") {
+		t.Errorf("resume hint should contain 'claude --resume %s --permission-mode bypassPermissions', got:\n%s", sessionID, out)
 	}
 }
 
