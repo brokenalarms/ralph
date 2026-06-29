@@ -570,7 +570,7 @@ func generateSessionID() (string, error) {
 // printTaskResumeHint writes a visually dominant boxed resume command to w.
 // The command includes the worktree path so it works from any directory.
 func printTaskResumeHint(w io.Writer, workDir, sessionID string) {
-	cmd := fmt.Sprintf("cd %s && claude --resume %s", workDir, sessionID)
+	cmd := fmt.Sprintf("cd %s && claude --resume %s --permission-mode bypassPermissions", workDir, sessionID)
 	line := strings.Repeat("─", len(cmd)+4)
 	fmt.Fprintf(w, "\n%s%s┌%s┐%s\n", logging.Cyan, logging.Bold, line, logging.Reset)
 	fmt.Fprintf(w, "%s%s│  %s  │%s\n", logging.Cyan, logging.Bold, cmd, logging.Reset)
