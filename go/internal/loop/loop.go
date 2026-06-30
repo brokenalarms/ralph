@@ -476,7 +476,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 		Prompt:       prep.fullPrompt,
 		TaskID:       task.id,
 		RawLog:       prep.rawLogPath,
-		LogFile:      filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "loop.log"),
+		LogFile:      logging.ActiveLogPath(l.cfg.Dirs.RalphDir, "loop"),
 		Verbose:      l.cfg.Verbose,
 		Model:        agentModel,
 		Signals:      l.signals,
@@ -750,7 +750,7 @@ iterLoop:
 				taskID:     task.id,
 				nextTask:   task.title,
 				workDir:    l.git.GetWorkDir(),
-				rawLogPath: filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "raw.log"),
+				rawLogPath: logging.ActiveLogPath(l.cfg.Dirs.RalphDir, "raw"),
 				notify:     l.cfg.Notify,
 				ralphDir:   l.cfg.Dirs.RalphDir,
 			})

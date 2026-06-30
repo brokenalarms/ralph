@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/brokenalarms/ralph/internal/config"
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +156,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	rd := ralphDir(dir)
 	state := readJSONFile(filepath.Join(rd, "state.json"))
-	logTail := tailFile(filepath.Join(rd, "loop.log"), 30)
+	logTail := tailFile(logging.ActiveLogPath(rd, "loop"), 30)
 	planPath := resolvePlanPath(dir, rd, planFile)
 	planContent := readTextFile(planPath)
 
@@ -292,7 +293,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logPath := filepath.Join(ralphDir(dir), "loop.log")
+	logPath := logging.ActiveLogPath(ralphDir(dir), "loop")
 	lines := 100
 	if q := r.URL.Query().Get("lines"); q != "" {
 		if n, err := strconv.Atoi(q); err == nil {

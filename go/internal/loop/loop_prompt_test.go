@@ -399,10 +399,10 @@ func TestLoop_HasProgress_LogActivityDrivesTimeout(t *testing.T) {
 	// Simulate HEAD moving mid-run — must not affect timeout selection. The
 	// commit must land after the agent is underway, so wait until the
 	// subprocess has written "agent output" to the raw log before committing.
-	rawLogPath := filepath.Join(ralphDir, "raw.log")
+	activeRawLog := logging.ActiveLogPath(ralphDir, "raw")
 	go func() {
 		testutil.WaitFor(t, 10*time.Second, "agent output in raw log", func() bool {
-			data, err := os.ReadFile(rawLogPath)
+			data, err := os.ReadFile(activeRawLog)
 			return err == nil && strings.Contains(string(data), "agent output")
 		})
 		gm.CommitAll("simulated commit during run")

@@ -189,7 +189,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	dirs := workctx.New(cfg.ProjectDir, promptsDir)
 
 	if cfg.UseTmux {
-		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, dirs.LogDir, log)
+		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, log)
 	}
 
 	return runMain(cfg, dirs, scriptPath, sub.Args, log)
@@ -333,13 +333,8 @@ func handleAttach(sub config.Subcommand, log *logging.Logger) int {
 
 	scriptPath, _ := os.Executable()
 
-	logDir, err := logging.StableLogDir(projectDir)
-	if err != nil {
-		logDir = ralphDir
-	}
-
 	log.Emit(logging.Opts{}, "Attaching to ralph loop (PID %d)", existingPID)
-	return handleTmuxAttach(cfg, scriptPath, ralphDir, logDir, existingPID, log)
+	return handleTmuxAttach(cfg, scriptPath, ralphDir, existingPID, log)
 }
 
 // handleTask launches an interactive Claude session with the task manager prompt.
