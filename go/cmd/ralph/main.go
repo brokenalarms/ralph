@@ -453,15 +453,8 @@ func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.
 	fmt.Println()
 	log.Phase("=== SUMMARY ===")
 
-	iteration, _ := st.Read("iteration")
 	status, _ := st.Read("status")
 	log.Emit(logging.Opts{}, "Status:     %s", status)
-	log.Emit(logging.Opts{}, "Iterations: %s lifetime", iteration)
-
-	completed, _ := backend.CountCompleted()
-	remaining, _ := backend.CountRemaining()
-	total, _ := backend.CountTotal()
-	log.Emit(logging.Opts{}, "Tasks: %d/%d completed, %d remaining", completed, total, remaining)
 
 	log.Emit(logging.Opts{}, "Log:        %s", logging.ActiveLogPath(ralphDir, "loop"))
 

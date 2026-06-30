@@ -76,8 +76,9 @@ type logIterationBannerParams struct {
 }
 
 // logIterationBanner gathers context and delegates to the logger.
-func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxIter, iteration int, task taskContext, lastAction analyzer.Action) {
-	completed, total := tasks.Progress(l.taskBackend)
+func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxIter int, task taskContext, lastAction analyzer.Action) {
+	doneThisRun := len(l.completedTasks)
+	remaining, _ := l.taskBackend.CountRemaining()
 
 	if runIteration > 1 {
 		l.logger.DashedSeparator(logging.Yellow)
@@ -91,9 +92,8 @@ func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxI
 	l.logger.IterationBanner(logging.BannerOpts{
 		RunIteration: runIteration,
 		MaxIteration: maxIter,
-		Lifetime:     iteration,
-		Completed:    completed,
-		Total:        total,
+		DoneThisRun:  doneThisRun,
+		Remaining:    remaining,
 		TaskID:       task.id,
 		TaskTitle:    task.title,
 		TaskChanged:  task.changed,

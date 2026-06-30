@@ -361,9 +361,8 @@ func (l *Logger) EmitDescription(description string) {
 type BannerOpts struct {
 	RunIteration int
 	MaxIteration int
-	Lifetime     int
-	Completed    int
-	Total        int
+	DoneThisRun  int
+	Remaining    int
 	TaskID       string
 	TaskTitle    string
 	TaskChanged  bool
@@ -392,8 +391,8 @@ func (l *Logger) IterationBanner(o BannerOpts) {
 	if o.BaseBranch != "" {
 		baseTag = fmt.Sprintf(" | base: %s", o.BaseBranch)
 	}
-	l.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s%s ---",
-		o.RunIteration, o.MaxIteration, o.Lifetime, o.Completed, o.Total, versionTag, baseTag)
+	l.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d done this run · %d remaining%s%s ---",
+		o.RunIteration, o.MaxIteration, o.DoneThisRun, o.Remaining, versionTag, baseTag)
 
 	if o.Description != "" {
 		l.EmitDescription(o.Description)

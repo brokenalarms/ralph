@@ -782,3 +782,30 @@ func TestEmitDescription_EmptyStringWritesNothing(t *testing.T) {
 		t.Errorf("EmitDescription(\"\") should write nothing; stdout=%q logFile=%q", stdout.String(), logFile.String())
 	}
 }
+
+// Verifies that IterationBanner shows per-run task progress (done this run,
+// remaining backlog) instead of lifetime cumulative counts, so operators see
+// meaningful progress for the current run rather than whole-store totals.
+func TestIterationBanner_ShowsPerRunProgress(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Logger{out: &buf, logFile: &buf}
+	l.IterationBanner(BannerOpts{
+		RunIteration: 4,
+		MaxIteration: 50,
+		DoneThisRun:  3,
+		Remaining:    8,
+		Version:      "1.0.0",
+		BaseBranch:   "main",
+	})
+	got := buf.String()
+
+	if !strings.Contains(got, "3 done this run") {
+		t.Errorf("banner should contain '3 done this run', got:\n%s", got)
+	}
+	if !strings.Contains(got, "8 remaining") {
+		t.Errorf("banner should contain '8 remaining', got:\n%s", got)
+	}
+	if strings.Contains(got, "lifetime") {
+		t.Errorf("banner should not contain 'lifetime', got:\n%s", got)
+	}
+}

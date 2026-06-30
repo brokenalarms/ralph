@@ -197,10 +197,8 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.Model}, "Summary: %s", result.Summary)
 	}
 
-	completed, _ := l.taskBackend.CountCompleted()
-	total, _ := l.taskBackend.CountTotal()
-	l.logger.Emit(logging.Opts{}, "Run iteration %d complete (%dm%ds). %d/%d tasks done.",
-		runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
+	l.logger.Emit(logging.Opts{}, "Run iteration %d complete (%dm%ds).",
+		runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60)
 
 	diffStat := l.git.DiffStatRange(prep.headBefore, headAfter)
 
