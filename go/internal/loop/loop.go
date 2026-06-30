@@ -673,7 +673,7 @@ iterLoop:
 
 		l.logIterationBanner(logIterationBannerParams{
 			version: l.cfg.Version,
-		}, runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), iteration, task, lastAction)
+		}, runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), task, lastAction)
 		l.beginIteration(task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──

@@ -64,13 +64,6 @@ func HasOpenButAllSkipped(b Backend) (bool, error) {
 	return !has, nil
 }
 
-// Progress returns the completed and total task counts from the backend.
-func Progress(b Backend) (completed, total int) {
-	c, _ := b.CountCompleted()
-	t, _ := b.CountTotal()
-	return c, t
-}
-
 // StuckState describes the stall condition where in_progress tasks block all
 // remaining open work.
 type StuckState struct {
