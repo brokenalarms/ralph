@@ -694,9 +694,14 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 				return actionCompactionShip
 			}
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.Model}, "Agent triggered compaction — this indicates a context leak. Skipping task.")
-		l.skipTask(taskID, "compaction_detected")
-		return actionSkip
+		if count := l.incrementCompactionParkCount(taskID); count >= l.maxCompactionParks() {
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.Model}, "Agent triggered compaction %d time(s) — this indicates a context leak. Skipping task.", count)
+			l.skipTask(taskID, "compaction_detected")
+			return actionSkip
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Agent triggered compaction — retrying (below park cap)")
+		l.releaseClaimForRetry(taskID)
+		return actionRetry
 	}
 	if result.FeedbackKill {
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d — user feedback received", runIteration)
@@ -728,7 +733,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		// The in-session taskIdleTimeouts guard remains as an additional ceiling.
 		hasNewCommits := l.git.LogOneline(headBefore, l.git.HeadRev()) != ""
 		if !hasNewCommits {
-			if count := l.incrementFailedStartCount(taskID); count >= 2 {
+			if count := l.incrementFailedStartCount(taskID); count >= l.maxFailedStarts() {
 				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Failed start %d times with no progress for %s — skipping task", count, taskID)
 				l.skipTask(taskID, "failed_start_limit_reached")
 				return actionRetry

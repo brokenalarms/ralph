@@ -146,6 +146,60 @@ func TestHandleRunResult_IdleTimeout_PersistentCountRetryOnFirst(t *testing.T) {
 	}
 }
 
+// Proves: MaxFailedStarts=3 in config allows 2 failed starts before parking —
+// a task with failed_starts=1 in metadata is NOT parked on the 2nd attempt
+// (count=2 < 3), only on the 3rd.
+func TestMaxFailedStarts_ConfigOverridesDefault(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+	l.cfg.MaxFailedStarts = 3
+
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{},
+		Metadata: map[string]map[string]string{
+			"task-cfg-cap": {"failed_starts": "1"},
+		},
+	}
+	l.taskBackend = backend
+
+	result := claude.Result{IdleTimeout: true}
+	action := handleRunResultCall(l, context.Background(), result, nil,
+		"task-cfg-cap", "Task with custom failed-start cap", "abc123", 1)
+
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry (count=2 < MaxFailedStarts=3), got %d", action)
+	}
+	if backend.StubBackend.SkippedTask != "" {
+		t.Errorf("expected no skip at 2nd attempt with MaxFailedStarts=3, got %q", backend.StubBackend.SkippedTask)
+	}
+}
+
+// Proves: MaxCompactionParks=2 in config allows one compaction retry before
+// parking — the task is not parked on the first compaction (count=1 < 2),
+// and compaction_parks=1 is persisted for the next attempt.
+func TestMaxCompactionParks_ConfigOverridesDefault(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+	l.cfg.MaxCompactionParks = 2
+
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{},
+	}
+	l.taskBackend = backend
+
+	action := handleRunResultCall(l, context.Background(), claude.Result{Compacted: true}, nil,
+		"task-compact", "Compacting task", "abc123", 1)
+
+	if backend.StubBackend.SkippedTask != "" {
+		t.Errorf("expected no skip on first compaction with MaxCompactionParks=2, got %q", backend.StubBackend.SkippedTask)
+	}
+	v, _ := backend.GetMetadata("task-compact", "compaction_parks")
+	if v != "1" {
+		t.Errorf("expected compaction_parks=1 in metadata, got %q", v)
+	}
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry on first compaction below cap, got %d", action)
+	}
+}
+
 // Proves: a task that always idle-times-out is parked after 2 attempts and the
 // loop continues — exercising l.Run(), not just handleRunResult. The task has
 // an open dependent to prove the strand guard is removed (AC5 from ralph-n4u3).

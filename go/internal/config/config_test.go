@@ -718,6 +718,43 @@ permission_denial_threshold = 9
 	}
 }
 
+// Verifies that the three stagnation/skip threshold keys (introduced by ralph-tttf)
+// are read from config.toml and override the hardcoded defaults (2, 1, 3).
+func TestStagnationThresholdKeysFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("max_failed_starts = 5\nmax_compaction_parks = 3\ncascade_skip_limit = 7\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.MaxFailedStarts != 5 {
+		t.Errorf("MaxFailedStarts = %d, want 5", cfg.MaxFailedStarts)
+	}
+	if cfg.MaxCompactionParks != 3 {
+		t.Errorf("MaxCompactionParks = %d, want 3", cfg.MaxCompactionParks)
+	}
+	if cfg.CascadeSkipLimit != 7 {
+		t.Errorf("CascadeSkipLimit = %d, want 7", cfg.CascadeSkipLimit)
+	}
+}
+
+// Verifies that the three stagnation/skip threshold keys default to 2, 1, and 3
+// when absent from config.toml (no behavior change when unset — ralph-tttf AC2).
+func TestStagnationThresholdKeyDefaults(t *testing.T) {
+	cfg := Defaults()
+
+	if cfg.MaxFailedStarts != 2 {
+		t.Errorf("MaxFailedStarts default = %d, want 2", cfg.MaxFailedStarts)
+	}
+	if cfg.MaxCompactionParks != 1 {
+		t.Errorf("MaxCompactionParks default = %d, want 1", cfg.MaxCompactionParks)
+	}
+	if cfg.CascadeSkipLimit != 3 {
+		t.Errorf("CascadeSkipLimit default = %d, want 3", cfg.CascadeSkipLimit)
+	}
+}
+
 // Verifies that stagnation threshold from config flows into analyzer behavior.
 // Matching bats test "analyze_iteration uses configurable stagnation threshold".
 // This is tested here at the config level: a threshold of 2 means the config

@@ -170,6 +170,11 @@ type Config struct {
 	MaxLLMVerifyAttempts   int
 	MaxTestFixAttempts     int
 
+	// Stagnation thresholds — overrides package defaults when set.
+	MaxFailedStarts    int
+	MaxCompactionParks int
+	CascadeSkipLimit   int
+
 	// Test/compile timeouts.
 	TestTimeout         time.Duration
 	CompileCheckTimeout time.Duration
@@ -791,7 +796,7 @@ iterLoop:
 					worktreeNeedsSetup = true
 					// Task skipped by analyzer. Track consecutive skips for cascade detection.
 					consecutiveSkipCount++
-					if consecutiveSkipCount >= 3 {
+					if consecutiveSkipCount >= l.cascadeSkipLimit() {
 						haltReason := fmt.Sprintf("cascade_skipped:%d", consecutiveSkipCount)
 						l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", haltReason)
 						l.state.Write("status", "halted_"+haltReason)

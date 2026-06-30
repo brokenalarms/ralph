@@ -82,6 +82,11 @@ type Config struct {
 	MaxLLMVerifyAttempts   int
 	MaxTestFixAttempts     int
 
+	// Stagnation thresholds — how many failures before parking or halting.
+	MaxFailedStarts    int
+	MaxCompactionParks int
+	CascadeSkipLimit   int
+
 	// Test/compile timeouts.
 	TestTimeout         time.Duration
 	CompileCheckTimeout time.Duration
