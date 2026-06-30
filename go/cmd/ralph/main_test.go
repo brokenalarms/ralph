@@ -263,7 +263,7 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	planFile := filepath.Join(ralphDir, "plan.md")
 
 	// Should not panic or error.
-	printSummary(config.Config{ProjectDir: dir}, gm, st, backend, ralphDir, ralphDir, planFile, log)
+	printSummary(config.Config{ProjectDir: dir}, gm, st, backend, ralphDir, planFile, log)
 }
 
 // Verifies initRalphDir creates the .ralph directory and reflections subdirectory.
@@ -515,7 +515,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
 
 	status, _ := st.Read("status")
 	if status != "stopped" {
@@ -539,7 +539,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, false, log)
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, false, log)
 
 	status, _ := st.Read("status")
 	if status != "completed" {
@@ -570,7 +570,7 @@ func TestCleanup_ClearsCLIConfig(t *testing.T) {
 	log := logging.New(nil)
 	c := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(c, gm, st, backend, ralphDir, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
+	cleanup(c, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
 
 	// cli_config must be cleared.
 	cfg, err := st.LoadCLIConfig()
@@ -647,42 +647,47 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	}
 }
 
-// Proves AC1 of ralph-55ww: loop.log and raw.log in the stable LogDir survive
-// a "run fresh" that wipes .ralph — they are outside ralphDir so RemoveAll
-// does not touch them.
-func TestLogsInStableLogDirSurviveRalphDirRecreation(t *testing.T) {
+// Proves loop.log and raw.log are written under <projectDir>/.ralph/ as
+// date-suffixed segments — not under the home directory.
+func TestLogsLiveUnderProjectRalphDir(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	// Simulate the stable log dir being a sibling of .ralph (not inside it).
-	logDir := filepath.Join(dir, "stable-logs")
-	os.MkdirAll(logDir, 0o755)
+	loopLog := logging.ActiveLogPath(ralphDir, "loop")
+	rawLog := logging.ActiveLogPath(ralphDir, "raw")
 
-	loopLog := filepath.Join(logDir, "loop.log")
-	rawLog := filepath.Join(logDir, "raw.log")
-	if err := os.WriteFile(loopLog, []byte("session 1 output\n"), 0o644); err != nil {
-		t.Fatal(err)
+	// Both paths must be under <projectDir>/.ralph/.
+	if !strings.HasPrefix(loopLog, ralphDir) {
+		t.Errorf("loop.log should be under %s, got %s", ralphDir, loopLog)
 	}
-	if err := os.WriteFile(rawLog, []byte(`{"type":"assistant"}`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if !strings.HasPrefix(rawLog, ralphDir) {
+		t.Errorf("raw.log should be under %s, got %s", ralphDir, rawLog)
 	}
 
-	// Simulate "run fresh": wipe .ralph entirely (what initRalphDir does).
-	if err := os.RemoveAll(ralphDir); err != nil {
-		t.Fatal(err)
+	// Paths must not reference the home directory.
+	home, _ := os.UserHomeDir()
+	if strings.HasPrefix(loopLog, home) {
+		t.Errorf("loop.log must not be under home dir: %s", loopLog)
+	}
+	if strings.HasPrefix(rawLog, home) {
+		t.Errorf("raw.log must not be under home dir: %s", rawLog)
 	}
 
-	// Logs must survive because they live in logDir, not ralphDir.
-	if _, err := os.Stat(loopLog); os.IsNotExist(err) {
-		t.Error("loop.log should survive .ralph recreation")
+	// Segment files accumulate via O_APPEND — multiple sessions same day share one file.
+	if err := os.WriteFile(loopLog, []byte("session 1\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(rawLog); os.IsNotExist(err) {
-		t.Error("raw.log should survive .ralph recreation")
+	f, err := os.OpenFile(loopLog, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
 	}
+	f.WriteString("session 2\n")
+	f.Close()
+
 	content, _ := os.ReadFile(loopLog)
-	if string(content) != "session 1 output\n" {
-		t.Errorf("loop.log content should be intact, got %q", string(content))
+	if string(content) != "session 1\nsession 2\n" {
+		t.Errorf("loop.log should accumulate across sessions: got %q", string(content))
 	}
 }
 
@@ -949,7 +954,7 @@ func TestHandleTmuxAttach_RefusesInsideTmux(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Config{ProjectDir: dir}
 
-	code := handleTmuxAttach(cfg, "/usr/local/bin/ralph", dir, dir, 0, log)
+	code := handleTmuxAttach(cfg, "/usr/local/bin/ralph", dir, 0, log)
 
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)

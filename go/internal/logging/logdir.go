@@ -1,32 +1,29 @@
-// Session logs (loop.log, raw.log) are written to a stable per-project
-// location at ~/.ralph/logs/<slug>/ where <slug> is derived from the
-// project directory name and a hash of its full path. This location
-// survives worktree recreation, loop restarts, and evolve re-execs.
-// Old log files are pruned on startup based on a configurable retention
-// window (log_retention_days in config.toml, default 30 days).
+// Session logs (loop.log, raw.log) are written to the project's own .ralph/
+// directory as daily date-suffixed segments (e.g. loop.2026-06-29.log).
+// Old segments are pruned on startup based on a configurable retention window
+// (log_retention_days in config.toml, default 30 days). On first startup the
+// legacy ~/.ralph/logs tree is removed if it exists.
 package logging
 
 import (
-	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-// StableLogDir returns a per-project log directory under ~/.ralph/logs/
-// that survives worktree recreation. The slug embeds the project base
-// name (human-readable) and a hash of the full path (collision-safe).
-// Returns an error only when the user home directory is unavailable.
-func StableLogDir(projectDir string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("StableLogDir: home dir unavailable: %w", err)
-	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(projectDir))
-	slug := filepath.Base(projectDir) + "-" + fmt.Sprintf("%08x", h.Sum32())[:6]
-	return filepath.Join(home, ".ralph", "logs", slug), nil
+// ActiveLogPath returns the path for today's log segment under logDir.
+// The file is named <name>.<YYYY-MM-DD>.log so each calendar day gets its
+// own segment; old segments age out via PruneLogs.
+func ActiveLogPath(logDir, name string) string {
+	date := time.Now().Format("2006-01-02")
+	return filepath.Join(logDir, name+"."+date+".log")
+}
+
+// MigrateLegacyLogsFrom removes the given legacy log directory tree if it
+// exists. Call with the path of the old ~/.ralph/logs/<slug> directory on
+// first startup to clean up the global location that is no longer used.
+func MigrateLegacyLogsFrom(legacyLogsDir string) {
+	_ = os.RemoveAll(legacyLogsDir)
 }
 
 // PruneLogs deletes files in logDir whose modification time is older than

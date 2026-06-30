@@ -71,13 +71,12 @@ func TestLoop_RepeatedError_FirstIterationSkipsTask(t *testing.T) {
 		},
 	}
 
-	rawLogPath := filepath.Join(ralphDir, "raw.log")
 	runner := &stubRunner{
 		onRunCfg: func(cfg claude.RunConfig) {
 			// readLogFrom(path, 0) skips the first line (off-by-one when logStart=0
 			// and file was empty before the run). Write 4 lines so 3 are seen after
 			// the skip — enough to reach the repeated-error threshold of 3.
-			writeErrors(t, rawLogPath, "Error: cannot find module 'foo'", 4)
+			writeErrors(t, cfg.RawLog, "Error: cannot find module 'foo'", 4)
 		},
 	}
 
@@ -147,13 +146,12 @@ func TestLoop_ConsecutiveSkips_CascadeHalts(t *testing.T) {
 		},
 	}
 
-	rawLogPath := filepath.Join(ralphDir, "raw.log")
 	runner := &stubRunner{
 		onRunCfg: func(cfg claude.RunConfig) {
 			// Each task appends 4 identical error lines. readLogFrom skips the first
 			// line when logStart=0 (off-by-one), so 3 are seen for task 1 — enough
 			// to reach the threshold. Tasks 2 and 3 have logStart>0 and see all 4.
-			appendErrors(t, rawLogPath, "Error: cannot find module 'foo'", 4)
+			appendErrors(t, cfg.RawLog, "Error: cannot find module 'foo'", 4)
 		},
 	}
 
@@ -219,7 +217,6 @@ func TestLoop_RepeatedError_TwoConsecutiveIterationsHalt(t *testing.T) {
 		},
 	}
 
-	rawLogPath := filepath.Join(ralphDir, "raw.log")
 	runner := &stubRunner{
 		onRunCfg: func(cfg claude.RunConfig) {
 			// Always appends 4 identical error lines per invocation.
@@ -227,7 +224,7 @@ func TestLoop_RepeatedError_TwoConsecutiveIterationsHalt(t *testing.T) {
 			// Iteration 2 (logStart=4): readLogFrom sees 4 new lines; errorHashes
 			// already has count=3, so the first new line (count=4 >= 3) returns true
 			// immediately → repeatedErrorIterations becomes 2 → Halt.
-			appendErrors(t, rawLogPath, "Error: cannot find module 'foo'", 4)
+			appendErrors(t, cfg.RawLog, "Error: cannot find module 'foo'", 4)
 		},
 	}
 
@@ -281,11 +278,10 @@ func TestLoop_SkipWithOpenDependents_EscalatesToHalt(t *testing.T) {
 		},
 	}
 
-	rawLogPath := filepath.Join(ralphDir, "raw.log")
 	runner := &stubRunner{
 		onRunCfg: func(cfg claude.RunConfig) {
 			// 4 lines so 3 survive the readLogFrom off-by-one when logStart=0.
-			writeErrors(t, rawLogPath, "Error: cannot find module 'foo'", 4)
+			writeErrors(t, cfg.RawLog, "Error: cannot find module 'foo'", 4)
 		},
 	}
 

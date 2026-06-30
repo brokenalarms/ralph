@@ -10,36 +10,90 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
-// StableLogDir returns a deterministic path under ~/.ralph/logs/ for each project dir.
-func TestStableLogDir(t *testing.T) {
-	home, _ := os.UserHomeDir()
+// ActiveLogPath returns a date-suffixed path under logDir for the given log name.
+func TestActiveLogPath(t *testing.T) {
+	logDir := "/some/project/.ralph"
+	path := logging.ActiveLogPath(logDir, "loop")
 
-	dir1, err := logging.StableLogDir("/Users/alice/projects/myapp")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !strings.HasPrefix(path, logDir) {
+		t.Errorf("path should be under logDir: %s", path)
 	}
-	dir2, err := logging.StableLogDir("/Users/alice/projects/myapp")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !strings.HasSuffix(path, ".log") {
+		t.Errorf("path should end in .log: %s", path)
 	}
-	if dir1 != dir2 {
-		t.Errorf("same projectDir should give same log dir: %s vs %s", dir1, dir2)
+	date := time.Now().Format("2006-01-02")
+	if !strings.Contains(filepath.Base(path), "loop."+date) {
+		t.Errorf("path should contain 'loop.%s': %s", date, path)
+	}
+}
+
+// PruneLogs deletes date-suffixed segments older than retentionDays and keeps recent ones.
+func TestPruneLogs_DateSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	now := time.Now()
+	oldTime := now.Add(-40 * 24 * time.Hour)
+	recentTime := now.Add(-5 * 24 * time.Hour)
+
+	oldSegment := filepath.Join(dir, "loop.2026-05-01.log")
+	recentSegment := filepath.Join(dir, "loop.2026-06-24.log")
+	activeSegment := filepath.Join(dir, "loop.2026-06-29.log")
+
+	for _, f := range []string{oldSegment, recentSegment, activeSegment} {
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(oldSegment, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(recentSegment, recentTime, recentTime); err != nil {
+		t.Fatal(err)
+	}
+	// activeSegment mtime is current (default after WriteFile)
+
+	if err := logging.PruneLogs(dir, 30); err != nil {
+		t.Fatalf("PruneLogs: %v", err)
 	}
 
-	dir3, err := logging.StableLogDir("/Users/alice/projects/otherapp")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := os.Stat(oldSegment); !os.IsNotExist(err) {
+		t.Error("old segment should have been pruned")
 	}
-	if dir1 == dir3 {
-		t.Errorf("different projectDirs should give different log dirs")
+	if _, err := os.Stat(recentSegment); os.IsNotExist(err) {
+		t.Error("recent segment should have been kept")
+	}
+	if _, err := os.Stat(activeSegment); os.IsNotExist(err) {
+		t.Error("active segment should have been kept")
+	}
+}
+
+// MigrateLegacyLogs removes the legacy ~/.ralph/logs tree so nothing remains under the home dir.
+func TestMigrateLegacyLogs(t *testing.T) {
+	fakeHome := t.TempDir()
+	legacyLogs := filepath.Join(fakeHome, ".ralph", "logs")
+	if err := os.MkdirAll(legacyLogs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyLogs, "old.log"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	if !strings.HasPrefix(dir1, filepath.Join(home, ".ralph", "logs")) {
-		t.Errorf("log dir should be under ~/.ralph/logs/: %s", dir1)
+	logging.MigrateLegacyLogsFrom(legacyLogs)
+
+	if _, err := os.Stat(legacyLogs); !os.IsNotExist(err) {
+		t.Error("legacy logs directory should have been removed")
 	}
-	if !strings.Contains(filepath.Base(dir1), "myapp") {
-		t.Errorf("log dir slug should include project base name: %s", dir1)
+	// Parent .ralph dir should not be removed
+	parent := filepath.Join(fakeHome, ".ralph")
+	if _, err := os.Stat(parent); os.IsNotExist(err) {
+		t.Error(".ralph parent dir should remain")
 	}
+}
+
+// MigrateLegacyLogs is a no-op when the legacy directory does not exist.
+func TestMigrateLegacyLogs_NoOp(t *testing.T) {
+	logging.MigrateLegacyLogsFrom("/nonexistent/path/logs")
+	// no panic, no error
 }
 
 // PruneLogs deletes files older than retentionDays and leaves newer ones.

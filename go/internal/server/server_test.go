@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 func newTestServer(t *testing.T) (*Server, string) {
@@ -291,7 +293,7 @@ func TestLog(t *testing.T) {
 	for i := range lines {
 		lines[i] = strings.Repeat("x", 10)
 	}
-	os.WriteFile(filepath.Join(rd, "loop.log"), []byte(strings.Join(lines, "\n")), 0o644)
+	os.WriteFile(logging.ActiveLogPath(rd, "loop"), []byte(strings.Join(lines, "\n")), 0o644)
 
 	req := httptest.NewRequest("GET", "/log?lines=5", nil)
 	w := httptest.NewRecorder()

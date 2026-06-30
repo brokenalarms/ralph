@@ -618,7 +618,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	headBefore := l.git.HeadRev()
-	rawLogPath := filepath.Join(l.cfg.Dirs.EffectiveLogDir(), "raw.log")
+	rawLogPath := logging.ActiveLogPath(l.cfg.Dirs.RalphDir, "raw")
 	logStart := fileLineCount(rawLogPath)
 
 	attemptContext := l.attemptContext(taskID, nextTask)
