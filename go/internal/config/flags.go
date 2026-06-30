@@ -401,6 +401,49 @@ var Flags = []FlagDef{
 		},
 		Read: func(cfg *Config) string { return cfg.CodeRabbitReviewTimeout.String() },
 	},
+	// Stagnation thresholds
+	{
+		Help: "Max zero-progress idle/wall-clock attempts before parking a task", Default: "2",
+		ConfigKey: "max_failed_starts",
+		Kind:      KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.MaxFailedStarts = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxFailedStarts) },
+	},
+	{
+		Help: "Max compaction events before parking a task", Default: "1",
+		ConfigKey: "max_compaction_parks",
+		Kind:      KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.MaxCompactionParks = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxCompactionParks) },
+	},
+	{
+		Help: "Max consecutive distinct-task skips before halting the loop", Default: "3",
+		ConfigKey: "cascade_skip_limit",
+		Kind:      KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.CascadeSkipLimit = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.CascadeSkipLimit) },
+	},
 	// Attempt limits
 	{
 		Help: "Max recent attempts shown in agent prompt context", Default: "3",

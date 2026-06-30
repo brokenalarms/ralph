@@ -122,6 +122,47 @@ func (l *Loop) maxIdleTimeoutFailures() int {
 	return 3
 }
 
+// maxFailedStarts returns the configured per-task failed-start cap (defaulting to 2).
+func (l *Loop) maxFailedStarts() int {
+	if l.cfg.MaxFailedStarts > 0 {
+		return l.cfg.MaxFailedStarts
+	}
+	return 2
+}
+
+// maxCompactionParks returns the configured compaction park cap (defaulting to 1).
+func (l *Loop) maxCompactionParks() int {
+	if l.cfg.MaxCompactionParks > 0 {
+		return l.cfg.MaxCompactionParks
+	}
+	return 1
+}
+
+// cascadeSkipLimit returns the configured consecutive-skip halt limit (defaulting to 3).
+func (l *Loop) cascadeSkipLimit() int {
+	if l.cfg.CascadeSkipLimit > 0 {
+		return l.cfg.CascadeSkipLimit
+	}
+	return 3
+}
+
+// incrementCompactionParkCount records one compaction event for the given task
+// using persistent bead metadata so the count survives loop restarts.
+// Returns the new total.
+func (l *Loop) incrementCompactionParkCount(taskID string) int {
+	if l.taskBackend == nil || taskID == "" {
+		return 1
+	}
+	v, _ := l.taskBackend.GetMetadata(taskID, "compaction_parks")
+	count := 0
+	if n, err := strconv.Atoi(v); err == nil {
+		count = n
+	}
+	count++
+	_ = l.taskBackend.SetMetadata(taskID, "compaction_parks", strconv.Itoa(count))
+	return count
+}
+
 // incrementFailedStartCount records one zero-progress attempt for the given
 // task using persistent bead metadata so the count survives loop restarts.
 // Returns the new total. Only called when the agent produced no commits.

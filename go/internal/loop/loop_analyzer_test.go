@@ -258,6 +258,63 @@ func TestLoop_RepeatedError_TwoConsecutiveIterationsHalt(t *testing.T) {
 	}
 }
 
+// Proves: CascadeSkipLimit=2 in config halts the loop after 2 consecutive
+// distinct-task skips instead of the default 3.
+func TestCascadeSkipLimit_ConfigOverridesDefault(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &seqTaskBackend{
+		TrackingBackend: &testutil.TrackingBackend{
+			MutableBackend: testutil.MutableBackend{
+				StubBackend: testutil.StubBackend{Total: 2},
+			},
+		},
+		queue: []tasks.TaskInfo{
+			{ID: "ralph-c1", Title: "Task one"},
+			{ID: "ralph-c2", Title: "Task two"},
+		},
+	}
+
+	runner := &stubRunner{
+		onRunCfg: func(cfg claude.RunConfig) {
+			appendErrors(t, cfg.RawLog, "Error: cannot find module 'foo'", 4)
+		},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations:    10,
+		CallsPerHour:     80,
+		CascadeSkipLimit: 2,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+	})
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	status, _ := st.Read("status")
+	if status != "halted_cascade_skipped:2" {
+		t.Errorf("expected halted_cascade_skipped:2 with CascadeSkipLimit=2, got %q", status)
+	}
+}
+
 // Proves: when the analyzer would skip a task that has open dependents, the
 // task is parked (SkipTask IS called) — open dependents are no longer a
 // reason to refuse or escalate to halt. Dependent re-pointing is a triage
