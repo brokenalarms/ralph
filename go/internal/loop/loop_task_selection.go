@@ -89,6 +89,14 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		return taskContext{}, actionDone, waited
 	}
 
+	// Reap loop-owned orphaned claims that block higher-priority open tasks before
+	// the ready-queue check. Runs regardless of queue state so a non-empty backlog
+	// does not starve higher-priority blocked dependents. External stuck claims
+	// (stuckHalt) are left to the empty-queue path below.
+	if l.reaperLoopOrphanedClaims() == stuckRetry {
+		return l.selectNextTaskInner(ctx, p, attempts+1, waited)
+	}
+
 	avail, err := tasks.CheckAvailability(l.taskBackend)
 	if err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error: %v", err)
@@ -200,6 +208,29 @@ func (l *Loop) detectStuckInProgress() stuckOutcome {
 			strings.Join(stuck.ExternalStuckTaskIDs, ", "), strings.Join(stuck.BlockedTaskIDs, ", "))
 		l.state.Write("status", "halted_blocked_by_in_progress")
 		return stuckHalt
+	}
+	for _, id := range stuck.LoopOwnedStuckTaskIDs {
+		if reopenErr := l.taskBackend.ReopenTask(id); reopenErr != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error},
+				"Failed to reopen orphaned claim %s: %v — halting", id, reopenErr)
+			l.state.Write("status", "halted_blocked_by_in_progress")
+			return stuckHalt
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Info},
+			"Self-recovered orphaned claim %s (reopened) — re-entering selection", id)
+	}
+	return stuckRetry
+}
+
+// reaperLoopOrphanedClaims detects loop-owned in_progress claims that block
+// higher-priority open tasks and reopens them so they re-enter selection.
+// Returns stuckRetry when any orphaned claims were reopened, stuckNone when
+// none exist. Does not check external stuck claims — those are handled by
+// detectStuckInProgress in the empty-queue path.
+func (l *Loop) reaperLoopOrphanedClaims() stuckOutcome {
+	stuck, err := tasks.DetectBlockedByInProgress(l.taskBackend)
+	if err != nil || stuck == nil || len(stuck.LoopOwnedStuckTaskIDs) == 0 {
+		return stuckNone
 	}
 	for _, id := range stuck.LoopOwnedStuckTaskIDs {
 		if reopenErr := l.taskBackend.ReopenTask(id); reopenErr != nil {
