@@ -380,6 +380,23 @@ func (b *reopenableBackend) ReopenTask(id string) error {
 	return nil
 }
 
+// orphanWithReadyQueueBackend simulates the target scenario: lower-priority
+// ready work exists alongside a loop-owned orphaned in_progress claim that
+// blocks a higher-priority task. After ReopenTask, the orphaned claim becomes
+// the next selectable task (highest priority once reopened).
+type orphanWithReadyQueueBackend struct {
+	testutil.StubBackend
+	reopenCalls []string
+}
+
+func (b *orphanWithReadyQueueBackend) ReopenTask(id string) error {
+	b.reopenCalls = append(b.reopenCalls, id)
+	b.AllInProgressTasks = nil
+	b.NextID = id             // reopened task is now highest priority
+	b.NextTask = "Reopened orphaned task"
+	return nil
+}
+
 // selectNextTask reopens a loop-owned orphaned in_progress claim and re-enters
 // selection instead of halting. Proves: a claim abandoned by a prior loop
 // session (assignee=ralph-loop, status=in_progress, blocking a dependent) is
@@ -426,6 +443,49 @@ func TestSelectNextTask_LoopOwnedOrphanedClaim_ReopensAndContinues(t *testing.T)
 	}
 	if waitHookCalled {
 		t.Error("waitForTasks must NOT be entered during self-recovery")
+	}
+}
+
+// selectNextTask reopens a loop-owned orphaned in_progress claim and re-enters
+// selection even when lower-priority ready work exists in the queue. Proves: the
+// orphan reap fires before the availability check, not only when the queue is empty,
+// so an orphaned claim blocking higher-priority work is recovered before any
+// lower-priority task is selected.
+func TestSelectNextTask_OrphanedClaimReopens_WhenReadyQueueNonEmpty(t *testing.T) {
+	backend := &orphanWithReadyQueueBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 3, // lower-priority ready work exists; HasRemaining = true
+			Total:     3,
+			NextID:    "ralph-low",
+			NextTask:  "Low priority task",
+			AllInProgressTasks: []tasks.TaskInfo{
+				{ID: "ralph-orphaned", Title: "Orphaned task", Assignee: "ralph-loop"},
+			},
+			OpenDependents: []string{"ralph-high-priority"},
+		},
+	}
+	l, _ := newTestLoopForSelection(t, &backend.StubBackend)
+	l.taskBackend = backend
+
+	tc, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  1,
+		maxIterations: 100,
+		completedIDs:  map[string]bool{},
+	})
+
+	if action != actionProceed {
+		t.Fatalf("expected actionProceed after self-recovering orphaned claim, got %v", action)
+	}
+	// The orphaned task must be re-selected, not the lower-priority ready task.
+	if tc.id != "ralph-orphaned" {
+		t.Errorf("expected orphaned task ralph-orphaned to be re-selected, got %q (ralph-low must not win when orphan blocks higher-priority work)", tc.id)
+	}
+	if len(backend.reopenCalls) == 0 || backend.reopenCalls[0] != "ralph-orphaned" {
+		t.Errorf("expected ReopenTask(ralph-orphaned), got reopenCalls=%v", backend.reopenCalls)
+	}
+	status, _ := l.state.Read("status")
+	if status == "halted_blocked_by_in_progress" {
+		t.Error("loop-owned orphaned claim must NOT produce halted_blocked_by_in_progress")
 	}
 }
 
