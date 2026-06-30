@@ -163,6 +163,19 @@ func (m *MutableBackend) GetMetadata(id, key string) (string, error) {
 	return "", nil
 }
 
+func (m *MutableBackend) SetMetadata(id, key, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.Metadata == nil {
+		m.Metadata = make(map[string]map[string]string)
+	}
+	if m.Metadata[id] == nil {
+		m.Metadata[id] = make(map[string]string)
+	}
+	m.Metadata[id][key] = value
+	return nil
+}
+
 // Lock exposes the mutex for tests that need to modify fields atomically.
 func (m *MutableBackend) Lock()   { m.mu.Lock() }
 func (m *MutableBackend) Unlock() { m.mu.Unlock() }

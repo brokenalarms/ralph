@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -119,4 +120,21 @@ func (l *Loop) maxIdleTimeoutFailures() int {
 		return l.cfg.MaxIdleTimeoutFailures
 	}
 	return 3
+}
+
+// incrementFailedStartCount records one zero-progress attempt for the given
+// task using persistent bead metadata so the count survives loop restarts.
+// Returns the new total. Only called when the agent produced no commits.
+func (l *Loop) incrementFailedStartCount(taskID string) int {
+	if l.taskBackend == nil || taskID == "" {
+		return 1
+	}
+	v, _ := l.taskBackend.GetMetadata(taskID, "failed_starts")
+	count := 0
+	if n, err := strconv.Atoi(v); err == nil {
+		count = n
+	}
+	count++
+	_ = l.taskBackend.SetMetadata(taskID, "failed_starts", strconv.Itoa(count))
+	return count
 }

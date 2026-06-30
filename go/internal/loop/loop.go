@@ -366,18 +366,11 @@ func emitTaskSummary(ct CompletedTask, log *logging.Logger) {
 // skipTask reassigns the bead to ralph-task (config.TaskAssignee), records
 // the reason as a comment, and tracks the ID in-memory for the lifetime of
 // this session. The bead leaves the loop's bd ready inbox by assignment, so
-// no separate skip filter is needed.
-// Returns (true, haltReason) when the skip is escalated because the task has
-// open dependents that would be stranded; (false, "") on a normal successful skip.
-func (l *Loop) skipTask(id, reason string) (bool, string) {
+// no separate skip filter is needed. Always parks — open dependents are a
+// triage concern for the task manager, not a reason to refuse.
+func (l *Loop) skipTask(id, reason string) {
 	if id == "" {
-		return false, ""
-	}
-	if l.taskBackend != nil {
-		deps, err := l.taskBackend.GetOpenDependents(id)
-		if err == nil && len(deps) > 0 {
-			return true, "skip_would_strand_dependents:" + deps[0]
-		}
+		return
 	}
 	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
 	if err := l.taskBackend.SkipTask(id, reason); err != nil {
@@ -388,7 +381,6 @@ func (l *Loop) skipTask(id, reason string) (bool, string) {
 		l.sessionSkippedIDs = make(map[string]bool)
 	}
 	l.sessionSkippedIDs[id] = true
-	return false, ""
 }
 
 // ensureActiveReviewers populates l.activeReviewers on first call. Subsequent

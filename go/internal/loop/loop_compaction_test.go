@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
@@ -268,5 +269,90 @@ func TestLoop_CompactingEventSkipsTask(t *testing.T) {
 	}
 	if insp.GetRemoveWorktreeCalls() == 0 {
 		t.Error("expected worktree teardown after compaction skip (RemoveWorktree), but it was never called — partial commits would survive for the flush safety-net to merge")
+	}
+}
+
+// Proves: compaction parks a task even when that task has open dependents —
+// the strand guard is gone, so the loop never halts on strand. The task is
+// parked and the loop continues to other ready work (AC1, AC4, AC5 from
+// ralph-n4u3).
+func TestLoop_CompactingTask_ParksWithOpenDependents(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:      1,
+				Total:          1,
+				NextID:         "task-compact-dep",
+				NextTask:       "Task that compacts with open dep",
+				OpenDependents: []string{"task-dep-1"},
+			},
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{Compacted: true},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		RemoteURL:  "https://github.com/owner/repo.git",
+	})
+
+	logger := logging.New(nil)
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Runner:       runner,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// Task must be parked (SkipTask called) even though it has an open dependent.
+	backend.SkipMu.Lock()
+	skippedIDs := append([]string(nil), backend.SkippedIDs...)
+	skipReasons := append([]string(nil), backend.SkipReasons...)
+	backend.SkipMu.Unlock()
+	if len(skippedIDs) == 0 {
+		t.Fatal("expected task to be parked (SkipTask called) despite open dependent, but no tasks were skipped")
+	}
+	if skippedIDs[0] != "task-compact-dep" {
+		t.Errorf("expected SkipTask(task-compact-dep), got %q", skippedIDs[0])
+	}
+	if skipReasons[0] != "compaction_detected" {
+		t.Errorf("expected skip reason 'compaction_detected', got %q", skipReasons[0])
+	}
+
+	// Loop must not halt with a strand error.
+	status, _ := st.Read("status")
+	if strings.HasPrefix(status, "halted_skip_would_strand_dependents") {
+		t.Errorf("loop halted with strand error even though strand guard is removed; got %q", status)
 	}
 }

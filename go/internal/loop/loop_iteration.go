@@ -724,14 +724,21 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			Analysis: analysis,
 		})
 		l.taskIdleTimeouts++
+		// Persistent cross-session cap: park after 2 failed starts with no commits.
+		// The in-session taskIdleTimeouts guard remains as an additional ceiling.
+		hasNewCommits := l.git.LogOneline(headBefore, l.git.HeadRev()) != ""
+		if !hasNewCommits {
+			if count := l.incrementFailedStartCount(taskID); count >= 2 {
+				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Failed start %d times with no progress for %s — skipping task", count, taskID)
+				l.skipTask(taskID, "failed_start_limit_reached")
+				return actionRetry
+			}
+		}
 		if l.taskIdleTimeouts >= l.maxIdleTimeoutFailures() {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Idle timeout %d times for %s — skipping task", l.taskIdleTimeouts, taskID)
 			l.skipTask(taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}
-		// taskIdleTimeouts still bounds retries: l.currentTaskID is unchanged
-		// on re-pick, so runAgent does not reset the counter and the
-		// maxIdleTimeoutFailures skip above fires after N timeouts.
 		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}

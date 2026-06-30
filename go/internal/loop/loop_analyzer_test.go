@@ -259,8 +259,10 @@ func TestLoop_RepeatedError_TwoConsecutiveIterationsHalt(t *testing.T) {
 }
 
 // Proves: when the analyzer would skip a task that has open dependents, the
-// skip is escalated to a halt to avoid stranding those dependents (AC9).
-func TestLoop_SkipWithOpenDependents_EscalatesToHalt(t *testing.T) {
+// task is parked (SkipTask IS called) — open dependents are no longer a
+// reason to refuse or escalate to halt. Dependent re-pointing is a triage
+// concern for the task manager, not a loop invariant.
+func TestLoop_SkipWithOpenDependents_ParksNotHalts(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -280,6 +282,11 @@ func TestLoop_SkipWithOpenDependents_EscalatesToHalt(t *testing.T) {
 
 	runner := &stubRunner{
 		onRunCfg: func(cfg claude.RunConfig) {
+			// Remove the task from the loop's inbox so the loop exits cleanly after
+			// the first skip; otherwise the stub re-selects it indefinitely.
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Unlock()
 			// 4 lines so 3 survive the readLogFrom off-by-one when logStart=0.
 			writeErrors(t, cfg.RawLog, "Error: cannot find module 'foo'", 4)
 		},
@@ -309,19 +316,19 @@ func TestLoop_SkipWithOpenDependents_EscalatesToHalt(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	status, _ := st.Read("status")
-	if !strings.HasPrefix(status, "halted_skip_would_strand_dependents:") {
-		t.Errorf("expected halted_skip_would_strand_dependents:ralph-dep1, got %q", status)
-	}
-	if status != "halted_skip_would_strand_dependents:ralph-dep1" {
-		t.Errorf("expected halt naming the blocking dependent, got %q", status)
+	// The task MUST be parked regardless of open dependents.
+	backend.SkipMu.Lock()
+	skippedIDs := append([]string(nil), backend.SkippedIDs...)
+	backend.SkipMu.Unlock()
+	if len(skippedIDs) == 0 {
+		t.Error("expected SkipTask to be called for task with open dependents, but it was not")
+	} else if skippedIDs[0] != "ralph-abc" {
+		t.Errorf("expected SkipTask(ralph-abc), got %q", skippedIDs[0])
 	}
 
-	// The task must NOT have been skipped — it was escalated to a halt instead.
-	backend.SkipMu.Lock()
-	skippedCount := len(backend.SkippedIDs)
-	backend.SkipMu.Unlock()
-	if skippedCount != 0 {
-		t.Errorf("task with dependents should not be skipped, got %d SkipTask calls", skippedCount)
+	// The loop must NOT halt with a strand-dependents error.
+	status, _ := st.Read("status")
+	if strings.HasPrefix(status, "halted_skip_would_strand_dependents") {
+		t.Errorf("loop must not halt with strand error; got %q", status)
 	}
 }
