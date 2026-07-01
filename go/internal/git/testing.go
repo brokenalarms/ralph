@@ -371,14 +371,14 @@ type StubRepoConfig struct {
 	GitHub StubGitHubConfig
 
 	// Static returns for read-only queries.
-	ChangedFiles []string
-	DiffStat     string
-	DiffFullResult         string
-	DiffFromBaseResult     string
-	LogOnelineResult       string
-	ConflictDiff           string
-	RecentChangedFiles     string
-	CIFailureLog           string
+	ChangedFiles       []string
+	DiffStat           string
+	DiffFullResult     string
+	DiffFromBaseResult string
+	LogOnelineResult   string
+	ConflictDiff       string
+	RecentChangedFiles string
+	CIFailureLog       string
 
 	// Ship / merge results — prescribed outcomes where deriving from state
 	// would require an unreasonable modeling burden.
@@ -437,6 +437,7 @@ type StubInspector interface {
 	GetBranchForTaskCalls() int
 	GetRemoveWorktreeCalls() int
 	GetFlushUnpushedWorkCalls() int
+	GetReplyToAndResolveCommentsCalls() int
 }
 
 // stubRepo is an unexported fake of Ops. Tests receive it only through the
@@ -452,15 +453,16 @@ type stubRepo struct {
 
 	// Mutable state. Initialized from cfg, mutated by SUT-driven Ops methods
 	// so subsequent reads reflect what the SUT did.
-	worktreeBranch     string
-	prevBranch         string
-	branchRenamed      bool
-	headRev            string
-	knownPRNumber          int
-	commitSeq              int
-	branchForTaskCalls     int
-	removeWorktreeCalls    int
-	flushUnpushedWorkCalls int
+	worktreeBranch                 string
+	prevBranch                     string
+	branchRenamed                  bool
+	headRev                        string
+	knownPRNumber                  int
+	commitSeq                      int
+	branchForTaskCalls             int
+	removeWorktreeCalls            int
+	flushUnpushedWorkCalls         int
+	replyToAndResolveCommentsCalls int
 }
 
 // GetBranchForTaskCalls returns the number of times BranchForTask has been
@@ -475,6 +477,13 @@ func (s *stubRepo) GetRemoveWorktreeCalls() int { return s.removeWorktreeCalls }
 // been called. Used by tests to assert that a skipped task's branch is not
 // flushed/auto-merged by the wait-mode safety-net.
 func (s *stubRepo) GetFlushUnpushedWorkCalls() int { return s.flushUnpushedWorkCalls }
+
+// GetReplyToAndResolveCommentsCalls returns the number of times
+// ReplyToAndResolveComments has been called. Used by tests to assert that a
+// review fix's post-push reply-and-resolve step fires after a successful push.
+func (s *stubRepo) GetReplyToAndResolveCommentsCalls() int {
+	return s.replyToAndResolveCommentsCalls
+}
 
 // Compile-time check that *stubRepo satisfies Ops.
 var _ Ops = (*stubRepo)(nil)
@@ -759,6 +768,7 @@ func (s *stubRepo) PollReview(ctx context.Context, botUsername string, prNumber 
 }
 
 func (s *stubRepo) ReplyToAndResolveComments(_ context.Context, _ int, _ []ReviewComment) error {
+	s.replyToAndResolveCommentsCalls++
 	return s.cfg.ReplyToAndResolveCommentsErr
 }
 

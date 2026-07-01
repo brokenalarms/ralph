@@ -522,11 +522,11 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 		VerifyHook:   passingVerifyHook(),
 	})
@@ -600,15 +600,6 @@ func stubResult(signal bool, summary string) claude.Result {
 	}
 }
 
-// Phase C deletion: TestTryFixReviewComments_RepliesAndResolvesAfterPush
-// relied on HeadRevFunc (sequenced responses: abc123 → def456 to simulate
-// "fix agent committed") and on stub internal tracking of
-// ReplyToAndResolveCommentsCalled/Args. Neither pattern is expressible in
-// the new stubRepo: HeadRevFunc is forbidden (no callback fields) and
-// call-tracking fields do not exist. Equivalent coverage belongs in Phase D
-// real-git integration: a real rebase + real review-resolve via the GitHub
-// fake can observe both outcomes without sequenced callbacks.
-
 // tryFixReviewComments logs each actionable comment as "reviewer: file:line — first line"
 // before spawning the fix agent, giving the operator visibility into what the
 // agent will address without requiring them to check GitHub.
@@ -663,6 +654,57 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	}
 	if !strings.Contains(output, "Missing nil check before dereferencing ptr") {
 		t.Errorf("expected log to contain first line of second comment, got: %s", output)
+	}
+}
+
+// Proves that tryFixReviewComments still replies-to-and-resolves the review
+// threads after a successful push now that fixLoopSpec has no onPushed
+// callback field — the sequencing moved to plain code in the wrapper
+// (call fixLoop, then act on its result) rather than a func field.
+func TestTryFixReviewComments_RepliesAndResolvesAfterPush(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	// HasUncommitted=true causes fixLoop to call CommitAll, advancing headRev —
+	// simulating the fix agent committing changes for the review comment fix.
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		HeadRev:        "task-head",
+		HasUncommitted: true,
+	})
+
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:  st,
+		Git:    gm,
+		Logger: logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "addressed review feedback")}
+			},
+		}),
+	})
+
+	review := &git.AutoReview{
+		Comments: []git.ReviewComment{
+			{Path: "src/foo.go", Line: 42, Body: "Missing nil check before dereferencing ptr"},
+		},
+	}
+
+	applied := l.tryFixReviewComments(context.Background(), "copilot-pull-request-reviewer", review, 1, "task", dir, filepath.Join(ralphDir, "raw.log"))
+	if !applied {
+		t.Fatalf("expected tryFixReviewComments to report the fix as applied")
+	}
+	if calls := gm.(git.StubInspector).GetReplyToAndResolveCommentsCalls(); calls != 1 {
+		t.Errorf("expected ReplyToAndResolveComments to be called once after push, got %d calls", calls)
 	}
 }
 

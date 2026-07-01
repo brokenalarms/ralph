@@ -39,12 +39,8 @@ func TestNoFuncFieldsInModuleStructs(t *testing.T) {
 	// in tracked remediation beads. MUST ONLY SHRINK — never add to this
 	// list; remove each entry as the corresponding remediation bead lands.
 	callbackDebt := map[string]bool{
-		// loop/loop_verify.go — fixLoopSpec callbacks (ralph-upxl)
-		"loop.fixLoopSpec.spawn":    true,
-		"loop.fixLoopSpec.onPushed": true,
-
 		// git/git_merge.go — shipInfra helper cluster (ralph-ff8z)
-		"git.shipInfra.push":                 true,
+		"git.shipInfra.push":                  true,
 		"git.shipInfra.hasUncommitted":        true,
 		"git.shipInfra.commitAll":             true,
 		"git.shipInfra.branchHasUnmergedWork": true,
