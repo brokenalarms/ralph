@@ -16,7 +16,7 @@ var Version = "0.1.0-dev"
 // the latest released model in that family, so Ralph automatically picks up
 // new model versions without code changes. Use full version strings (e.g.
 // "claude-opus-4-6") only when reproducibility against a specific release
-// is required, via fix_escalation_model, etc.
+// is required.
 const (
 	ModelHaiku  = "haiku"
 	ModelSonnet = "sonnet"
@@ -55,11 +55,10 @@ type Config struct {
 	BaseBranch                 string
 	Wait                       bool
 	Verbose                    bool
-	Model                      string
+	WorkingModel               string
 	VerifyModel                string
 	VerifyEscalationModel      string
 	FixModel                   string
-	FixEscalationModel         string
 	PostTask                   string
 	VerifyBuild                string
 	Verify                     string

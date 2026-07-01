@@ -194,7 +194,7 @@ func analyzeIteration(p analyzeIterationParams, rawLogPath string, logStart int,
 // stop (caller should return nil).
 func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, runIteration int, prep iterationPrompt, taskID, nextTask string, analysisResult analyzer.Result, headAfter string) (string, bool, analyzer.Action) {
 	if result.Summary != "" {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.Model}, "Summary: %s", result.Summary)
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.WorkingModel}, "Summary: %s", result.Summary)
 	}
 
 	l.logger.Emit(logging.Opts{}, "Run iteration %d complete (%dm%ds).",

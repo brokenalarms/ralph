@@ -154,13 +154,12 @@ type Config struct {
 	Notify                bool
 	Wait                  bool
 	Verbose               bool
-	Model                 string
+	WorkingModel          string
 	Version               string
 	Verify                string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
-	FixModel              string // model for fix agents on attempt 1; defaults to sonnet
-	FixEscalationModel    string // model for fix agents on attempt 2+; defaults to opus
+	FixModel              string // model for fix agents, from attempt 1; defaults to opus
 
 	// Attempt limits — overrides package defaults when set.
 	MaxPromptAttempts      int
@@ -462,7 +461,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 	}
 
 	taskStart := time.Now()
-	agentModel := l.cfg.Model
+	agentModel := l.cfg.WorkingModel
 	l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
 	result, runErr := l.runner.Run(claude.RunConfig{
 		Ctx:          ctx,

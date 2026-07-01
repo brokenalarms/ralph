@@ -102,11 +102,10 @@ Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 | `--evolve` | Self-improving mode: re-exec ralph after each merged task so improvements take effect immediately (requires `--auto-merge`) | — | |
 | `--post-task <script>` | Run a script after each task completes, before evolve re-exec. Receives `RALPH_TASK_ID`, `RALPH_PR_NUMBER`, and `RALPH_MERGED` env vars. | — | |
 | `--verify-build <script>` | Run a script before pre-iteration tests to check project-level build health | — | |
-| `--model-ceiling <model>` | Model ceiling for all LLM interactions — no call may use a higher-tier model than this | claude-sonnet-4-6 | |
 | `--notify` | Send macOS notification on each task completion | — | |
 | `--tmux` | Run in tmux 3-pane layout (status / output / plan) | — | |
 
-All other tuning (timeouts, model escalation, attempt limits, thresholds) lives in `.ralph/config.toml` — see [Configuration](#configuration) below.
+All other tuning (timeouts, model selection, attempt limits, thresholds) lives in `.ralph/config.toml` — see [Configuration](#configuration) below.
 
 ## Configuration
 
@@ -122,9 +121,10 @@ post_task = "make build"
 max_iterations = 50
 calls_per_hour = 80
 test_timeout = "5m"
-verify_model = "claude-haiku-4-5-20251001"
-fix_model = "claude-sonnet-4-6"
-fix_escalation_model = "claude-opus-4-6"
+working_model = "sonnet"
+verify_model = "haiku"
+verify_escalation_model = "sonnet"
+fix_model = "opus"
 ```
 
 Run `ralph loop --help` to see all available options and their corresponding config keys.
@@ -140,18 +140,14 @@ The orchestrator owns the entire push/PR/merge lifecycle. The agent writes code 
 - `bd close` — orchestrator closes the bead only after successful merge
 - `git checkout` / `git branch` — prevents sub-agents from interfering with branch management
 
-### Model escalation
+### Model configuration
 
-The loop uses a tiered model strategy to balance cost and quality:
+Ralph assigns models per role, configured in `.ralph/config.toml` as bare tier aliases (`sonnet` / `haiku` / `opus`), never pinned model IDs:
 
-- **Agent first pass** — sonnet
-- **Agent retry** — opus; escalated automatically on subsequent attempts
-- **Verification first pass** — haiku
-- **Verification retry** — sonnet
-- **Fix agent first pass** — sonnet; covers test/compile/verify/CI/Copilot/conflict fix agents
-- **Fix agent retry** — opus; escalated automatically on subsequent attempts
-
-`--model-ceiling` sets the ceiling from the CLI — no LLM call may use a higher-tier model than the value set. Per-stage model defaults are configured in `.ralph/config.toml` (`verify_model`, `fix_model`, `fix_escalation_model`, etc.).
+- **`working_model`** (default sonnet) — the main agent that works each iteration
+- **`verify_model`** (default haiku) — LLM verification, first attempt
+- **`verify_escalation_model`** (default sonnet) — LLM verification, subsequent attempts
+- **`fix_model`** (default opus) — repair agent used for test/compile/verify/CI/Copilot/conflict fixes, from its first attempt (no lower-tier warm-up)
 
 ### Verification pipeline
 

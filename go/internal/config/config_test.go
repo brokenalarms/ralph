@@ -1185,18 +1185,18 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	}
 }
 
-// Proves: model in config.toml is loaded into cfg.Model.
-func TestModelLoadedFromTOML(t *testing.T) {
+// Proves: working_model in config.toml is loaded into cfg.WorkingModel.
+func TestWorkingModelLoadedFromTOML(t *testing.T) {
 	dir := t.TempDir()
 	tomlPath := filepath.Join(dir, "config.toml")
-	os.WriteFile(tomlPath, []byte("model = "+ModelHaiku+"\n"), 0o644)
+	os.WriteFile(tomlPath, []byte("working_model = "+ModelHaiku+"\n"), 0o644)
 
 	cfg, _ := Parse(nil)
 	if err := cfg.LoadConfigFile(tomlPath); err != nil {
 		t.Fatalf("LoadConfigFile: %v", err)
 	}
-	if cfg.Model != ModelHaiku {
-		t.Errorf("cfg.Model = %q, want %q", cfg.Model, ModelHaiku)
+	if cfg.WorkingModel != ModelHaiku {
+		t.Errorf("cfg.WorkingModel = %q, want %q", cfg.WorkingModel, ModelHaiku)
 	}
 }
 
