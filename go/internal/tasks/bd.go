@@ -652,6 +652,14 @@ func (b *BD) SkipTask(id string, reason SkipReason, detail string) error {
 	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open", "--assignee="+config.TaskAssignee, "--add-label=skipped"); err != nil {
 		return err
 	}
+	if err := b.SetMetadata(id, "skip_reason", string(reason)); err != nil {
+		return err
+	}
+	if detail != "" {
+		if err := b.SetMetadata(id, "skip_detail", detail); err != nil {
+			return err
+		}
+	}
 	comment := string(reason)
 	if detail != "" {
 		comment += ": " + detail

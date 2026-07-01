@@ -67,7 +67,11 @@ for skipped beads that need diagnosis:
 
 1. Run `bd list --assignee=ralph-task --label=skipped` to find beads that
    the loop has reassigned after skipping.
-2. If any exist, read the skip-reason comment on each bead (`bd show <id>`).
+2. If any exist, read `.metadata.skip_reason` and `.metadata.skip_detail`
+   from `bd show <id> --json` for each bead. Legacy beads skipped before
+   metadata persistence was added have no `skip_reason` metadata — for
+   those, fall back to parsing the skip-reason comment; if no comment is
+   parseable either, report the reason as "unknown" rather than erroring.
 3. Classify each by skip reason and append a triage block:
 
    > **Skipped beads requiring triage (N beads):**
@@ -79,13 +83,20 @@ for skipped beads that need diagnosis:
 
 **Classification and routing:**
 
-| Skip reason | What it means | Recommended action |
+`skip_reason` values are the typed `tasks.SkipReason` constants (defined in
+`go/internal/tasks/skip_reason.go`), not free text:
+
+| `skip_reason` | What it means | Recommended action |
 |---|---|---|
 | `compaction_detected` | Bead too large; context window hit mid-iteration | Propose a split using the unwieldy-bead split flow |
 | `idle_timeout_max_failures` | Context window exhausted repeatedly | Propose a split using the unwieldy-bead split flow |
-| `verification_rejected` / `verification_rejected_*` | **Ralph defect** — see principle below | Diagnose via branch-diff-vs-AC, then route to a loop-bug bead or hands-on fix |
-| `push_failed` / `pr_creation_failed` / `close_failed` / `dependency_blocked_by` | Ralph or infra defect | File a ralph bug bead |
-| `skip_would_strand_dependents` | Dependency-order problem | Propose re-ordering or adjusting deps |
+| `verification_rejected` | **Ralph defect** — see principle below | Diagnose via branch-diff-vs-AC, then route to a loop-bug bead or hands-on fix |
+| `push_failed` / `pr_creation_failed` / `close_failed` / `dependency_blocked_by` | Ralph or infra defect (see `skip_detail` for the branch/blocker list) | File a ralph bug bead |
+| `would_strand_dependents` | Dependency-order problem | Propose re-ordering or adjusting deps |
+| `transport_error` / `analyzer` | Ralph or infra defect (see `skip_detail` for the underlying op/reason) | File a ralph bug bead |
+| `failed_start_limit_reached` | Agent process repeatedly failed to start | File a ralph bug bead |
+| `stagnation` | Loop-control cascade detected no progress | See loop-control cascade docs; diagnose before retrying |
+| unknown / no `skip_reason` metadata | Legacy bead skipped before metadata persistence | Fall back to the skip-reason comment, or report reason unknown |
 
 **Core principle — verification_rejected is always a ralph defect:**
 
