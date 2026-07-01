@@ -408,27 +408,35 @@ var nonExecutableBDTypesSet = func() map[string]bool {
 // invocation so container/meta types never reach the selector.
 var bdReadyExcludeTypeArg = "--exclude-type=" + strings.Join(nonExecutableBDTypes, ",")
 
-// getNextIssue returns the highest-priority issue to work on. If a resume
-// task ID is set and that task is still open/in_progress, it is returned
-// directly. Otherwise falls through to bd ready, scoped to the loop's inbox
-// (assignee=config.LoopAssignee). A bead is invisible to the loop until
-// something explicitly hands it off with `bd update <id> --assignee=ralph-loop`,
-// which closes the create→pickup race: a freshly created (unassigned, or
-// task-manager-owned) bead is never in the inbox to be grabbed mid-triage.
+// getNextIssue returns the highest-priority issue to work on.
+// It consults both the interrupted in-flight task (resumeTask) and the best
+// task available from bd ready. A strictly-higher-priority ready task (lower
+// P-number) preempts the resume candidate; equal or lower priority defers to
+// the in-flight task so WIP is not abandoned for equal-priority work.
+// If there is no resume candidate, bd ready is the sole source.
 func (b *BD) getNextIssue() (bdIssue, error) {
-	if issue, ok := b.resumeTask(); ok {
-		return issue, nil
-	}
+	resume, hasResume := b.resumeTask()
 
 	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--assignee="+config.LoopAssignee)
 	if err != nil {
+		// If bd ready fails but we have a resume candidate, use it.
+		if hasResume {
+			return resume, nil
+		}
 		return bdIssue{}, nil
 	}
-	issue, ok := bestIssue(out)
-	if !ok {
-		return bdIssue{}, nil
+	ready, hasReady := bestIssue(out)
+
+	if hasResume && hasReady && issuePriority(ready) < issuePriority(resume) {
+		return ready, nil
 	}
-	return issue, nil
+	if hasResume {
+		return resume, nil
+	}
+	if hasReady {
+		return ready, nil
+	}
+	return bdIssue{}, nil
 }
 
 // resumeTask checks whether the resumeTaskID points to a task that is
