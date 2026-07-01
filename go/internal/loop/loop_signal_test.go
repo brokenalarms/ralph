@@ -244,7 +244,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 	}
 
 	output := logBuf.String()
-	if !strings.Contains(output, "Spawning fix agent for verification rejection") {
+	if !strings.Contains(output, "Spawning fix agent: verification rejection") {
 		t.Errorf("expected fix agent spawn log, got:\n%s", output)
 	}
 }
