@@ -159,36 +159,6 @@ func TestBD_GetNextTaskID_FromReady(t *testing.T) {
 	}
 }
 
-// Proves: in-progress tasks from bd ready are resumed when priority is equal.
-func TestBD_GetNextTask_PrefersInProgressAtSamePriority(t *testing.T) {
-	runner := mockBD(
-		"5",
-		map[string]string{"open": "3", "closed": "2", "in_progress": "1"},
-		"[]",
-		`[{"id":"abc123","title":"Fix the auth module","priority":2,"status":"open"},{"id":"wip-42","title":"Half-done feature","priority":2,"status":"in_progress"}]`,
-	)
-	b := setupBD(t, runner)
-	got, _ := b.GetNextTask()
-	if got != "Half-done feature" {
-		t.Errorf("GetNextTask = %q, want %q", got, "Half-done feature")
-	}
-}
-
-// Proves: in-progress task id is returned when priorities are equal.
-func TestBD_GetNextTaskID_PrefersInProgressAtSamePriority(t *testing.T) {
-	runner := mockBD(
-		"5",
-		map[string]string{"open": "3", "closed": "2", "in_progress": "1"},
-		"[]",
-		`[{"id":"abc123","title":"Fix the auth module","priority":2,"status":"open"},{"id":"wip-42","title":"Half-done feature","priority":2,"status":"in_progress"}]`,
-	)
-	b := setupBD(t, runner)
-	got, _ := b.GetNextTaskID()
-	if got != "wip-42" {
-		t.Errorf("GetNextTaskID = %q, want %q", got, "wip-42")
-	}
-}
-
 // Proves: Init creates .beads dir and updates .gitignore.
 // Proves: Init requires .beads to already exist — never auto-initializes.
 func TestBD_Init_RequiresExistingBeads(t *testing.T) {
@@ -662,72 +632,6 @@ func TestBD_GetNextTaskInfo_ReturnsConsistentPair(t *testing.T) {
 	}
 }
 
-// Proves: GetNextTaskInfo prefers in-progress when priorities are equal.
-func TestBD_GetNextTaskInfo_PrefersInProgressAtSamePriority(t *testing.T) {
-	runner := mockBD(
-		"3",
-		map[string]string{"open": "1", "closed": "1", "in_progress": "1"},
-		"[]",
-		`[{"id":"new-1","title":"Start fresh","priority":2,"status":"open"},{"id":"wip-99","title":"Resume this","priority":2,"status":"in_progress"}]`,
-	)
-	b := setupBD(t, runner)
-	info, err := b.GetNextTaskInfo()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.ID != "wip-99" || info.Title != "Resume this" {
-		t.Errorf("expected wip-99/Resume this, got %s/%s", info.ID, info.Title)
-	}
-}
-
-// Proves: a higher-priority task is selected over a lower-priority in-progress
-// task from the same ready set.
-func TestBD_GetNextTask_HigherPriorityReadyPreempts(t *testing.T) {
-	runner := mockBD(
-		"5",
-		map[string]string{"open": "1", "closed": "2", "in_progress": "1"},
-		"[]",
-		`[{"id":"wip-1","title":"P3 feature","priority":3,"status":"in_progress"},{"id":"hot-1","title":"P0 critical bug","priority":0,"status":"open"}]`,
-	)
-	b := setupBD(t, runner)
-	got, _ := b.GetNextTask()
-	if got != "P0 critical bug" {
-		t.Errorf("GetNextTask = %q, want %q", got, "P0 critical bug")
-	}
-}
-
-// Proves: a higher-priority in-progress task is selected over a lower-priority
-// open task from the same ready set.
-func TestBD_GetNextTask_LowerPriorityReadyDoesNotPreempt(t *testing.T) {
-	runner := mockBD(
-		"5",
-		map[string]string{"open": "1", "closed": "2", "in_progress": "1"},
-		"[]",
-		`[{"id":"wip-1","title":"P1 important","priority":1,"status":"in_progress"},{"id":"new-1","title":"P3 backlog","priority":3,"status":"open"}]`,
-	)
-	b := setupBD(t, runner)
-	got, _ := b.GetNextTask()
-	if got != "P1 important" {
-		t.Errorf("GetNextTask = %q, want %q", got, "P1 important")
-	}
-}
-
-// Proves: when a task has no explicit priority, default (2) is used
-// for comparison.
-func TestBD_GetNextTask_DefaultPriorityComparison(t *testing.T) {
-	runner := mockBD(
-		"5",
-		map[string]string{"open": "1", "closed": "2", "in_progress": "1"},
-		"[]",
-		`[{"id":"wip-1","title":"No priority set","status":"in_progress"},{"id":"hot-1","title":"P0 urgent","priority":0}]`,
-	)
-	b := setupBD(t, runner)
-	got, _ := b.GetNextTask()
-	if got != "P0 urgent" {
-		t.Errorf("GetNextTask = %q, want %q", got, "P0 urgent")
-	}
-}
-
 // Proves: SetState calls bd set-state with the correct dimension=value format.
 func TestBD_SetState(t *testing.T) {
 	var capturedArgs []string
@@ -935,60 +839,6 @@ func TestBD_GetNextTaskInfo_AutoPrefixesTitle(t *testing.T) {
 	}
 	if info.Title != "ralph loop: force-reset worktree after merge" {
 		t.Errorf("title = %q, want %q", info.Title, "ralph loop: force-reset worktree after merge")
-	}
-}
-
-// Proves: within the same priority, bugs are preferred over tasks, and tasks over enhancements.
-func TestBD_GetNextTask_PrefersBugsOverTasksAtSamePriority(t *testing.T) {
-	runner := mockBD(
-		"3",
-		map[string]string{"open": "3", "closed": "0", "in_progress": "0"},
-		"[]",
-		`[{"id":"enh-1","title":"Add dark mode","priority":2,"type":"feature"},{"id":"bug-1","title":"Fix crash on login","priority":2,"type":"bug"},{"id":"task-1","title":"Write docs","priority":2,"type":"task"}]`,
-	)
-	b := setupBD(t, runner)
-	info, err := b.GetNextTaskInfo()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.ID != "bug-1" {
-		t.Errorf("expected bug-1 (bug preferred over task/feature at same priority), got %q", info.ID)
-	}
-}
-
-// Proves: tasks are preferred over features/enhancements at the same priority.
-func TestBD_GetNextTask_PrefersTasksOverEnhancementsAtSamePriority(t *testing.T) {
-	runner := mockBD(
-		"2",
-		map[string]string{"open": "2", "closed": "0", "in_progress": "0"},
-		"[]",
-		`[{"id":"enh-1","title":"Add dark mode","priority":2,"type":"feature"},{"id":"task-1","title":"Write docs","priority":2,"type":"task"}]`,
-	)
-	b := setupBD(t, runner)
-	info, err := b.GetNextTaskInfo()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.ID != "task-1" {
-		t.Errorf("expected task-1 (task preferred over feature at same priority), got %q", info.ID)
-	}
-}
-
-// Proves: priority still trumps type — a higher-priority feature beats a lower-priority bug.
-func TestBD_GetNextTask_PriorityTrumpsType(t *testing.T) {
-	runner := mockBD(
-		"2",
-		map[string]string{"open": "2", "closed": "0", "in_progress": "0"},
-		"[]",
-		`[{"id":"bug-1","title":"Minor bug","priority":3,"type":"bug"},{"id":"feat-1","title":"Critical feature","priority":1,"type":"feature"}]`,
-	)
-	b := setupBD(t, runner)
-	info, err := b.GetNextTaskInfo()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.ID != "feat-1" {
-		t.Errorf("expected feat-1 (P1 feature beats P3 bug), got %q", info.ID)
 	}
 }
 
@@ -1293,9 +1143,12 @@ func TestBD_GetNextTask_InProgressNotInReadyIsSkipped(t *testing.T) {
 	}
 }
 
-// Proves: from the ready set, in_progress tasks are preferred over open tasks
-// at the same priority.
-func TestBD_GetNextTask_ReadyPrefersInProgress(t *testing.T) {
+// Proves: getNextIssue takes row 0 of bd ready's ordered output verbatim,
+// with no Go re-ranking. Row 0 here has a worse (higher) priority number and
+// a non-bug type than row 1 — under the old bestIssue tie-break logic row 1
+// would have won. Selecting row 0 anyway proves ordering now comes solely
+// from bd (invoked with --sort=hybrid), not from a Go re-sort.
+func TestBD_GetNextTaskInfo_SelectsFirstReadyRow(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
 			return "", errors.New("no args")
@@ -1304,8 +1157,8 @@ func TestBD_GetNextTask_ReadyPrefersInProgress(t *testing.T) {
 		case "ready":
 			if strings.Contains(strings.Join(args, " "), "--json") {
 				return `[
-					{"id":"open-1","title":"Open task","priority":2,"status":"open"},
-					{"id":"wip-1","title":"WIP task","priority":2,"status":"in_progress"}
+					{"id":"row-0","title":"Row zero","priority":2,"type":"feature","status":"open"},
+					{"id":"row-1","title":"Row one","priority":0,"type":"bug","status":"in_progress"}
 				]`, nil
 			}
 			return "", nil
@@ -1317,8 +1170,8 @@ func TestBD_GetNextTask_ReadyPrefersInProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.ID != "wip-1" {
-		t.Errorf("expected wip-1 (in_progress preferred), got %q", info.ID)
+	if info.ID != "row-0" {
+		t.Errorf("expected row-0 (bd's row 0, no Go re-ranking), got %q", info.ID)
 	}
 }
 
@@ -1766,6 +1619,31 @@ func TestBD_GetNextIssue_ExcludesContainerTypes(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--exclude-type=") {
 		t.Errorf("bd ready args missing --exclude-type flag; got: %v", readyArgs)
+	}
+}
+
+// Proves: getNextIssue invokes bd ready with --sort=hybrid, delegating
+// ready-set ordering to bd's hybrid policy rather than re-ranking in Go.
+func TestBD_GetNextIssue_UsesSortHybrid(t *testing.T) {
+	var readyArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		if args[0] == "ready" {
+			readyArgs = append([]string{}, args...)
+			return `[{"id":"t-1","title":"A task","type":"task"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if _, err := b.GetNextTaskInfo(); err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(readyArgs, " ")
+	if !strings.Contains(joined, "--sort=hybrid") {
+		t.Errorf("bd ready args missing --sort=hybrid; got: %v", readyArgs)
 	}
 }
 
