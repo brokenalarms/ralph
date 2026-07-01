@@ -1338,3 +1338,69 @@ func TestBuildTaskManagerPrompt_ReleaseDiscipline(t *testing.T) {
 		}
 	}
 }
+
+// Proves: task-manager.md has a prominent early Session purpose section stating
+// that the goal of every session is to triage + set the loop up via dependencies
+// to run unaided until drained, with ordering expressed through deps, not parking.
+func TestBuildTaskManagerPrompt_SessionPurpose(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Session purpose", "prompt must have a Session purpose section"},
+		{"UNAIDED", "session purpose must state the loop runs UNAIDED until drained"},
+		{"drained", "session purpose must reference draining the backlog"},
+		{"zero further human input", "session purpose must state the goal of zero human input after session ends"},
+		{"dependencies", "session purpose must state ordering is expressed through dependencies"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	// Session purpose section must appear early — before the Modes section
+	purposeIdx := strings.Index(result, "Session purpose")
+	modesIdx := strings.Index(result, "## Modes")
+	if purposeIdx < 0 {
+		t.Fatal("Session purpose section not found")
+	}
+	if modesIdx > 0 && purposeIdx > modesIdx {
+		t.Error("Session purpose section must appear before the Modes section")
+	}
+}
+
+// Proves: task-manager.md forbids manual-verify gating — beads must not be held
+// back because their result requires user verification; they are released to the
+// loop and the user verifies out-of-band after drain.
+func TestBuildTaskManagerPrompt_NoManualVerifyGating(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	lower := strings.ToLower(result)
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"manual verify", "must explicitly name and forbid 'manual verify' gating"},
+		{"out-of-band", "must state the user verifies out-of-band after drain"},
+		{"ralph:verify", "must name ralph:verify as the verifier that cannot gate bead release"},
+		{"defeats unattended", "must state that blocking on human verification defeats unattended operation"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
