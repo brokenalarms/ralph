@@ -104,30 +104,15 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 		}
 	}
 
-	// ── Empty-diff guard ──
-	// A branch that is ahead of origin/<base> with an empty verify diff signals
-	// a tooling fault — unfetched origin, wrong workdir, or base misresolution —
-	// not absent work. Passing an empty diff to the LLM verifier would silently
-	// accept unverified work; an AC-unmet rejection would false-reject correct
-	// work. Both are wrong: abort as an infrastructure error before consuming an
-	// attempt. Observed when push/fetch is incomplete and DiffFromBase returns
-	// empty even though commits exist on the branch.
-	{
-		diff, _ := l.fetchVerifyDiff(p.ctx, p.taskID, p.headBefore, p.signalTimeHead)
-		if diff == "" {
-			baseBranch := l.git.DetectDefaultBranch()
-			if l.git.LogOneline("origin/"+baseBranch, "HEAD") != "" {
-				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
-					"Infrastructure error: verify diff is empty but branch is ahead of origin/%s — unfetched origin, wrong workdir, or base misresolution; aborting verification without consuming an attempt",
-					baseBranch)
-				return false, ""
-			}
-		}
-	}
-
 	// ── LLM verification fix loop ──
-	verified, skipReason = l.runLLMVerifyFixLoop(p, taskDesc, taskAccept, maxLLMVerify, maxTestFix)
+	// llmVerifyCheck owns its own fresh-diff fetch and the empty-diff-ahead-
+	// of-base infrastructure guard (see llmVerifyCheck.evaluate) — both must
+	// be re-evaluated every attempt since fix agents grow the diff.
+	verified, skipReason = l.runFixLoop(p.ctx, l.llmVerifyFixPlan(p, taskDesc, taskAccept, maxLLMVerify))
 	if !verified {
+		if p.taskID == "" {
+			skipReason = ""
+		}
 		return false, skipReason
 	}
 
@@ -194,7 +179,7 @@ func (l *Loop) testFixPlan(p verifyPipelineInput, taskAccept string, maxAttempts
 		spawnTemplate:    "verify-tests.md",
 		spawnDescription: "test failures",
 		maxAttempts:      maxAttempts,
-		exhaustedFormat:  "Tests still failing after %d attempts",
+		exhaustedFormat:  "Tests still failing after %d attempts: %s",
 		workDir:          p.workDir,
 		rawLogPath:       p.rawLogPath,
 		signalTimeHead:   p.signalTimeHead,
@@ -216,7 +201,7 @@ func (l *Loop) compileFixPlan(p verifyPipelineInput, taskAccept string, maxAttem
 		spawnTemplate:    "verify-tests.md",
 		spawnDescription: "build errors",
 		maxAttempts:      maxAttempts,
-		exhaustedFormat:  "Compile check still failing after %d fix attempts",
+		exhaustedFormat:  "Compile check still failing after %d fix attempts: %s",
 		workDir:          p.workDir,
 		rawLogPath:       p.rawLogPath,
 		signalTimeHead:   p.signalTimeHead,
@@ -224,85 +209,90 @@ func (l *Loop) compileFixPlan(p verifyPipelineInput, taskAccept string, maxAttem
 	}
 }
 
-// runLLMVerifyFixLoop handles the "LLM rejected; spawn fix agent; re-run
-// tests; re-fetch fresh diff; re-verify" cycle. This is where fresh diffs
-// matter — after each fix agent commits, the diff grows and the next LLM
-// attempt must see the updated version. Loop fetches fresh diffs from
-// l.git between attempts.
-//
-// Returns (verified, skipReason). A non-empty skipReason means the LLM
-// exhausted its attempts and the task should be skipped.
-func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, taskDesc, taskAccept string, maxLLMAttempts, maxTestFix int) (bool, string) {
-	attempts := 0
-	for {
-		// Assert signal-time HEAD is still reachable before consuming an attempt.
-		// A worktree reset drops the agent's commit without incrementing the
-		// rejection counter — treat it as an infrastructure failure, not a
-		// verification rejection.
-		if p.signalTimeHead != "" && !l.git.IsCommitAncestorOf(p.signalTimeHead, "HEAD") {
-			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
-				"Infrastructure error: signal-time commit %s is not an ancestor of HEAD — worktree may have been reset; aborting verification without consuming an attempt",
-				p.signalTimeHead)
-			return false, ""
+// llmVerifyCheck is a fixCheck backed by the verifier's LLM verification. It
+// owns its own fresh-diff fetch and the empty-diff-ahead-of-base
+// infrastructure guard: both must be re-evaluated on every attempt, since a
+// fix agent's commit between attempts grows the diff. attempt is a shared
+// counter (starts at 0, incremented once per evaluate call) driving
+// LLMVerify's model-escalation Attempt field — the fix-agent spawn it
+// triggers on rejection uses runFixLoop's own attempt counter, which stays
+// in lockstep since each round evaluates checks exactly once before any spawn.
+type llmVerifyCheck struct {
+	l          *Loop
+	p          verifyPipelineInput
+	taskDesc   string
+	taskAccept string
+	attempt    *int
+}
+
+func (c llmVerifyCheck) name() string { return "llm-verify" }
+
+func (c llmVerifyCheck) evaluate(ctx context.Context) checkOutcome {
+	diff, diffSource := c.l.fetchVerifyDiff(ctx, c.p.taskID, c.p.headBefore, c.p.signalTimeHead)
+
+	// A branch that is ahead of origin/<base> with an empty verify diff
+	// signals a tooling fault — unfetched origin, wrong workdir, or base
+	// misresolution — not absent work. Passing an empty diff to the LLM
+	// verifier would silently accept unverified work; an AC-unmet rejection
+	// would false-reject correct work. Both are wrong: abort as an
+	// infrastructure error before consuming an attempt. Observed when
+	// push/fetch is incomplete and DiffFromBase returns empty even though
+	// commits exist on the branch.
+	if diff == "" {
+		baseBranch := c.l.git.DetectDefaultBranch()
+		if c.l.git.LogOneline("origin/"+baseBranch, "HEAD") != "" {
+			c.l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+				"Infrastructure error: verify diff is empty but branch is ahead of origin/%s — unfetched origin, wrong workdir, or base misresolution; aborting verification without consuming an attempt",
+				baseBranch)
+			return checkOutcome{Abort: true}
 		}
+	}
 
-		attempts++
+	*c.attempt++
+	llmResult, _ := c.l.verifier.LLMVerify(verifier.LLMVerifyOpts{
+		Ctx:          ctx,
+		WorkDir:      c.p.workDir,
+		TaskID:       c.p.taskID,
+		Title:        c.p.nextTask,
+		Description:  c.taskDesc,
+		Acceptance:   c.taskAccept,
+		Diff:         diff,
+		DiffSource:   diffSource,
+		Attempt:      *c.attempt,
+		NoCodeNeeded: c.p.noCodeNeeded,
+		AgentSummary: c.p.agentSummary,
+	})
+	if llmResult.Passed {
+		return checkOutcome{Passed: true}
+	}
+	return checkOutcome{Passed: false, Failure: llmResult.Details}
+}
 
-		diff, diffSource := l.fetchVerifyDiff(p.ctx, p.taskID, p.headBefore, p.signalTimeHead)
-
-		llmResult, _ := l.verifier.LLMVerify(verifier.LLMVerifyOpts{
-			Ctx:          p.ctx,
-			WorkDir:      p.workDir,
-			TaskID:       p.taskID,
-			Title:        p.nextTask,
-			Description:  taskDesc,
-			Acceptance:   taskAccept,
-			Diff:         diff,
-			DiffSource:   diffSource,
-			Attempt:      attempts,
-			NoCodeNeeded: p.noCodeNeeded,
-			AgentSummary: p.agentSummary,
-		})
-
-		if llmResult.Passed {
-			return true, ""
-		}
-
-		if attempts >= maxLLMAttempts {
-			if p.taskID != "" {
-				return false, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMAttempts, llmResult.Details)
-			}
-			return false, ""
-		}
-
-		result := l.verifier.SpawnFixAgent(verifier.FixAgentInput{
-			Ctx:      p.ctx,
-			Template: "verify-fix.md",
-			Vars: map[string]string{
-				"{{TASK_TITLE}}":          p.nextTask,
-				"{{TASK_DESCRIPTION}}":    taskDesc,
-				"{{ACCEPTANCE_CRITERIA}}": taskAccept,
-				"{{REJECTION_REASON}}":    llmResult.Details,
-			},
-			Attempt:     attempts,
-			WorkDir:     p.workDir,
-			RawLogPath:  p.rawLogPath,
-			Description: "verification rejection",
-		})
-		if !result.SignalDetected {
-			return false, ""
-		}
-
-		// Re-run tests after fix agent — if the fix agent broke the tests
-		// while addressing LLM feedback, verification fails outright (no
-		// retry of the test fix loop here).
-		l.logger.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after fix agent...")
-		testResult, testElapsed := l.verifier.RunTests(p.ctx, p.workDir)
-		if !testResult.Passed {
-			l.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests failed after fix agent (%s): %s", testElapsed, testResult.Reason)
-			return false, ""
-		}
-		l.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", testElapsed)
+// llmVerifyFixPlan builds the fixPlan for the "LLM rejects or tests fail;
+// spawn fix agent; re-fetch fresh diff; re-verify" retry cycle, run through
+// runFixLoop. Composing llmVerifyCheck with testCheck means a post-fix test
+// failure feeds into the next fix attempt (bounded by maxAttempts) instead
+// of bailing the whole verification outright.
+func (l *Loop) llmVerifyFixPlan(p verifyPipelineInput, taskDesc, taskAccept string, maxAttempts int) fixPlan {
+	attempt := 0
+	return fixPlan{
+		checks: []fixCheck{
+			llmVerifyCheck{l: l, p: p, taskDesc: taskDesc, taskAccept: taskAccept, attempt: &attempt},
+			testCheck{l: l, workDir: p.workDir},
+		},
+		spawnVars: map[string]string{
+			"{{TASK_TITLE}}":          p.nextTask,
+			"{{TASK_DESCRIPTION}}":    taskDesc,
+			"{{ACCEPTANCE_CRITERIA}}": taskAccept,
+		},
+		spawnTemplate:    "verify-fix.md",
+		spawnDescription: "verification rejection",
+		maxAttempts:      maxAttempts,
+		exhaustedFormat:  "verification_rejected_%d_attempts: %s",
+		workDir:          p.workDir,
+		rawLogPath:       p.rawLogPath,
+		signalTimeHead:   p.signalTimeHead,
+		logDomain:        logging.LLM,
 	}
 }
 
