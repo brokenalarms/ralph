@@ -436,6 +436,8 @@ type StubRepoConfig struct {
 type StubInspector interface {
 	GetBranchForTaskCalls() int
 	GetRemoveWorktreeCalls() int
+	GetRemoveWorktreeForBranchCalls() int
+	GetRemovedWorktreeForBranch() string
 	GetFlushUnpushedWorkCalls() int
 	GetReplyToAndResolveCommentsCalls() int
 }
@@ -461,6 +463,8 @@ type stubRepo struct {
 	commitSeq                      int
 	branchForTaskCalls             int
 	removeWorktreeCalls            int
+	removeWorktreeForBranchCalls   int
+	removedWorktreeForBranch       string
 	flushUnpushedWorkCalls         int
 	replyToAndResolveCommentsCalls int
 }
@@ -472,6 +476,15 @@ func (s *stubRepo) GetBranchForTaskCalls() int { return s.branchForTaskCalls }
 // GetRemoveWorktreeCalls returns the number of times RemoveWorktree has been
 // called. Used by tests to assert that a skipped task tears down its worktree.
 func (s *stubRepo) GetRemoveWorktreeCalls() int { return s.removeWorktreeCalls }
+
+// GetRemoveWorktreeForBranchCalls returns the number of times
+// RemoveWorktreeForBranch has been called. Used by tests to assert an
+// explicit-branch cleanup path ran (e.g. `ralph task` exit cleanup).
+func (s *stubRepo) GetRemoveWorktreeForBranchCalls() int { return s.removeWorktreeForBranchCalls }
+
+// GetRemovedWorktreeForBranch returns the branch name passed to the most
+// recent RemoveWorktreeForBranch call.
+func (s *stubRepo) GetRemovedWorktreeForBranch() string { return s.removedWorktreeForBranch }
 
 // GetFlushUnpushedWorkCalls returns the number of times FlushUnpushedWork has
 // been called. Used by tests to assert that a skipped task's branch is not
@@ -836,6 +849,11 @@ func (s *stubRepo) SetupWorktree(_ context.Context) error { return nil }
 
 // RemoveWorktree records the call; there is no real worktree to remove.
 func (s *stubRepo) RemoveWorktree() { s.removeWorktreeCalls++ }
+
+func (s *stubRepo) RemoveWorktreeForBranch(branch string) {
+	s.removeWorktreeForBranchCalls++
+	s.removedWorktreeForBranch = branch
+}
 
 // --- GitHub availability and PR listing ---
 

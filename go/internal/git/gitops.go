@@ -128,6 +128,11 @@ type Ops interface {
 	// Worktree lifecycle.
 	SetupWorktree(ctx context.Context) error
 	RemoveWorktree()
+	// RemoveWorktreeForBranch removes the worktree registered for branch (if
+	// any) and deletes the local branch, without touching persisted
+	// worktree_dir/worktree_branch state. Used for cleanup paths (e.g. `ralph
+	// task` exit) that must not disturb a concurrent loop's resume state.
+	RemoveWorktreeForBranch(branch string)
 
 	// GitHub availability and PR listing.
 	GitHubAvailable() bool
