@@ -222,7 +222,17 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 		l.git.TagTaskEnd(taskID)
 		return diffStat, true, analysisResult.Action
 	case analyzer.Skip:
-		l.skipTask(taskID, tasks.SkipAnalyzer, analysisResult.Reason)
+		skipReason := tasks.SkipAnalyzer
+		if analysisResult.Reason == string(tasks.SkipStagnation) {
+			skipReason = tasks.SkipStagnation
+		}
+		if l.appWideRecurrence(skipReason) {
+			l.haltAppWide(taskID, skipReason, analysisResult.Reason)
+			l.recordAttempt(AttemptEvent{Summary: "Halted: app_wide:" + string(skipReason), DiffStat: diffStat, Analysis: analysisResult.Reason})
+			return diffStat, true, analysisResult.Action
+		}
+		l.skipTask(taskID, skipReason, analysisResult.Reason)
+		l.recordSkipStreak(skipReason)
 		l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Warn}, "Skipping task %s: %s", taskID, analysisResult.Reason)
 		l.recordAttempt(AttemptEvent{Summary: "Skipped: " + analysisResult.Reason, DiffStat: diffStat, Analysis: analysisResult.Reason})
 		l.state.Write("status", "skipped_analyzer_"+analysisResult.Reason)

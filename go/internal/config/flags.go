@@ -419,7 +419,7 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxCompactionParks) },
 	},
 	{
-		Help: "Max consecutive distinct-task skips before halting the loop", Default: "3",
+		Help: "Max consecutive distinct-task skips before halting the loop", Default: "2",
 		ConfigKey: "cascade_skip_limit",
 		Kind:      KindInt,
 		Apply: func(cfg *Config, val string) error {

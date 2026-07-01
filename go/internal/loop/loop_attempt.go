@@ -138,12 +138,12 @@ func (l *Loop) maxCompactionParks() int {
 	return 1
 }
 
-// cascadeSkipLimit returns the configured consecutive-skip halt limit (defaulting to 3).
+// cascadeSkipLimit returns the configured consecutive-skip halt limit (defaulting to 2).
 func (l *Loop) cascadeSkipLimit() int {
 	if l.cfg.CascadeSkipLimit > 0 {
 		return l.cfg.CascadeSkipLimit
 	}
-	return 3
+	return 2
 }
 
 // incrementCompactionParkCount records one compaction event for the given task

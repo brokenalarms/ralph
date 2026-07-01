@@ -76,8 +76,9 @@ func TestRepeatedToolCallsNotStuck(t *testing.T) {
 }
 
 // Verifies that 3 consecutive iterations with no git changes and no signal
-// trigger a stagnation halt, preventing the loop from idling indefinitely.
-func TestStagnationHaltsAfterThree(t *testing.T) {
+// skip the task (not halt the whole loop) — a single stagnant task should
+// not prevent the loop from moving on to other ready work.
+func TestStagnationSkipsAfterThree(t *testing.T) {
 	a := New()
 	noChange := IterationState{IterationLog: "thinking about things\n"}
 
@@ -89,8 +90,8 @@ func TestStagnationHaltsAfterThree(t *testing.T) {
 	}
 
 	r := a.Analyze(noChange)
-	if r.Action != Halt || r.Reason != "stagnation" {
-		t.Errorf("3rd stagnant iteration: got %+v, want Halt/stagnation", r)
+	if r.Action != Skip || r.Reason != "stagnation" {
+		t.Errorf("3rd stagnant iteration: got %+v, want Skip/stagnation", r)
 	}
 }
 

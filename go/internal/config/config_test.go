@@ -739,8 +739,10 @@ func TestStagnationThresholdKeysFromConfig(t *testing.T) {
 	}
 }
 
-// Verifies that the three stagnation/skip threshold keys default to 2, 1, and 3
-// when absent from config.toml (no behavior change when unset — ralph-tttf AC2).
+// Verifies that the three stagnation/skip threshold keys default to 2, 1, and 2
+// when absent from config.toml (no behavior change when unset — ralph-tttf AC2;
+// cascade_skip_limit default lowered to 2 by ralph-qlmy since the second
+// same-reason skip is now conclusive and a third full attempt is waste).
 func TestStagnationThresholdKeyDefaults(t *testing.T) {
 	cfg := Defaults()
 
@@ -750,8 +752,8 @@ func TestStagnationThresholdKeyDefaults(t *testing.T) {
 	if cfg.MaxCompactionParks != 1 {
 		t.Errorf("MaxCompactionParks default = %d, want 1", cfg.MaxCompactionParks)
 	}
-	if cfg.CascadeSkipLimit != 3 {
-		t.Errorf("CascadeSkipLimit default = %d, want 3", cfg.CascadeSkipLimit)
+	if cfg.CascadeSkipLimit != 2 {
+		t.Errorf("CascadeSkipLimit default = %d, want 2", cfg.CascadeSkipLimit)
 	}
 }
 
