@@ -346,17 +346,6 @@ var Flags = []FlagDef{
 		},
 		Read: func(cfg *Config) string { return fmt.Sprintf("%t", cfg.Notify) },
 	},
-	{
-		Help:      "Model for the main agent (working iterations)",
-		Default:   ModelSonnet,
-		ConfigKey: "model",
-		Kind:      KindString,
-		Apply: func(cfg *Config, val string) error {
-			cfg.Model = val
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.Model },
-	},
 	// Review timeouts
 	{
 		Help: "Timeout when waiting for a gated Copilot code review", Default: "120s",
@@ -559,6 +548,17 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.InternetRestoreInterval.String() },
 	},
 	{
+		Help:      "Model for the main working agent",
+		Default:   ModelSonnet,
+		ConfigKey: "working_model",
+		Kind:      KindString,
+		Apply: func(cfg *Config, val string) error {
+			cfg.WorkingModel = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.WorkingModel },
+	},
+	{
 		Help:      "Model for LLM verification (first attempt)",
 		Default:   ModelHaiku,
 		ConfigKey: "verify_model",
@@ -581,8 +581,8 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.VerifyEscalationModel },
 	},
 	{
-		Help:      "Model for fix agents on first attempt",
-		Default:   ModelSonnet,
+		Help:      "Model for fix agents (repair agent, from first attempt)",
+		Default:   ModelOpus,
 		ConfigKey: "fix_model",
 		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
@@ -590,17 +590,6 @@ var Flags = []FlagDef{
 			return nil
 		},
 		Read: func(cfg *Config) string { return cfg.FixModel },
-	},
-	{
-		Help:      "Model for fix agents on retry attempts (subsequent attempts after first)",
-		Default:   ModelOpus,
-		ConfigKey: "fix_escalation_model",
-		Kind:      KindString,
-		Apply: func(cfg *Config, val string) error {
-			cfg.FixEscalationModel = val
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.FixEscalationModel },
 	},
 	{
 		Help:      "Emit an agent-liveness heartbeat at this interval during quiet agent runs (0 disables)",

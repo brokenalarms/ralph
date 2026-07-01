@@ -55,8 +55,7 @@ type Config struct {
 	ConfigVerify          string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string
 	VerifyEscalationModel string
-	FixModel              string // model for fix agents on attempt 1; defaults to ModelSonnet
-	FixEscalationModel    string // model for fix agents on attempt 2+; defaults to ModelOpus
+	FixModel              string // model for fix agents, from attempt 1; defaults to ModelOpus
 	PromptsDir            string
 	RalphDir              string
 	Timeouts              claude.Timeouts
@@ -279,22 +278,15 @@ func (v *Verifier) verifyModel(attempt int) string {
 	return model
 }
 
-// FixModel returns the model for the given 1-indexed attempt number.
-// Attempt 1 uses FixModel (sonnet); subsequent attempts escalate to
-// FixEscalationModel (opus). Exported so callers (e.g. loop pipeline
-// logging) can reference the same model the fix agent will use.
-func (v *Verifier) FixModel(attempt int) string {
-	var model string
-	if attempt <= 1 {
-		model = v.cfg.FixModel
-		if model == "" {
-			model = verify.ModelSonnet
-		}
-	} else {
-		model = v.cfg.FixEscalationModel
-		if model == "" {
-			model = verify.ModelOpus
-		}
+// FixModel returns the model fix agents use, from their first attempt.
+// The attempt parameter is retained for signature stability with other
+// per-attempt selectors (e.g. verifyModel); fix agents no longer escalate
+// across attempts. Exported so callers (e.g. loop pipeline logging) can
+// reference the same model the fix agent will use.
+func (v *Verifier) FixModel(_ int) string {
+	model := v.cfg.FixModel
+	if model == "" {
+		model = verify.ModelOpus
 	}
 	return model
 }

@@ -541,7 +541,7 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 	}
 }
 
-// Proves: every runAgent call uses cfg.Model — no model escalation exists.
+// Proves: every runAgent call uses cfg.WorkingModel — no model escalation exists.
 func TestAgentModelEscalation(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -555,7 +555,7 @@ func TestAgentModelEscalation(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		Model:         baseModel,
+		WorkingModel:  baseModel,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -575,10 +575,10 @@ func TestAgentModelEscalation(t *testing.T) {
 
 	task := taskContext{id: "ralph-abc", title: "Fix login"}
 
-	// First call: no prior attempts — uses cfg.Model.
+	// First call: no prior attempts — uses cfg.WorkingModel.
 	l.runAgent(context.Background(), task, 0)
 
-	// Second call: with in-memory prior attempt — still uses cfg.Model, not escalation model.
+	// Second call: with in-memory prior attempt — still uses cfg.WorkingModel, not escalation model.
 	l.taskAttempts = append(l.taskAttempts, AttemptEvent{Summary: "first try failed", Analysis: "continue"})
 	l.runAgent(context.Background(), task, 1)
 
@@ -666,12 +666,11 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	}
 }
 
-// Proves: SpawnFixAgent uses cfg.FixModel (default sonnet) on attempt 1 and
-// cfg.FixEscalationModel (default opus) on attempt 2. The runner factory stub
-// captures the Model field from the RunConfig passed to runner.Run.
-func TestFixModelEscalation(t *testing.T) {
-	const firstModel = verify.ModelSonnet
-	const escalationModel = verify.ModelOpus
+// Proves: SpawnFixAgent uses cfg.FixModel on both attempt 1 and attempt 2 —
+// fix agents no longer escalate models across attempts. The runner factory
+// stub captures the Model field from the RunConfig passed to runner.Run.
+func TestFixModelSameAcrossAttempts(t *testing.T) {
+	const fixModel = verify.ModelOpus
 
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -681,10 +680,9 @@ func TestFixModelEscalation(t *testing.T) {
 
 	var capturedModels []string
 	vrf := verifier.New(verifier.Config{
-		FixModel:           firstModel,
-		FixEscalationModel: escalationModel,
-		RalphDir:           ralphDir,
-		PromptsDir:         promptsDir,
+		FixModel:   fixModel,
+		RalphDir:   ralphDir,
+		PromptsDir: promptsDir,
 	}, logging.New(nil), func() verifier.Runner {
 		return &stubRunner{
 			result: claude.Result{SignalDetected: true},
@@ -703,27 +701,25 @@ func TestFixModelEscalation(t *testing.T) {
 		Description: "test failures",
 	}
 
-	// Attempt 1 uses first model (sonnet).
 	base.Attempt = 1
 	vrf.SpawnFixAgent(base)
-	// Attempt 2 escalates to opus.
 	base.Attempt = 2
 	vrf.SpawnFixAgent(base)
 
 	if len(capturedModels) != 2 {
 		t.Fatalf("expected 2 runner calls, got %d", len(capturedModels))
 	}
-	if capturedModels[0] != firstModel {
-		t.Errorf("attempt 1: expected %s, got %s", firstModel, capturedModels[0])
+	if capturedModels[0] != fixModel {
+		t.Errorf("attempt 1: expected %s, got %s", fixModel, capturedModels[0])
 	}
-	if capturedModels[1] != escalationModel {
-		t.Errorf("attempt 2: expected %s, got %s", escalationModel, capturedModels[1])
+	if capturedModels[1] != fixModel {
+		t.Errorf("attempt 2: expected %s (no escalation), got %s", fixModel, capturedModels[1])
 	}
 }
 
-// Proves: when FixModel and FixEscalationModel are unset in Config, defaults
-// are ModelSonnet for attempt 1 and ModelOpus for attempt 2+.
-func TestFixModelEscalation_DefaultModels(t *testing.T) {
+// Proves: when FixModel is unset in Config, it defaults to ModelOpus on
+// attempt 1 (no sonnet warm-up).
+func TestFixModelDefaultOpusFromFirstAttempt(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -749,17 +745,12 @@ func TestFixModelEscalation_DefaultModels(t *testing.T) {
 	}
 	base.Attempt = 1
 	vrf.SpawnFixAgent(base)
-	base.Attempt = 2
-	vrf.SpawnFixAgent(base)
 
-	if len(capturedModels) != 2 {
-		t.Fatalf("expected 2 runner calls, got %d", len(capturedModels))
+	if len(capturedModels) != 1 {
+		t.Fatalf("expected 1 runner call, got %d", len(capturedModels))
 	}
-	if capturedModels[0] != verify.ModelSonnet {
-		t.Errorf("default attempt 1: expected %s (sonnet), got %s", verify.ModelSonnet, capturedModels[0])
-	}
-	if capturedModels[1] != verify.ModelOpus {
-		t.Errorf("default attempt 2: expected %s (opus), got %s", verify.ModelOpus, capturedModels[1])
+	if capturedModels[0] != verify.ModelOpus {
+		t.Errorf("default attempt 1: expected %s (opus), got %s", verify.ModelOpus, capturedModels[0])
 	}
 }
 

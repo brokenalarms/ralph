@@ -19,7 +19,7 @@ import (
 
 // newTestVerifier constructs a *verifier.Verifier for tests, deriving the
 // verifier's config from the loop's Config. It's the only module where
-// construction has enough boilerplate (11 fields to copy from loop.Config)
+// construction has enough boilerplate (10 fields to copy from loop.Config)
 // to justify a helper — state/git/backend/logger are 1-liners that tests
 // construct directly. Tests then build Modules{} inline.
 //
@@ -45,7 +45,6 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
 		FixModel:              cfg.FixModel,
-		FixEscalationModel:    cfg.FixEscalationModel,
 		PromptsDir:            cfg.Dirs.PromptsDir,
 		RalphDir:              cfg.Dirs.RalphDir,
 		Timeouts:              cfg.Timeouts,

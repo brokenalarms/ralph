@@ -677,34 +677,34 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			return actionDone
 		}
 		if !l.connectivity.IsOnline() {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed — internet appears down")
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Claude failed — internet appears down")
 			if !l.connectivity.WaitForInternet(ctx, l.logger) {
 				return actionDone
 			}
 			l.releaseClaimForRetry(taskID)
 			return actionRetry
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed on iteration %d, continuing...", runIteration)
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Claude failed on iteration %d, continuing...", runIteration)
 	}
 	if result.Compacted {
 		baseBranch := l.git.DetectDefaultBranch()
 		if l.git.LogOneline("origin/"+baseBranch, "HEAD") != "" {
 			if passed, _ := l.verifyCompletion(ctx, headBefore); passed {
-				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Compaction detected but branch has verified commits — routing through ship pipeline")
+				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Compaction detected but branch has verified commits — routing through ship pipeline")
 				return actionCompactionShip
 			}
 		}
 		if count := l.incrementCompactionParkCount(taskID); count >= l.maxCompactionParks() {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.Model}, "Agent triggered compaction %d time(s) — this indicates a context leak. Skipping task.", count)
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.WorkingModel}, "Agent triggered compaction %d time(s) — this indicates a context leak. Skipping task.", count)
 			l.skipTask(taskID, "compaction_detected")
 			return actionSkip
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Agent triggered compaction — retrying (below park cap)")
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Agent triggered compaction — retrying (below park cap)")
 		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}
 	if result.FeedbackKill {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d — user feedback received", runIteration)
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Restarting iteration %d — user feedback received", runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 		l.recordAttempt(AttemptEvent{
 			Summary:  "Killed: user feedback received (see bead notes for content)",
@@ -721,7 +721,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			kind = "wall-clock timeout"
 			analysis = "wall_clock_timeout: run exceeded max-run-duration hard cap"
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d after %s", runIteration, kind)
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Restarting iteration %d after %s", runIteration, kind)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 		l.recordAttempt(AttemptEvent{
 			Summary:  fmt.Sprintf("Killed: %s", kind),
@@ -734,13 +734,13 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		hasNewCommits := l.git.LogOneline(headBefore, l.git.HeadRev()) != ""
 		if !hasNewCommits {
 			if count := l.incrementFailedStartCount(taskID); count >= l.maxFailedStarts() {
-				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Failed start %d times with no progress for %s — skipping task", count, taskID)
+				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Failed start %d times with no progress for %s — skipping task", count, taskID)
 				l.skipTask(taskID, "failed_start_limit_reached")
 				return actionRetry
 			}
 		}
 		if l.taskIdleTimeouts >= l.maxIdleTimeoutFailures() {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Idle timeout %d times for %s — skipping task", l.taskIdleTimeouts, taskID)
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Idle timeout %d times for %s — skipping task", l.taskIdleTimeouts, taskID)
 			l.skipTask(taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}
@@ -749,15 +749,15 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 	}
 	if result.RateLimited {
 		waitDur := claude.FormatWaitDuration(time.Until(result.ResetAt))
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
 		err := l.limiter.WaitUntil(ctx, result.ResetAt, func(secs int) {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.Model}, "Rate limit: %ds until reset", secs)
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.WorkingModel}, "Rate limit: %ds until reset", secs)
 		})
 		if err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Rate limit wait interrupted: %v", err)
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Rate limit wait interrupted: %v", err)
 			return actionDone
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: l.cfg.Model}, "Rate limit reset — resuming")
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: l.cfg.WorkingModel}, "Rate limit reset — resuming")
 		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}
