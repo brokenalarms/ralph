@@ -365,7 +365,7 @@ func TestBD_GetNextTask_FallsBackToReady(t *testing.T) {
 func TestBD_SkipTask_SetsStatusOpen(t *testing.T) {
 	var updateArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "update" {
+		if len(args) > 0 && args[0] == "update" && updateArgs == nil {
 			updateArgs = args
 			return "updated", nil
 		}
@@ -443,13 +443,81 @@ func TestBD_SkipTask_RecordsDetailInComment(t *testing.T) {
 	}
 }
 
+// Proves: bd SkipTask persists the skip reason as bead metadata (skip_reason)
+// via --set-metadata, not just as a human-readable comment.
+func TestBD_SkipTask_SetsSkipReasonMetadata(t *testing.T) {
+	var metadataArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "--set-metadata") && strings.Contains(joined, "skip_reason=") {
+			metadataArgs = args
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", SkipPushFailed, ""); err != nil {
+		t.Fatal(err)
+	}
+	if metadataArgs == nil {
+		t.Fatal("expected a --set-metadata skip_reason=... call")
+	}
+	joined := strings.Join(metadataArgs, " ")
+	if !strings.Contains(joined, "skip_reason="+string(SkipPushFailed)) {
+		t.Errorf("expected skip_reason=%s in metadata args, got: %v", SkipPushFailed, metadataArgs)
+	}
+	if !strings.Contains(joined, "abc123") {
+		t.Errorf("expected task ID in metadata args, got: %v", metadataArgs)
+	}
+}
+
+// Proves: bd SkipTask persists a non-empty detail as skip_detail metadata.
+func TestBD_SkipTask_SetsSkipDetailMetadataWhenPresent(t *testing.T) {
+	var metadataArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "--set-metadata") && strings.Contains(joined, "skip_detail=") {
+			metadataArgs = args
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", SkipPushFailed, "ralph/some-branch"); err != nil {
+		t.Fatal(err)
+	}
+	if metadataArgs == nil {
+		t.Fatal("expected a --set-metadata skip_detail=... call")
+	}
+	joined := strings.Join(metadataArgs, " ")
+	if !strings.Contains(joined, "skip_detail=ralph/some-branch") {
+		t.Errorf("expected skip_detail=ralph/some-branch in metadata args, got: %v", metadataArgs)
+	}
+}
+
+// Proves: bd SkipTask does not write skip_detail metadata when detail is empty.
+func TestBD_SkipTask_NoSkipDetailMetadataWhenDetailEmpty(t *testing.T) {
+	var sawSkipDetail bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "skip_detail=") {
+			sawSkipDetail = true
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", SkipPushFailed, ""); err != nil {
+		t.Fatal(err)
+	}
+	if sawSkipDetail {
+		t.Error("expected no skip_detail metadata call when detail is empty")
+	}
+}
+
 // Proves: bd SkipTask reassigns the bead to config.TaskAssignee and adds the
 // skipped label via --add-label so it leaves the loop's inbox with no separate
 // filter needed. --label is not a valid bd update flag and must not be used.
 func TestBD_SkipTask_ReassignsToTaskAssignee(t *testing.T) {
 	var updateArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "update" {
+		if len(args) > 0 && args[0] == "update" && updateArgs == nil {
 			updateArgs = args
 		}
 		return "", nil

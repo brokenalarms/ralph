@@ -1275,7 +1275,7 @@ func TestBuildTaskManagerPrompt_SkipTriageReasonRouting(t *testing.T) {
 		{"compaction_detected", "must name compaction_detected skip reason and route to split"},
 		{"idle_timeout_max_failures", "must name idle_timeout_max_failures and route to split"},
 		{"push_failed", "must route infra failures (push_failed) to a ralph bug bead"},
-		{"skip_would_strand_dependents", "must route dependency-order skips to dep re-ordering"},
+		{"would_strand_dependents", "must route dependency-order skips to dep re-ordering"},
 		{"hands-on", "verification_rejected path must offer hands-on fix as a route"},
 	}
 
@@ -1302,6 +1302,36 @@ func TestBuildTaskManagerPrompt_SkipTriageProposesNotAutoActs(t *testing.T) {
 	}{
 		{"propose", "triage must propose actions rather than auto-creating or auto-fixing"},
 		{"confirm", "triage must wait for confirmation before acting"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: task-manager.md instructs reading the typed skip_reason/skip_detail
+// bead metadata via `bd show <id> --json` for skip-triage classification,
+// rather than parsing the skip-reason comment text, and degrades gracefully
+// for legacy skipped beads that predate metadata persistence.
+func TestBuildTaskManagerPrompt_SkipTriageReadsTypedMetadata(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	lower := strings.ToLower(result)
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"metadata.skip_reason", "must instruct reading the typed skip_reason metadata field"},
+		{"metadata.skip_detail", "must instruct reading the typed skip_detail metadata field"},
+		{"--json", "must instruct reading metadata via `bd show <id> --json`"},
+		{"legacy", "must call out graceful handling of legacy skipped beads without metadata"},
+		{"unknown", "must report reason unknown for legacy beads with no parseable reason"},
 	}
 
 	for _, tc := range required {
