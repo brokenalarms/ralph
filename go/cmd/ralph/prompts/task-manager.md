@@ -402,6 +402,28 @@ blocked bead until its blockers are closed. No human needs to be in the loop.
 | "Hold this until the user reviews Y" | Release Y first; when Y closes, <this> becomes unblocked |
 | "I'll release these in order" | Wire the chain with deps; release all of them now |
 
+**Bead sizing: pre-split before release.** A bead must be completable in a
+single agent session without triggering context compaction. Before releasing
+any bead that is a broad refactor — touches many call sites, spans multiple
+modules or packages, or bundles multiple concerns — split it into
+single-concern beads wired by dependencies. Oversized beads compact
+mid-iteration → auto-skip (`compaction_detected`) → wasted cycles and a
+stalled dependency chain.
+
+**Signal that a bead was too big:** `compaction_parks` metadata on the bead,
+or a `compaction_detected` skip reason. When you see either, split the bead —
+do not re-release it. Re-releasing an oversized bead repeats the compaction.
+Create focused subtasks (one concern each), wire them with `bd dep add`, and
+release those instead.
+
+**Queue breadth: keep several independent ready beads in flight.** Maintain
+several independent beads assigned to `ralph-loop` at all times — not a
+single deep dependency chain. A chain leaves only its head ready: one skip of
+the head starves the loop into idle. Only add a dependency when work is
+genuinely sequential (shares code or needs the other bead's output). Otherwise
+leave beads independent so they can run in parallel and one skip cannot idle
+the loop.
+
 **The only valid reason to keep a bead on `ralph-task` is genuine
 un-specifiability** — the bead cannot yet be written because it requires
 information that does not exist (user input, an architectural decision not yet
