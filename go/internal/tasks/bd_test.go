@@ -1711,6 +1711,108 @@ func TestBD_ResumeTask_RejectsContainerTypes(t *testing.T) {
 	}
 }
 
+// Proves: a ready P0 preempts a Ctrl+C'd P1 in-flight task on resume.
+// AC: a strictly-higher-priority ready task is selected over the interrupted lower-priority task.
+func TestBD_GetNextTaskInfo_P0ReadyPreemptsP1Resume(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "show":
+			if len(args) >= 2 && args[1] == "ralph-wip" {
+				return `[{"id":"ralph-wip","title":"WIP P1 task","priority":1,"status":"in_progress","type":"bug"}]`, nil
+			}
+		case "blocked":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[]`, nil
+			}
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"ralph-urgent","title":"Urgent P0 task","priority":0,"status":"open","type":"bug"}]`, nil
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetResumeTaskID("ralph-wip")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-urgent" {
+		t.Errorf("expected P0 ready task ralph-urgent to preempt P1 resume, got %q", info.ID)
+	}
+}
+
+// Proves: a P0 in-flight task is resumed even when another ready P0 exists (equal priority = no preempt).
+// AC: equal-priority ready work does not displace the interrupted task.
+func TestBD_GetNextTaskInfo_P0InFlightNotPreemptedByP0Ready(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "show":
+			if len(args) >= 2 && args[1] == "ralph-wip" {
+				return `[{"id":"ralph-wip","title":"WIP P0 task","priority":0,"status":"in_progress","type":"bug"}]`, nil
+			}
+		case "blocked":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[]`, nil
+			}
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"ralph-other","title":"Other P0 task","priority":0,"status":"open","type":"bug"}]`, nil
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetResumeTaskID("ralph-wip")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-wip" {
+		t.Errorf("expected P0 resume task ralph-wip (equal priority = no preempt), got %q", info.ID)
+	}
+}
+
+// Proves: when nothing is ready (bd ready returns empty), the interrupted task is resumed regardless.
+// AC: no ready work -> in-flight task is resumed.
+func TestBD_GetNextTaskInfo_NothingReadyResumesInFlight(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "show":
+			if len(args) >= 2 && args[1] == "ralph-wip" {
+				return `[{"id":"ralph-wip","title":"WIP task","priority":2,"status":"in_progress","type":"task"}]`, nil
+			}
+		case "blocked":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[]`, nil
+			}
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[]`, nil
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetResumeTaskID("ralph-wip")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-wip" {
+		t.Errorf("expected resume of ralph-wip when nothing ready, got %q", info.ID)
+	}
+}
+
 // Proves: a failed log write (e.g. read-only RalphDir) does not affect the
 // bd call's return value or error.
 func TestDefaultRunBD_LogWriteFailureIsBestEffort(t *testing.T) {
