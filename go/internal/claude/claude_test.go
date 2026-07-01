@@ -2629,13 +2629,26 @@ func TestBuildAgentEnv_PrependsvenvBin(t *testing.T) {
 	t.Error("no PATH entry found in returned env")
 }
 
-// Verifies that buildAgentEnv returns nil when no .venv/bin directory exists,
-// so the agent subprocess inherits the parent environment unchanged.
+// Verifies that buildAgentEnv always disables Claude auto-memory (hermetic
+// context) even when no .venv/bin exists, and does not prepend a venv PATH.
 func TestBuildAgentEnv_NoVenv(t *testing.T) {
 	dir := t.TempDir()
 	env := buildAgentEnv(dir)
-	if env != nil {
-		t.Errorf("expected nil env when no .venv/bin exists, got %v", env)
+	if env == nil {
+		t.Fatal("expected non-nil env (auto-memory must be disabled) even without .venv/bin")
+	}
+	venvBin := filepath.Join(dir, ".venv", "bin")
+	found := false
+	for _, entry := range env {
+		if entry == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1" {
+			found = true
+		}
+		if strings.HasPrefix(entry, "PATH=") && strings.Contains(entry, venvBin) {
+			t.Errorf("no .venv/bin exists but PATH references it: %q", entry)
+		}
+	}
+	if !found {
+		t.Error("expected CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 in env")
 	}
 }
 

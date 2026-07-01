@@ -305,15 +305,16 @@ func UserInputMessage(content string) string {
 	return fmt.Sprintf(`{"type":"user_input_text","content":%s}`, string(escaped))
 }
 
-// buildAgentEnv returns an environment for the agent subprocess with the
-// project's .venv/bin prepended to PATH if that directory exists in workDir.
-// Returns nil (inherit parent environment unchanged) when no .venv/bin is found.
+// buildAgentEnv returns a hermetic environment for the agent subprocess.
+// It always disables Claude's machine-local auto-memory so code agents run on
+// the orchestrator's prompt only (context reproducible across machines), and
+// prepends the project's .venv/bin to PATH when that directory exists in workDir.
 func buildAgentEnv(workDir string) []string {
+	env := append(os.Environ(), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
 	venvBin := filepath.Join(workDir, ".venv", "bin")
 	if info, err := os.Stat(venvBin); err != nil || !info.IsDir() {
-		return nil
+		return env
 	}
-	env := os.Environ()
 	for i, entry := range env {
 		if strings.HasPrefix(entry, "PATH=") {
 			env[i] = "PATH=" + venvBin + string(filepath.ListSeparator) + strings.TrimPrefix(entry, "PATH=")
@@ -361,6 +362,11 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 			"--print", "--verbose",
 			"--output-format", "stream-json",
 			"--permission-mode", "bypassPermissions",
+			// Hermetic context: load only repo-committed project settings/CLAUDE.md,
+			// never the user-global ~/.claude config. Combined with the
+			// CLAUDE_CODE_DISABLE_AUTO_MEMORY env in buildAgentEnv, the agent sees
+			// only the orchestrator's prompt + project repo context.
+			"--setting-sources", "project",
 			"--add-dir", cfg.WorkDir,
 			"--add-dir", cfg.RalphDir,
 			"--allowedTools", strings.Join(IterationAllowedTools, ","),

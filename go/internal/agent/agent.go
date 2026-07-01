@@ -98,7 +98,9 @@ func (r *Runner) Query(ctx context.Context, workDir, prompt, model string, allow
 	if err := r.checkWorkDir(workDir); err != nil {
 		return "", err
 	}
-	args := []string{"--print"}
+	// Hermetic context: the LLM verifier is a code agent — load only
+	// repo-committed project settings/CLAUDE.md, never user-global config.
+	args := []string{"--print", "--setting-sources", "project"}
 	if model != "" {
 		args = append(args, "--model", model)
 	}
@@ -109,6 +111,8 @@ func (r *Runner) Query(ctx context.Context, workDir, prompt, model string, allow
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = workDir
+	// Disable Claude's machine-local auto-memory for reproducible verification.
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
