@@ -1310,3 +1310,31 @@ func TestBuildTaskManagerPrompt_SkipTriageProposesNotAutoActs(t *testing.T) {
 		}
 	}
 }
+
+// Proves: task-manager.md encodes the release discipline principle — never park
+// beads to sequence them; instead express ordering with bd dep add and release
+// immediately so the loop can work beads unattended.
+func TestBuildTaskManagerPrompt_ReleaseDiscipline(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Release discipline", "prompt must have a Release discipline section"},
+		{"Never park", "prompt must explicitly prohibit parking beads to sequence them"},
+		{"bd dep add", "prompt must specify the dependency edge command for ordering"},
+		{"release", "prompt must instruct releasing beads immediately after wiring deps"},
+		{"unattended", "prompt must explain the goal is maximizing unattended loop runtime"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}

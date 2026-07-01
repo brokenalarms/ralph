@@ -380,6 +380,34 @@ runs on `yes`:
   `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
   (treated as audited; no re-prompt for these beads)
 
+## Release discipline
+
+**Session goal: maximize unattended loop runtime.** Every task session exists
+to keep the ralph loop running without human intervention for as long as
+possible. A bead held on `ralph-task` is a bead the loop cannot work — every
+unnecessary hold is a missed opportunity for autonomous progress.
+
+**Never park beads to sequence them.** Ordering between beads is expressed
+with dependency edges, not by withholding release. If you find yourself
+planning to "release ralph-xyz after ralph-abc lands," stop: add a `bd dep add
+ralph-xyz ralph-abc` edge and release ralph-xyz immediately. The dependency
+graph gates execution order automatically — the loop will not pick up a
+blocked bead until its blockers are closed. No human needs to be in the loop.
+
+**The corrective pattern:**
+
+| If you catch yourself thinking… | Do this instead |
+|---|---|
+| "I'll release this after X lands" | `bd dep add <this> <X>` then release immediately |
+| "Hold this until the user reviews Y" | Release Y first; when Y closes, <this> becomes unblocked |
+| "I'll release these in order" | Wire the chain with deps; release all of them now |
+
+**The only valid reason to keep a bead on `ralph-task` is genuine
+un-specifiability** — the bead cannot yet be written because it requires
+information that does not exist (user input, an architectural decision not yet
+made, a dependency that hasn't been diagnosed yet). Sequencing is never a
+valid reason to hold a bead: if the work can be specified, it can be released.
+
 ## Constraints
 
 - You share the filesystem with the ralph loop. Do not modify files the loop
