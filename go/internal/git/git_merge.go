@@ -1162,7 +1162,7 @@ func (r *repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, a
 // deletes the stale task branch. It does not modify the ProjectDir checkout.
 func (r *repo) PostMergeUpdateMain() {
 	defaultBranch := r.baseBranch
-	r.gitCmd(r.projectDir, "fetch", "origin", defaultBranch)
+	r.gitCmd(r.projectDir, "fetch", "--prune", "origin")
 
 	// Sync worktree with updated main. If rebase conflicts, reset —
 	// the merged work is on main and stale stack commits are expendable.
