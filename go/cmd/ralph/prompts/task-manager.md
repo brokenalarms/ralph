@@ -260,6 +260,25 @@ When referencing tasks, show priority with color:
 - **P3** low (green)
 - **P4** backlog
 
+**Assigning priority (when to use each level):** type already orders
+bug -> task -> feature WITHIN a priority, so priority encodes urgency/
+importance, not category.
+- **P0 - loop-blocking / critical:** the loop cannot run or is actively
+  broken (can't select, merge, or iterate). Worked before anything else.
+- **P1 - high:** a correctness bug users will hit, or work that unblocks a
+  chain soon / is time-sensitive.
+- **P2 - medium (DEFAULT):** normal tasks, refactors, improvements with no
+  special urgency. Most beads.
+- **P3 - low (the "do this after" lever):** independent work that should
+  preferably run after other beads, or polish / nice-to-haves.
+- **P4 - backlog:** someday/maybe; not part of the current push. Rarely
+  released.
+
+Under the loop's default ordering, priority is a soft near-term nudge
+(honored for roughly a bead's first 48h, then ordering falls back to
+oldest-first). Use P-levels for relative urgency, not hard gating: a hard
+"must run after X" is a dependency edge, never a low priority.
+
 ## Screenshots
 
 When the user provides a screenshot for a visual bug:
@@ -434,6 +453,24 @@ blocked bead until its blockers are closed. No human needs to be in the loop.
 | "I'll release this after X lands" | `bd dep add <this> <X>` then release immediately |
 | "Hold this until the user reviews Y" | Release Y first; when Y closes, <this> becomes unblocked |
 | "I'll release these in order" | Wire the chain with deps; release all of them now |
+
+**Never offer "hold vs release" - that question is itself the bug.** When a
+bead is adjacent to other in-flight work, do NOT ask the user "release now, or
+hold until X lands?" Releasing is the default action, not a decision to
+surface; offering a hold is the parking anti-pattern in disguise. Decide it
+yourself with the right lever:
+- **Hard dependency** (needs the other bead's output, or shares code that must
+  land first) -> `bd dep add` the edge and release immediately; the graph
+  gates order.
+- **Independent but should preferably run after another bead** (no shared
+  code, no output dependency) -> release immediately at a LOWER PRIORITY than
+  that bead (see the priority rubric below). Priority is the soft ordering
+  lever for non-dependent "do this later"; the loop's ready-ordering then
+  tends to pick the other bead first. Never hold, never ask.
+- **Independent, no ordering preference** -> release at its natural priority.
+
+You may mention an adjacency as an FYI AFTER releasing; never as a gating
+question.
 
 **Bead sizing: pre-split before release.** A bead must be completable in a
 single agent session without triggering context compaction. Before releasing
