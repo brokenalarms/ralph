@@ -408,35 +408,63 @@ var nonExecutableBDTypesSet = func() map[string]bool {
 // invocation so container/meta types never reach the selector.
 var bdReadyExcludeTypeArg = "--exclude-type=" + strings.Join(nonExecutableBDTypes, ",")
 
-// getNextIssue returns the highest-priority issue to work on.
-// It consults both the interrupted in-flight task (resumeTask) and the
-// first task available from bd ready, which is invoked with --sort=hybrid
-// so bd's own hybrid ordering policy (priority-aware for issues younger
-// than its cutoff, strictly oldest-first beyond it) picks the candidate —
-// no re-ranking happens in Go. A strictly-higher-priority ready task (lower
-// P-number) preempts the resume candidate; equal or lower priority defers to
-// the in-flight task so WIP is not abandoned for equal-priority work.
-// If there is no resume candidate, bd ready is the sole source.
+// getNextIssue returns the highest-priority issue to work on. It delegates
+// to Stage 1 (resumeCandidate) to decide whether in-flight work should
+// continue, falling through to Stage 2 (nextReadyIssue) whenever Stage 1
+// has no candidate to resume.
 func (b *BD) getNextIssue() (bdIssue, error) {
-	resume, hasResume := b.resumeTask()
-
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--sort=hybrid", "--assignee="+config.LoopAssignee)
-	if err != nil {
-		// If bd ready fails but we have a resume candidate, use it.
-		if hasResume {
-			return resume, nil
-		}
-		return bdIssue{}, nil
-	}
-	ready, hasReady := firstReadyIssue(out)
-
-	if hasResume && hasReady && issuePriority(ready) < issuePriority(resume) {
-		return ready, nil
-	}
-	if hasResume {
+	if resume, ok := b.resumeCandidate(); ok {
 		return resume, nil
 	}
-	if hasReady {
+	return b.nextReadyIssue()
+}
+
+// resumeCandidate implements Stage 1 (resume): it returns the interrupted
+// in-flight task (resumeTask) to continue, unless a strictly-higher-priority
+// ready task exists to preempt it. This preemption criterion is
+// priority-based regardless of bd ready's sort policy — an older ready bead
+// is never on its own a reason to abandon started work. Equal or lower
+// priority ready work defers to the in-flight task so WIP is not abandoned.
+func (b *BD) resumeCandidate() (bdIssue, bool) {
+	resume, hasResume := b.resumeTask()
+	if !hasResume {
+		return bdIssue{}, false
+	}
+	if b.higherPriorityReadyExists(resume) {
+		return bdIssue{}, false
+	}
+	return resume, true
+}
+
+// higherPriorityReadyExists reports whether bd ready has a not-in-progress
+// task with a strictly better (lower-numbered) priority than resume. It
+// queries bd ready sorted purely by priority and limited to a single row,
+// independent of the hybrid-sorted query nextReadyIssue uses for selection —
+// this keeps the preemption decision from depending on hybrid's age-aware
+// ordering, and performs no Go-side re-sort of its own.
+func (b *BD) higherPriorityReadyExists(resume bdIssue) bool {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--sort=priority", "--limit=1", "--assignee="+config.LoopAssignee)
+	if err != nil {
+		return false
+	}
+	top, hasTop := firstReadyIssue(out)
+	if !hasTop {
+		return false
+	}
+	return issuePriority(top) < issuePriority(resume)
+}
+
+// nextReadyIssue implements Stage 2 (pick next): it returns row 0 of bd
+// ready's hybrid-sorted output verbatim. bd ready is invoked with
+// --sort=hybrid so bd's own hybrid ordering policy (priority-aware for
+// issues younger than its cutoff, strictly oldest-first beyond it) picks the
+// candidate — no re-ranking happens in Go.
+func (b *BD) nextReadyIssue() (bdIssue, error) {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--sort=hybrid", "--assignee="+config.LoopAssignee)
+	if err != nil {
+		return bdIssue{}, nil
+	}
+	if ready, ok := firstReadyIssue(out); ok {
 		return ready, nil
 	}
 	return bdIssue{}, nil

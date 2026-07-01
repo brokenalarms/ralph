@@ -1786,6 +1786,93 @@ func TestBD_GetNextTaskInfo_NothingReadyResumesInFlight(t *testing.T) {
 	}
 }
 
+// Proves: the Stage 1 preemption check (higherPriorityReadyExists) queries bd
+// ready sorted by priority with a single-row limit — a distinct invocation
+// from Stage 2's hybrid-sorted selection query — rather than reusing one bd
+// ready call or a Go-side re-sort for both purposes.
+func TestBD_ResumeCandidate_PreemptionCheckUsesPrioritySortedSingleRowQuery(t *testing.T) {
+	var readyArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "show":
+			if len(args) >= 2 && args[1] == "ralph-wip" {
+				return `[{"id":"ralph-wip","title":"WIP task","priority":1,"status":"in_progress","type":"task"}]`, nil
+			}
+		case "blocked":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[]`, nil
+			}
+		case "ready":
+			readyArgs = append([]string{}, args...)
+			return `[{"id":"ralph-other","title":"Other task","priority":2,"status":"open"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetResumeTaskID("ralph-wip")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-wip" {
+		t.Errorf("expected resume of ralph-wip when no strictly-higher-priority ready task exists, got %q", info.ID)
+	}
+	joined := strings.Join(readyArgs, " ")
+	if !strings.Contains(joined, "--sort=priority") {
+		t.Errorf("preemption check must query bd ready with --sort=priority; got: %v", readyArgs)
+	}
+	if !strings.Contains(joined, "--limit=1") {
+		t.Errorf("preemption check must limit bd ready to a single row; got: %v", readyArgs)
+	}
+}
+
+// Proves: Stage 1's preemption check and Stage 2's selection are independent
+// queries — when a strictly-higher-priority ready bead preempts the resume,
+// the task actually selected comes from Stage 2's hybrid-sorted bd ready row
+// 0, not from whatever bead Stage 1's priority-sorted check happened to see.
+// This is the concrete guard against reintroducing a Go-side bestIssue-style
+// merge of the two queries.
+func TestBD_GetNextTaskInfo_PreemptedResumeSelectsHybridRowNotCheckRow(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "show":
+			if len(args) >= 2 && args[1] == "ralph-wip" {
+				return `[{"id":"ralph-wip","title":"WIP task","priority":2,"status":"in_progress","type":"task"}]`, nil
+			}
+		case "blocked":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[]`, nil
+			}
+		case "ready":
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "--sort=priority") {
+				// Stage 1's check sees a P0 bead — this triggers preemption,
+				// but must never itself be the selected result.
+				return `[{"id":"ralph-check-only","title":"Check-only task","priority":0,"status":"open"}]`, nil
+			}
+			if strings.Contains(joined, "--sort=hybrid") {
+				return `[{"id":"ralph-hybrid-row0","title":"Hybrid row zero","priority":0,"status":"open"}]`, nil
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetResumeTaskID("ralph-wip")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-hybrid-row0" {
+		t.Errorf("expected Stage 2's hybrid row 0 (ralph-hybrid-row0) to be selected after preemption, got %q", info.ID)
+	}
+}
+
 // Proves: a failed log write (e.g. read-only RalphDir) does not affect the
 // bd call's return value or error.
 func TestDefaultRunBD_LogWriteFailureIsBestEffort(t *testing.T) {
