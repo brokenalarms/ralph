@@ -347,10 +347,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return fmt.Sprintf("%t", cfg.Notify) },
 	},
 	{
-		Long: "--model-ceiling", MetaVar: "<model>",
-		Help:      "Model ceiling for all LLM interactions. When unset, agents will escalate to more advanced models following failures.",
+		Help:      "Model for the main agent (working iterations)",
 		Default:   ModelSonnet,
-		ConfigKey: "model_ceiling",
+		ConfigKey: "model",
 		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.Model = val
@@ -558,17 +557,6 @@ var Flags = []FlagDef{
 			return nil
 		},
 		Read: func(cfg *Config) string { return cfg.InternetRestoreInterval.String() },
-	},
-	{
-		Help:      "Deprecated: no effect. Cross-iteration model escalation was removed.",
-		Default:   ModelOpus,
-		ConfigKey: "agent_escalation_model",
-		Kind:      KindString,
-		Apply: func(cfg *Config, val string) error {
-			cfg.AgentEscalationModel = val
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.AgentEscalationModel },
 	},
 	{
 		Help:      "Model for LLM verification (first attempt)",

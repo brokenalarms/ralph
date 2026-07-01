@@ -43,34 +43,6 @@ func ModelShortName(model string) string {
 	return model
 }
 
-// modelTier returns a numeric tier for a model ID: haiku=0, sonnet=1, opus=2.
-// Unknown models default to sonnet tier.
-func modelTier(model string) int {
-	switch {
-	case strings.Contains(model, "haiku"):
-		return 0
-	case strings.Contains(model, "sonnet"):
-		return 1
-	case strings.Contains(model, "opus"):
-		return 2
-	default:
-		return 1
-	}
-}
-
-// CapModel returns the lesser of cap and model by tier. If cap is empty,
-// model is returned unchanged. Used to enforce the --model ceiling across
-// all LLM interactions.
-func CapModel(cap, model string) string {
-	if cap == "" {
-		return model
-	}
-	if modelTier(cap) < modelTier(model) {
-		return cap
-	}
-	return model
-}
-
 // Result describes the outcome of a post-signal verification.
 type Result struct {
 	Passed        bool

@@ -22,7 +22,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/prompt"
 	"github.com/brokenalarms/ralph/internal/state"
-	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -210,8 +209,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 
-	reviewCfg, _ := config.Parse(sub.Args)
-	reviewModel := verify.CapModel(modelCap(reviewCfg), agent.ModelOpus)
+	reviewModel := agent.ModelOpus
 
 	absDir, _ := filepath.Abs(sub.Dir)
 
@@ -345,8 +343,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 
-	taskCfg, _ := config.Parse(sub.Args)
-	taskModel := verify.CapModel(modelCap(taskCfg), agent.ModelOpus)
+	taskModel := agent.ModelOpus
 
 	absDir, _ := filepath.Abs(sub.Dir)
 
