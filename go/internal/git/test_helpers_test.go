@@ -324,13 +324,13 @@ func (s *stubCIPoller) AwaitCI(ctx context.Context, prNumber int, repoURL string
 	return s.AwaitCIFn(ctx, prNumber, repoURL, pushedAt)
 }
 
-// recordingSleeper implements sleeper, recording each requested delay
-// instead of actually sleeping — lets tests assert backoff behavior without
-// real waits.
-type recordingSleeper struct {
-	delays []time.Duration
+// stubConflictResolver implements conflictResolver for tests that need to
+// control what MergeWithRetry's conflict-resolution step does, without
+// wiring up a full *repo.
+type stubConflictResolver struct {
+	ResolveConflictFn func(ctx context.Context) error
 }
 
-func (s *recordingSleeper) Sleep(d time.Duration) {
-	s.delays = append(s.delays, d)
+func (s *stubConflictResolver) ResolveConflict(ctx context.Context) error {
+	return s.ResolveConflictFn(ctx)
 }
