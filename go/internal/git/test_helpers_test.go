@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
 )
@@ -275,3 +276,61 @@ func (s *sequencedJobStepGH) GetJobStepCount(ctx context.Context, nwo string, pr
 	return s.gitHub.GetJobStepCount(ctx, nwo, prNumber)
 }
 
+// stubShipHooks implements shipHooks for tests, letting each test override
+// only the behavior it cares about via function fields. Unset PushFn is a
+// no-op success; unset BranchHasUnmergedWorkFn defaults to true, matching
+// shipPR's historical "assume there's work" default.
+type stubShipHooks struct {
+	PushFn                  func(context.Context) error
+	HasUncommittedFn        func() bool
+	CommitAllFn             func(string)
+	BranchHasUnmergedWorkFn func(string) bool
+}
+
+func (s *stubShipHooks) Push(ctx context.Context) error {
+	if s.PushFn == nil {
+		return nil
+	}
+	return s.PushFn(ctx)
+}
+
+func (s *stubShipHooks) HasUncommittedChanges() bool {
+	if s.HasUncommittedFn == nil {
+		return false
+	}
+	return s.HasUncommittedFn()
+}
+
+func (s *stubShipHooks) CommitAll(message string) {
+	if s.CommitAllFn != nil {
+		s.CommitAllFn(message)
+	}
+}
+
+func (s *stubShipHooks) BranchHasUnmergedWork(branch string) bool {
+	if s.BranchHasUnmergedWorkFn == nil {
+		return true
+	}
+	return s.BranchHasUnmergedWorkFn(branch)
+}
+
+// stubCIPoller implements ciPoller for tests that need to control the
+// checks/status/error AwaitCI returns.
+type stubCIPoller struct {
+	AwaitCIFn func(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error)
+}
+
+func (s *stubCIPoller) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error) {
+	return s.AwaitCIFn(ctx, prNumber, repoURL, pushedAt)
+}
+
+// recordingSleeper implements sleeper, recording each requested delay
+// instead of actually sleeping — lets tests assert backoff behavior without
+// real waits.
+type recordingSleeper struct {
+	delays []time.Duration
+}
+
+func (s *recordingSleeper) Sleep(d time.Duration) {
+	s.delays = append(s.delays, d)
+}
