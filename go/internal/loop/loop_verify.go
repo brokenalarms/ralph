@@ -22,15 +22,12 @@ const (
 	fixFailed
 )
 
-// fixLoopSpec parameterizes one cycle of "spawn a fix agent, observe whether
-// it made commits, push if it did". Each tryFix* wrapper supplies its
-// fix-specific spawn callback and (optionally) a post-push hook (e.g. for
-// review's resolve-comments call).
+// fixLoopSpec is the pure-data description of one "spawn a fix agent,
+// observe whether it made commits, push if it did" cycle. Each tryFix*
+// wrapper supplies the fix-specific spawn template/vars as data; any
+// post-push follow-up (e.g. review's resolve-comments call) is sequenced
+// by the wrapper itself after fixLoop returns, not injected as a callback.
 type fixLoopSpec struct {
-	// spawn invokes the fix agent. The result's SignalDetected gates the
-	// rest of the loop.
-	spawn func() verifier.FixAgentResult
-
 	// fixName tags log lines (e.g. "CI", "Conflict", "<reviewer>").
 	fixName string
 
@@ -43,19 +40,34 @@ type fixLoopSpec struct {
 	// log line — the three callers each phrase it slightly differently.
 	noCommitsMsg string
 
-	// onPushed runs after a successful push. Used by the review wrapper to
-	// reply-and-resolve review threads. Errors are logged but not surfaced
-	// (the fix was already pushed).
-	onPushed func() error
+	// template, vars, workDir, rawLogPath, and description are the
+	// data-only FixAgentInput fields fixLoop passes to
+	// verifier.SpawnFixAgent — the same DI'd spawn point runFixLoop uses.
+	template    string
+	vars        map[string]string
+	workDir     string
+	rawLogPath  string
+	description string
 }
 
 // fixLoop owns the shared "spawn → check commits → push" scaffolding for
 // the three fix flows. The two HeadRev() calls in this function are the
-// only HeadRev() reads in the file; the per-fix wrappers compose the
-// scaffold via fixLoopSpec callbacks rather than re-reading state.
+// only HeadRev() reads in the file. Unlike runFixLoop's evaluate-until-pass
+// retry cycle, each fix flow here is a single spawn attempt sequenced by an
+// outer merge-retry loop (loop.go), so the shapes don't align enough to
+// share runFixLoop's attempt/exhaustion machinery — but both go through the
+// same verifier.SpawnFixAgent(FixAgentInput) data-in/data-out call.
 func (l *Loop) fixLoop(ctx context.Context, opts fixLoopSpec) fixLoopResult {
 	headBefore := l.git.HeadRev()
-	fixResult := opts.spawn()
+	fixResult := l.verifier.SpawnFixAgent(verifier.FixAgentInput{
+		Ctx:         ctx,
+		Template:    opts.template,
+		Vars:        opts.vars,
+		Attempt:     1,
+		WorkDir:     opts.workDir,
+		RawLogPath:  opts.rawLogPath,
+		Description: opts.description,
+	})
 	if !fixResult.SignalDetected {
 		return fixFailed
 	}
@@ -81,11 +93,6 @@ func (l *Loop) fixLoop(ctx context.Context, opts fixLoopSpec) fixLoopResult {
 		return fixFailed
 	}
 
-	if opts.onPushed != nil {
-		if err := opts.onPushed(); err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s post-push hook: %v", opts.fixName, err)
-		}
-	}
 	return fixApplied
 }
 
@@ -124,21 +131,15 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 		fixName:       "CI",
 		autoCommitMsg: "fix: auto-commit CI fix agent changes",
 		noCommitsMsg:  "Fix agent made no new commits — likely infrastructure failure",
-		spawn: func() verifier.FixAgentResult {
-			return l.verifier.SpawnFixAgent(verifier.FixAgentInput{
-				Ctx:      ctx,
-				Template: "verify-ci.md",
-				Vars: map[string]string{
-					"{{TASK_TITLE}}":    nextTask,
-					"{{FAILED_CHECKS}}": strings.Join(requiredNames, ", "),
-					"{{CI_LOG}}":        ciLog,
-				},
-				Attempt:     1,
-				WorkDir:     workDir,
-				RawLogPath:  rawLogPath,
-				Description: "CI failures",
-			})
+		template:      "verify-ci.md",
+		vars: map[string]string{
+			"{{TASK_TITLE}}":    nextTask,
+			"{{FAILED_CHECKS}}": strings.Join(requiredNames, ", "),
+			"{{CI_LOG}}":        ciLog,
 		},
+		workDir:     workDir,
+		rawLogPath:  rawLogPath,
+		description: "CI failures",
 	})
 
 	switch result {
@@ -163,21 +164,15 @@ func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, ra
 	result := l.fixLoop(ctx, fixLoopSpec{
 		fixName:      "Conflict",
 		noCommitsMsg: "Conflict agent made no new commits — nothing to push",
-		spawn: func() verifier.FixAgentResult {
-			return l.verifier.SpawnFixAgent(verifier.FixAgentInput{
-				Ctx:      ctx,
-				Template: "resolve-conflict.md",
-				Vars: map[string]string{
-					"{{TASK_TITLE}}":       nextTask,
-					"{{TASK_DESCRIPTION}}": taskDesc,
-					"{{CONFLICT_DIFF}}":    conflictDiff,
-				},
-				Attempt:     1,
-				WorkDir:     workDir,
-				RawLogPath:  rawLogPath,
-				Description: "conflict resolution",
-			})
+		template:     "resolve-conflict.md",
+		vars: map[string]string{
+			"{{TASK_TITLE}}":       nextTask,
+			"{{TASK_DESCRIPTION}}": taskDesc,
+			"{{CONFLICT_DIFF}}":    conflictDiff,
 		},
+		workDir:     workDir,
+		rawLogPath:  rawLogPath,
+		description: "conflict resolution",
 	})
 	return result == fixApplied
 }
@@ -270,23 +265,24 @@ func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, re
 		fixName:       reviewerName,
 		autoCommitMsg: "fix: address " + reviewerName + " review feedback",
 		noCommitsMsg:  fmt.Sprintf("%s fix agent made no new commits — proceeding to merge anyway", reviewerName),
-		spawn: func() verifier.FixAgentResult {
-			return l.verifier.SpawnFixAgent(verifier.FixAgentInput{
-				Ctx:      ctx,
-				Template: "verify-copilot-review.md",
-				Vars: map[string]string{
-					"{{TASK_TITLE}}":      nextTask,
-					"{{REVIEW_FEEDBACK}}": reviewCtx,
-				},
-				Attempt:     1,
-				WorkDir:     workDir,
-				RawLogPath:  rawLogPath,
-				Description: "Copilot review feedback",
-			})
+		template:      "verify-copilot-review.md",
+		vars: map[string]string{
+			"{{TASK_TITLE}}":      nextTask,
+			"{{REVIEW_FEEDBACK}}": reviewCtx,
 		},
-		onPushed: func() error {
-			return l.git.ReplyToAndResolveComments(ctx, prNumber, actionable)
-		},
+		workDir:     workDir,
+		rawLogPath:  rawLogPath,
+		description: "Copilot review feedback",
 	})
-	return result == fixApplied
+	if result != fixApplied {
+		return false
+	}
+
+	// Reply-and-resolve is sequenced here (after the push succeeds) rather
+	// than injected into fixLoop as a callback. The fix was already pushed,
+	// so a failure here is logged but not surfaced.
+	if err := l.git.ReplyToAndResolveComments(ctx, prNumber, actionable); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s post-push hook: %v", reviewerName, err)
+	}
+	return true
 }
