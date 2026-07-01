@@ -11,6 +11,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -83,7 +84,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 
 	accepted, skipReason := l.runVerifyPipeline(p)
 	if skipReason != "" {
-		l.skipTask("ralph-test1", skipReason)
+		l.skipTask("ralph-test1", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if !accepted {
@@ -157,7 +158,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 
 	accepted, skipReason := l.runVerifyPipeline(p)
 	if skipReason != "" {
-		l.skipTask("ralph-llm1", skipReason)
+		l.skipTask("ralph-llm1", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if accepted {
@@ -230,7 +231,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 
 	accepted, skipReason := l.runVerifyPipeline(p)
 	if skipReason != "" {
-		l.skipTask("ralph-fb1", skipReason)
+		l.skipTask("ralph-fb1", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if !accepted {
@@ -312,7 +313,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	// Single onSignal call exhausts all fix attempts internally.
 	result, skipReason := l.runVerifyPipeline(p)
 	if skipReason != "" {
-		l.skipTask("ralph-tr1", skipReason)
+		l.skipTask("ralph-tr1", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if result {

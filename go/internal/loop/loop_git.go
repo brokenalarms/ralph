@@ -77,14 +77,16 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 	l.state.RecordCompletedTask(taskID, taskTitle)
 	l.state.ClearCurrentTask()
 	if err := l.taskBackend.CloseTask(taskID, closeReason); err != nil {
-		skipReason := "close_failed"
+		skipReason := tasks.SkipCloseFailed
+		detail := ""
 		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", taskID, blockers)
-			skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+			skipReason = tasks.SkipDependencyBlocked
+			detail = strings.Join(blockers, ",")
 		} else {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
 		}
-		l.skipTask(taskID, skipReason)
+		l.skipTask(taskID, skipReason, detail)
 	} else {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", taskID, closeReason)
 		if err := l.state.AddCompletedTask(taskID, merged); err != nil {

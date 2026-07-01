@@ -13,6 +13,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -54,7 +55,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		taskID: "test-123", nextTask: "Test task",
 	})
 	if skipReason != "" {
-		l.skipTask("test-123", skipReason)
+		l.skipTask("test-123", tasks.SkipVerificationRejected, skipReason)
 	}
 	if !verified {
 		t.Fatal("expected onSignal to return true when verification passes")
@@ -101,7 +102,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		taskID: "test-123", nextTask: "Test task",
 	})
 	if skipReason != "" {
-		l.skipTask("test-123", skipReason)
+		l.skipTask("test-123", tasks.SkipVerificationRejected, skipReason)
 	}
 	if verified {
 		t.Fatal("expected onSignal to return false when LLM verification exhausts retries")
@@ -161,7 +162,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		taskID: "test-escalation", nextTask: "Escalation test",
 	})
 	if skipReason != "" {
-		l.skipTask("test-escalation", skipReason)
+		l.skipTask("test-escalation", tasks.SkipVerificationRejected, skipReason)
 	}
 	_ = verified
 
@@ -224,7 +225,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		taskID: "test-config-models", nextTask: "Config models test",
 	})
 	if skipReason != "" {
-		l.skipTask("test-config-models", skipReason)
+		l.skipTask("test-config-models", tasks.SkipVerificationRejected, skipReason)
 	}
 	_ = verified
 
@@ -286,7 +287,7 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 		taskID: "test-retry", nextTask: "Retry test",
 	})
 	if skipReason != "" {
-		l.skipTask("test-retry", skipReason)
+		l.skipTask("test-retry", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if !verified {
@@ -364,7 +365,7 @@ func TestOnSignal_LLMReject_FixAgent_TestFailureAfterFix_RetriesInsteadOfBailing
 		taskID: "test-retry-after-break", nextTask: "Retry after break test",
 	})
 	if skipReason != "" {
-		l.skipTask("test-retry-after-break", skipReason)
+		l.skipTask("test-retry-after-break", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if !verified {
@@ -427,7 +428,7 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 		taskID: "test-prompt", nextTask: "Prompt test",
 	})
 	if skipReason != "" {
-		l.skipTask("test-prompt", skipReason)
+		l.skipTask("test-prompt", tasks.SkipVerificationRejected, skipReason)
 	}
 	_ = verified
 
@@ -475,7 +476,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		taskID: "test-nosignal", nextTask: "No signal test",
 	})
 	if skipReason != "" {
-		l.skipTask("test-nosignal", skipReason)
+		l.skipTask("test-nosignal", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if verified {
@@ -520,7 +521,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		taskID: "test-fire", nextTask: "Fire test",
 	})
 	if skipReason != "" {
-		l.skipTask("test-fire", skipReason)
+		l.skipTask("test-fire", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if !verified {
@@ -580,7 +581,7 @@ func TestOnSignal_PriorIterationCommits_Proceeds(t *testing.T) {
 		taskID: "test-prior", nextTask: "Prior iteration test",
 	})
 	if skipReason != "" {
-		l.skipTask("test-prior", skipReason)
+		l.skipTask("test-prior", tasks.SkipVerificationRejected, skipReason)
 	}
 	if !verified {
 		t.Fatal("expected verification to proceed when prior-iteration commits exist ahead of origin/main")
@@ -1051,7 +1052,7 @@ func TestRunVerifyPipeline_SignalCommitDropped_InfraAbort(t *testing.T) {
 		nextTask:       "Test infra abort",
 	})
 	if skipReason != "" {
-		l.skipTask("test-infra", skipReason)
+		l.skipTask("test-infra", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if verified {
@@ -1132,7 +1133,7 @@ func TestRunVerifyPipeline_WorktreeBranchButProjectDir_InfraAbort(t *testing.T) 
 		nextTask:       "startup skip-triage",
 	})
 	if skipReason != "" {
-		l.skipTask("ralph-732q", skipReason)
+		l.skipTask("ralph-732q", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if verified {
@@ -1198,7 +1199,7 @@ func TestRunVerifyPipeline_EmptyDiffAheadOfBase_AbortsAsToolingError(t *testing.
 		nextTask:   "Test task",
 	})
 	if skipReason != "" {
-		l.skipTask("test-123", skipReason)
+		l.skipTask("test-123", tasks.SkipVerificationRejected, skipReason)
 	}
 
 	if verified {

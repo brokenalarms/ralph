@@ -165,7 +165,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 
 	if p.completedIDs[taskID] {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s already completed this session — skipping", taskID)
-		l.skipTask(taskID, "already_completed_this_session")
+		l.skipTask(taskID, tasks.SkipAlreadyCompleted, "")
 		// Recurse to try the next task. runIteration stays the same since
 		// we didn't actually run anything.
 		return l.selectNextTaskInner(ctx, p, attempts+1, waited)

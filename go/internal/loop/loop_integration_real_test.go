@@ -15,6 +15,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -352,32 +353,32 @@ func TestIntegrationReal_PushSucceededPRCreationFailed_SkipsAndPreservesBranch(t
 	}
 	backend.CloseMu.Unlock()
 
-	// Observable #2: bead was skipped with a reason carrying the branch
-	// name in the documented machine-parseable format.
+	// Observable #2: bead was skipped with a reason category plus a detail
+	// carrying the branch name, kept separate rather than concatenated.
 	backend.SkipMu.Lock()
 	defer backend.SkipMu.Unlock()
-	var skipReason string
+	var skipReason, branchName string
 	for i, id := range backend.SkippedIDs {
 		if id == "ralph-orph" {
 			skipReason = backend.SkipReasons[i]
+			branchName = backend.SkipDetails[i]
 			break
 		}
 	}
 	if skipReason == "" {
 		t.Fatalf("expected bead ralph-orph to be skipped, got skipped=%v", backend.SkippedIDs)
 	}
-	if !strings.HasPrefix(skipReason, "pr_creation_failed:") {
-		t.Errorf("skip reason must use pr_creation_failed: prefix, got %q", skipReason)
+	if skipReason != string(tasks.SkipPRCreationFailed) {
+		t.Errorf("skip reason must be %q, got %q", tasks.SkipPRCreationFailed, skipReason)
 	}
 
 	// Observable #3: the pushed branch is still present on the bare remote.
-	// The skip reason contains the branch name after the colon — use it to
-	// assert the remote ref exists. If the bead had closed, triage would
-	// have no way to rediscover this branch; this assertion locks in that
-	// the skip reason actually points at something real.
-	branchName := strings.TrimPrefix(skipReason, "pr_creation_failed:")
+	// The skip detail carries the branch name — use it to assert the remote
+	// ref exists. If the bead had closed, triage would have no way to
+	// rediscover this branch; this assertion locks in that the skip detail
+	// actually points at something real.
 	if branchName == "" {
-		t.Fatalf("skip reason must carry a non-empty branch name, got %q", skipReason)
+		t.Fatalf("skip detail must carry a non-empty branch name, got %q", branchName)
 	}
 	if !refExistsAt(setup.bareDir, "refs/heads/"+branchName) {
 		remoteBranches := gitOutputAt(t, setup.bareDir, "branch", "--list")

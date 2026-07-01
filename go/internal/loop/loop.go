@@ -370,12 +370,16 @@ func emitTaskSummary(ct CompletedTask, log *logging.Logger) {
 // this session. The bead leaves the loop's bd ready inbox by assignment, so
 // no separate skip filter is needed. Always parks — open dependents are a
 // triage concern for the task manager, not a reason to refuse.
-func (l *Loop) skipTask(id, reason string) {
+func (l *Loop) skipTask(id string, reason tasks.SkipReason, detail string) {
 	if id == "" {
 		return
 	}
-	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
-	if err := l.taskBackend.SkipTask(id, reason); err != nil {
+	msg := string(reason)
+	if detail != "" {
+		msg += ": " + detail
+	}
+	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, msg)
+	if err := l.taskBackend.SkipTask(id, reason, detail); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
 	}
 	l.state.ClearCurrentTask()
@@ -494,7 +498,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 				nextTask:       task.title,
 			})
 			if skipReason != "" {
-				l.skipTask(task.id, skipReason)
+				l.skipTask(task.id, tasks.SkipVerificationRejected, skipReason)
 			}
 			return verified
 		},
@@ -648,10 +652,9 @@ iterLoop:
 				}
 				var transportErr *git.TransportError
 				if errors.As(err, &transportErr) {
-					skipReason := "transport_error:" + transportErr.Op
 					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 						"Branch setup failed (transient transport error) — skipping task %s: %v", task.id, err)
-					l.skipTask(task.id, skipReason)
+					l.skipTask(task.id, tasks.SkipTransportError, transportErr.Op)
 					l.consecutiveNoAgentIters++
 					continue iterLoop
 				}

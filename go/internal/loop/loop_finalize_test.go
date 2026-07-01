@@ -11,6 +11,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -386,8 +387,11 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	for i, id := range backend.SkippedIDs {
 		if id == "ralph-abc" {
 			found = true
-			if !strings.Contains(backend.SkipReasons[i], "dependency_blocked_by:ralph-dep1") {
-				t.Errorf("skip reason should contain blocker ID, got %q", backend.SkipReasons[i])
+			if backend.SkipReasons[i] != string(tasks.SkipDependencyBlocked) {
+				t.Errorf("skip reason should be %q, got %q", tasks.SkipDependencyBlocked, backend.SkipReasons[i])
+			}
+			if backend.SkipDetails[i] != "ralph-dep1" {
+				t.Errorf("skip detail should contain blocker ID, got %q", backend.SkipDetails[i])
 			}
 		}
 	}
@@ -536,11 +540,11 @@ func TestFinalizePR_PushSucceededPRCreationFailed_SkipsWithBranch(t *testing.T) 
 		}
 		found = true
 		reason := backend.SkipReasons[i]
-		if !strings.HasPrefix(reason, "pr_creation_failed:") {
-			t.Errorf("skip reason must use documented prefix pr_creation_failed:, got %q", reason)
+		if reason != string(tasks.SkipPRCreationFailed) {
+			t.Errorf("skip reason must be %q, got %q", tasks.SkipPRCreationFailed, reason)
 		}
-		if !strings.Contains(reason, "ralph/ralph-orph-task-whose-pr-fails") {
-			t.Errorf("skip reason must carry pushed branch name, got %q", reason)
+		if backend.SkipDetails[i] != "ralph/ralph-orph-task-whose-pr-fails" {
+			t.Errorf("skip detail must carry pushed branch name, got %q", backend.SkipDetails[i])
 		}
 	}
 	if !found {
@@ -571,7 +575,7 @@ func TestSkipTask_ReassignsBeadAndTracksInSession(t *testing.T) {
 		Verifier:    newTestVerifier(t, cfg, logger),
 	})
 
-	l.skipTask("ralph-xyz", "merge_failed")
+	l.skipTask("ralph-xyz", "merge_failed", "")
 
 	if backend.SkippedTask != "ralph-xyz" {
 		t.Errorf("expected backend.SkippedTask=ralph-xyz, got %q", backend.SkippedTask)
@@ -600,7 +604,7 @@ func TestSkipTask_EmptyID(t *testing.T) {
 		Verifier:    newTestVerifier(t, cfg, logger),
 	})
 
-	l.skipTask("", "reason")
+	l.skipTask("", "reason", "")
 
 	if backend.SkippedTask != "" {
 		t.Error("expected no skip with empty ID")
