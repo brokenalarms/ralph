@@ -111,8 +111,10 @@ func (r *Runner) Query(ctx context.Context, workDir, prompt, model string, allow
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = workDir
-	// Disable Claude's machine-local auto-memory for reproducible verification.
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
+	// Disable Claude's machine-local auto-memory for reproducible verification,
+	// and auto-compaction so the LLM verifier uses the full 200K context window
+	// instead of being silently summarized.
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTO_COMPACT=1")
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }

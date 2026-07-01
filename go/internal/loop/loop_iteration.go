@@ -690,16 +690,16 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		baseBranch := l.git.DetectDefaultBranch()
 		if l.git.LogOneline("origin/"+baseBranch, "HEAD") != "" {
 			if passed, _ := l.verifyCompletion(ctx, headBefore); passed {
-				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Compaction detected but branch has verified commits — routing through ship pipeline")
+				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Context limit (200K) exceeded but branch has verified commits — routing through ship pipeline")
 				return actionCompactionShip
 			}
 		}
 		if count := l.incrementCompactionParkCount(taskID); count >= l.maxCompactionParks() {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.WorkingModel}, "Agent triggered compaction %d time(s) — this indicates a context leak. Skipping task.", count)
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.WorkingModel}, "Agent exceeded the context limit (200K) %d time(s) — task too big. Skipping task.", count)
 			l.skipTask(taskID, "compaction_detected")
 			return actionSkip
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Agent triggered compaction — retrying (below park cap)")
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Agent exceeded the context limit (200K) — retrying (below park cap)")
 		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}

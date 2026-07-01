@@ -109,7 +109,7 @@ type Result struct {
 	SignalDetected     bool      // true if a completion signal was found
 	AllComplete        bool      // true if the all-complete signal was found
 	NoCodeNeeded       bool      // true if agent confirmed no code changes required (already fixed / not a bug)
-	Compacted          bool      // true if the agent was killed because it triggered context compaction
+	Compacted          bool      // true if the agent was killed because it triggered context compaction, or exceeded the 200K context limit ("Prompt is too long") with auto-compaction disabled
 	IdleTimeout        bool      // true if the session was killed due to idle timeout
 	WallClockTimeout   bool      // true if the session was killed due to wall-clock max-run-duration
 	FeedbackKill       bool      // true if killed because user feedback arrived
@@ -309,8 +309,14 @@ func UserInputMessage(content string) string {
 // It always disables Claude's machine-local auto-memory so code agents run on
 // the orchestrator's prompt only (context reproducible across machines), and
 // prepends the project's .venv/bin to PATH when that directory exists in workDir.
+//
+// DISABLE_AUTO_COMPACT=1 disables Claude Code's auto-compaction so the agent
+// uses the full context window instead of being silently summarized around
+// 166K (83% of 200K) — a lossy compaction that ralph previously misread as a
+// context leak. With auto-compaction off, a genuinely oversized task fails
+// cleanly with "Prompt is too long" at the 200K hard limit instead.
 func buildAgentEnv(workDir string) []string {
-	env := append(os.Environ(), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
+	env := append(os.Environ(), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTO_COMPACT=1")
 	venvBin := filepath.Join(workDir, ".venv", "bin")
 	if info, err := os.Stat(venvBin); err != nil || !info.IsDir() {
 		return env
@@ -474,7 +480,28 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		}
 	}
 
+	// With auto-compaction disabled, an oversized task fails hard at the 200K
+	// context window instead of being silently summarized. Route that failure
+	// through the same too-big handling as a real-time "compacting" event.
+	if !result.SignalDetected && !result.Compacted && !result.IdleTimeout && !result.RateLimited {
+		if logData, err := os.ReadFile(cfg.RawLog); err == nil {
+			if containsPromptTooLong(string(logData)) {
+				result.Compacted = true
+				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Context limit (200K) exceeded — task too big")
+			}
+		}
+	}
+
 	return result, nil
+}
+
+// containsPromptTooLong reports whether the raw agent output contains
+// Claude Code's hard-limit failure message. This fires only when
+// auto-compaction is disabled (DISABLE_AUTO_COMPACT=1) and the agent's
+// context exceeds the 200K model window — with compaction enabled, the
+// agent is summarized instead and this string never appears.
+func containsPromptTooLong(logContent string) bool {
+	return strings.Contains(strings.ToLower(logContent), "prompt is too long")
 }
 
 // isContentActivity returns true if a raw-log line represents real assistant
@@ -764,7 +791,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 				if scan.isCompacting {
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model},
-						"Compaction detected — killing agent (context leak)")
+						"Compaction event detected despite DISABLE_AUTO_COMPACT — killing agent (context limit exceeded, task too big)")
 					gracefulKill(cmd, processDone)
 					return Result{Compacted: true}
 				}
