@@ -106,8 +106,13 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	if verified {
 		t.Fatal("expected onSignal to return false when LLM verification exhausts retries")
 	}
-	if llmCalls != l.maxLLMVerifyAttempts() {
-		t.Fatalf("expected %d LLM verify calls, got %d", l.maxLLMVerifyAttempts(), llmCalls)
+	// runFixLoop's generic contract evaluates checks once more than it spawns
+	// fix agents (maxAttempts spawns bound the retries; the final evaluation
+	// after the last spawn is what actually detects exhaustion), so a full
+	// exhaustion makes maxLLMVerifyAttempts()+1 LLM calls.
+	wantCalls := l.maxLLMVerifyAttempts() + 1
+	if llmCalls != wantCalls {
+		t.Fatalf("expected %d LLM verify calls, got %d", wantCalls, llmCalls)
 	}
 	if backend.SkippedTask != "test-123" {
 		t.Fatalf("expected test-123 deferred in backend, got %q", backend.SkippedTask)
@@ -292,6 +297,87 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	}
 	if !fixAgentSpawned {
 		t.Fatal("expected fix agent to be spawned on LLM rejection")
+	}
+}
+
+// A fix agent spawned to address an LLM rejection can itself break the
+// tests. This must be retryable — the failing test output feeds into the
+// next fix attempt (bounded by maxLLMVerifyAttempts) — not a terminal bail
+// of the whole verification. (The old runLLMVerifyFixLoop re-ran tests once
+// after the fix agent and returned false, "" outright on failure, discarding
+// the fix agent's LLM-approved progress and any remaining retry budget.)
+func TestOnSignal_LLMReject_FixAgent_TestFailureAfterFix_RetriesInsteadOfBailing(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	// Tests pass initially so the earlier test-fix-loop pipeline stage is a
+	// no-op and verification reaches the LLM-verify stage directly.
+	passingMakefile := []byte("ralph-verify:\n\ttrue\n")
+	failingMakefile := []byte("ralph-verify:\n\t@echo 'FAIL: broken by fix agent' && exit 1\n")
+	os.WriteFile(filepath.Join(dir, "Makefile"), passingMakefile, 0o644)
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
+	llmCalls := 0
+	fixAgentSpawns := 0
+	var lastFixPrompt string
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAgentSpawns++
+				// Attempt 1's fix agent "addresses" the LLM's feedback but
+				// breaks the tests. Attempt 2's fix agent fixes them.
+				if fixAgentSpawns == 1 {
+					os.WriteFile(filepath.Join(dir, "Makefile"), failingMakefile, 0o644)
+				} else {
+					os.WriteFile(filepath.Join(dir, "Makefile"), passingMakefile, 0o644)
+				}
+				return &promptCapturingRunner{
+					inner:    &stubRunner{result: stubResult(true, "attempted fix")},
+					captured: &lastFixPrompt,
+				}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				if llmCalls == 1 {
+					return "NO: missing error handling", nil
+				}
+				return "YES: looks good", nil
+			}},
+		}),
+	})
+
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-retry-after-break", nextTask: "Retry after break test",
+	})
+	if skipReason != "" {
+		l.skipTask("test-retry-after-break", skipReason)
+	}
+
+	if !verified {
+		t.Fatal("expected verification to retry past the post-fix test failure and eventually pass, not bail")
+	}
+	if fixAgentSpawns != 2 {
+		t.Fatalf("expected 2 fix agent spawns (1 for the LLM rejection, 1 for the post-fix test failure), got %d", fixAgentSpawns)
+	}
+	if llmCalls != 3 {
+		t.Fatalf("expected 3 LLM verify calls (reject, approve-but-tests-broke, approve-after-retest), got %d", llmCalls)
+	}
+	if !strings.Contains(lastFixPrompt, "broken by fix agent") {
+		t.Errorf("expected the retry fix agent's prompt to contain the failing test output, got:\n%s", lastFixPrompt)
 	}
 }
 

@@ -13,6 +13,12 @@ import (
 type checkOutcome struct {
 	Passed  bool
 	Failure string
+	// Abort marks an infrastructure/tooling fault the check found while
+	// validating its own inputs (e.g. an empty diff on a branch that should
+	// have one) — not a normal pass/fail verdict on the work itself.
+	// runFixLoop returns immediately without consuming an attempt or
+	// spawning a fix agent, the same as the signalTimeHead movement guard.
+	Abort bool
 }
 
 // fixCheck is runFixLoop's local interface seam: a single retryable
@@ -34,8 +40,9 @@ type fixPlan struct {
 	spawnVars        map[string]string
 	spawnDescription string
 	maxAttempts      int
-	// exhaustedFormat is a fmt string taking maxAttempts, used both for the
-	// "giving up" log line and the returned skip reason.
+	// exhaustedFormat is a fmt string taking (maxAttempts, joined check
+	// failures), used both for the "giving up" log line and the returned
+	// skip reason.
 	exhaustedFormat string
 	workDir         string
 	rawLogPath      string
@@ -55,10 +62,15 @@ type fixPlan struct {
 // attempts is an infrastructure failure, not a check rejection, and
 // aborts without consuming an attempt.
 //
+// A check can also report Abort on its outcome — an infrastructure/tooling
+// fault found while validating its own inputs, not a rejection of the work.
+// Like the movement guard, this returns immediately without consuming an
+// attempt or spawning a fix agent.
+//
 // Returns (true, "") once every check passes, (false, "") when the
-// movement guard trips or a fix agent fails to signal, and (false,
-// skipReason) — skipReason formatted from plan.exhaustedFormat — once
-// maxAttempts is exhausted.
+// movement guard trips, a check aborts, or a fix agent fails to signal, and
+// (false, skipReason) — skipReason formatted from plan.exhaustedFormat —
+// once maxAttempts is exhausted.
 func (l *Loop) runFixLoop(ctx context.Context, plan fixPlan) (bool, string) {
 	attempts := 0
 	for {
@@ -72,6 +84,9 @@ func (l *Loop) runFixLoop(ctx context.Context, plan fixPlan) (bool, string) {
 		var failures []string
 		for _, c := range plan.checks {
 			outcome := c.evaluate(ctx)
+			if outcome.Abort {
+				return false, ""
+			}
 			if !outcome.Passed {
 				failures = append(failures, outcome.Failure)
 			}
@@ -82,7 +97,7 @@ func (l *Loop) runFixLoop(ctx context.Context, plan fixPlan) (bool, string) {
 
 		attempts++
 		if attempts > plan.maxAttempts {
-			msg := fmt.Sprintf(plan.exhaustedFormat, plan.maxAttempts)
+			msg := fmt.Sprintf(plan.exhaustedFormat, plan.maxAttempts, strings.Join(failures, "\n\n"))
 			l.logger.Emit(logging.Opts{Domain: plan.logDomain, Level: logging.Error}, "%s — giving up", msg)
 			return false, msg
 		}

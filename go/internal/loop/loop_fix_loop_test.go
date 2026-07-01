@@ -79,7 +79,7 @@ func TestRunFixLoop_MovementGuard_AbortsWithoutEvaluatingOrSpawning(t *testing.T
 		checks:          []fixCheck{stubFixCheck{calls: &evalCalls, outcomes: []checkOutcome{{Passed: false, Failure: "boom"}}}},
 		spawnTemplate:   "verify-tests.md",
 		maxAttempts:     3,
-		exhaustedFormat: "still failing after %d attempts",
+		exhaustedFormat: "still failing after %d attempts: %s",
 		signalTimeHead:  "signal-sha",
 		logDomain:       logging.Test,
 	})
@@ -109,7 +109,7 @@ func TestRunFixLoop_ChecksPass_NoSpawn(t *testing.T) {
 		checks:          []fixCheck{stubFixCheck{calls: &evalCalls, outcomes: []checkOutcome{{Passed: true}}}},
 		spawnTemplate:   "verify-tests.md",
 		maxAttempts:     3,
-		exhaustedFormat: "still failing after %d attempts",
+		exhaustedFormat: "still failing after %d attempts: %s",
 		logDomain:       logging.Test,
 	})
 
@@ -135,14 +135,14 @@ func TestRunFixLoop_ExhaustsAttempts_ReturnsFormattedSkipReason(t *testing.T) {
 		checks:          []fixCheck{stubFixCheck{calls: &evalCalls, outcomes: []checkOutcome{{Passed: false, Failure: "still broken"}}}},
 		spawnTemplate:   "verify-tests.md",
 		maxAttempts:     2,
-		exhaustedFormat: "still failing after %d attempts",
+		exhaustedFormat: "still failing after %d attempts: %s",
 		logDomain:       logging.Test,
 	})
 
 	if passed {
 		t.Error("expected runFixLoop to fail once attempts are exhausted")
 	}
-	want := "still failing after 2 attempts"
+	want := "still failing after 2 attempts: still broken"
 	if skipReason != want {
 		t.Errorf("expected skip reason %q, got %q", want, skipReason)
 	}
