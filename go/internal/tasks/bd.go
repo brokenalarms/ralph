@@ -409,15 +409,18 @@ var nonExecutableBDTypesSet = func() map[string]bool {
 var bdReadyExcludeTypeArg = "--exclude-type=" + strings.Join(nonExecutableBDTypes, ",")
 
 // getNextIssue returns the highest-priority issue to work on.
-// It consults both the interrupted in-flight task (resumeTask) and the best
-// task available from bd ready. A strictly-higher-priority ready task (lower
+// It consults both the interrupted in-flight task (resumeTask) and the
+// first task available from bd ready, which is invoked with --sort=hybrid
+// so bd's own hybrid ordering policy (priority-aware for issues younger
+// than its cutoff, strictly oldest-first beyond it) picks the candidate —
+// no re-ranking happens in Go. A strictly-higher-priority ready task (lower
 // P-number) preempts the resume candidate; equal or lower priority defers to
 // the in-flight task so WIP is not abandoned for equal-priority work.
 // If there is no resume candidate, bd ready is the sole source.
 func (b *BD) getNextIssue() (bdIssue, error) {
 	resume, hasResume := b.resumeTask()
 
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--assignee="+config.LoopAssignee)
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--sort=hybrid", "--assignee="+config.LoopAssignee)
 	if err != nil {
 		// If bd ready fails but we have a resume candidate, use it.
 		if hasResume {
@@ -425,7 +428,7 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 		}
 		return bdIssue{}, nil
 	}
-	ready, hasReady := bestIssue(out)
+	ready, hasReady := firstReadyIssue(out)
 
 	if hasResume && hasReady && issuePriority(ready) < issuePriority(resume) {
 		return ready, nil
@@ -492,52 +495,15 @@ func issuePriority(issue bdIssue) int {
 	return 2
 }
 
-// issueTypeRank maps issue type to a sort order within the same priority.
-// Bugs are fixed first, then tasks, then features/enhancements.
-func issueTypeRank(issue bdIssue) int {
-	switch issue.Type {
-	case "bug":
-		return 0
-	case "task":
-		return 1
-	default:
-		return 2
-	}
-}
-
-// bestIssue parses all issues from JSON and returns the one with the
-// highest priority (lowest number), breaking ties by type rank
-// (bug < task < feature/enhancement), then by status (in_progress before open).
-func bestIssue(jsonStr string) (bdIssue, bool) {
+// firstReadyIssue returns the first issue in bd ready's ordered JSON output.
+// Ordering is bd's responsibility (--sort=hybrid on the invocation); this
+// function performs no ranking of its own.
+func firstReadyIssue(jsonStr string) (bdIssue, bool) {
 	var issues []bdIssue
 	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
 		return bdIssue{}, false
 	}
-
-	best := -1
-	for i, issue := range issues {
-		if issue.ID == "" && issue.Title == "" {
-			continue
-		}
-		if best == -1 {
-			best = i
-			continue
-		}
-		bp, ip := issuePriority(issues[best]), issuePriority(issue)
-		bt, it := issueTypeRank(issues[best]), issueTypeRank(issue)
-		switch {
-		case ip < bp:
-			best = i
-		case ip == bp && it < bt:
-			best = i
-		case ip == bp && it == bt && issue.Status == "in_progress" && issues[best].Status != "in_progress":
-			best = i
-		}
-	}
-	if best == -1 {
-		return bdIssue{}, false
-	}
-	return issues[best], true
+	return issues[0], true
 }
 
 func (b *BD) GetNextTaskInfo() (TaskInfo, error) {
