@@ -1198,6 +1198,86 @@ func TestRun_CompactingEventKillsAgent(t *testing.T) {
 	}
 }
 
+// TestRun_PromptTooLongTriggersCompactedResult verifies that with
+// auto-compaction disabled, the process fails hard with "Prompt is too long"
+// (Claude Code's 200K hard-limit message) instead of emitting a compacting
+// status event. Run() must detect that string in the raw log after the
+// process exits and report Result{Compacted: true} — the same too-big signal
+// the loop already routes through its ship-or-skip handler — so a genuinely
+// oversized task fails cleanly rather than silently succeeding.
+func TestRun_PromptTooLongTriggersCompactedResult(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := &Runner{
+		Logger: log,
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("sh", "-c", "echo 'Error: Prompt is too long' >&2; exit 1")
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	result, _ := runner.Run(RunConfig{
+		Ctx:          context.Background(),
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+
+	if !result.Compacted {
+		t.Errorf("expected Compacted=true when raw log contains 'Prompt is too long', got result=%+v", result)
+	}
+	if result.SignalDetected {
+		t.Error("expected SignalDetected=false when the run fails on the context limit")
+	}
+}
+
+// TestRun_NormalFailureDoesNotTriggerCompacted verifies that a process failing
+// for an unrelated reason (no "Prompt is too long" in the raw log) does NOT
+// get routed through the too-big handler — only the specific hard-limit
+// message should set Compacted.
+func TestRun_NormalFailureDoesNotTriggerCompacted(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := &Runner{
+		Logger: log,
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("sh", "-c", "echo 'some unrelated error' >&2; exit 1")
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	result, _ := runner.Run(RunConfig{
+		Ctx:          context.Background(),
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+
+	if result.Compacted {
+		t.Errorf("expected Compacted=false for an unrelated failure, got result=%+v", result)
+	}
+}
+
 // Verifies that the shorter progress-aware timeout fires once the agent has
 // produced content output in the raw log (text activity flips activitySeen).
 func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
@@ -2638,17 +2718,24 @@ func TestBuildAgentEnv_NoVenv(t *testing.T) {
 		t.Fatal("expected non-nil env (auto-memory must be disabled) even without .venv/bin")
 	}
 	venvBin := filepath.Join(dir, ".venv", "bin")
-	found := false
+	foundAutoMemory := false
+	foundAutoCompact := false
 	for _, entry := range env {
 		if entry == "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1" {
-			found = true
+			foundAutoMemory = true
+		}
+		if entry == "DISABLE_AUTO_COMPACT=1" {
+			foundAutoCompact = true
 		}
 		if strings.HasPrefix(entry, "PATH=") && strings.Contains(entry, venvBin) {
 			t.Errorf("no .venv/bin exists but PATH references it: %q", entry)
 		}
 	}
-	if !found {
+	if !foundAutoMemory {
 		t.Error("expected CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 in env")
+	}
+	if !foundAutoCompact {
+		t.Error("expected DISABLE_AUTO_COMPACT=1 in env")
 	}
 }
 
