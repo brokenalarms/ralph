@@ -33,6 +33,22 @@
 - To assert a *non-event* (something does NOT happen), drive the system to an observable state with `WaitFor`, then assert — do not sleep and hope.
 - A `forbidigo` lint rule forbids `time.Sleep` in `*_test.go`; the `testutil` wait helpers are the only exception.
 
+## Running tests
+- Prefer the project's top-level test command over scoped or hand-built test invocations. A scoped run through the wrapped toolchain can report "no tests found" even when the package compiles and the test exists — treat that message from a scoped run as unreliable, not as proof your test is missing.
+- To confirm a new test compiles and is discovered before running the whole suite, compile the package first; a clean compile proves the test function exists.
+- Assume the suite runs fail-fast: only the first failing test surfaces. During a red phase, order new tests so the one most certain to fail comes first, and don't assume the rest passed just because they didn't appear.
+- For removals and interface changes, the "fails first" proof is usually a compile error at the call sites, not a behavioral assertion. A broken build is the red step — don't manufacture a behavioral test that pre-fails.
+
+## Tests that pass for the wrong reason
+- A test can pass without exercising the code it claims to, when a setup value trips an early-return guard and silently skips the real path. Deliberately satisfy whatever flag or guard gates the path, and assert an observable effect of it — a state change, an emitted call, a produced artifact — that would fail if the path were short-circuited. "No error returned" is not such an assertion.
+
+## Changing shared contracts
+- Before changing or removing a function signature, a struct field, or an interface method, find every caller — including test files and test doubles — not just the production call sites. The compiler flags production callers; hand-written stubs, inline test doubles, and fixtures are what silently break or get missed.
+
+## Keep tests structurally sound
+- Keep individual test files cohesive and bounded; when a file outgrows one responsibility, split it by topic rather than appending indefinitely.
+- Construct test doubles and domain objects through the shared constructor or helper, not ad-hoc struct literals, so their invariants stay centralized and can't drift per-test.
+
 ## Stubs and test doubles
 - A test stub implements exactly the production interface — the same methods, nothing else. It is indistinguishable in shape from the real implementation.
 - Stub configuration happens at construction via a `StubXConfig` struct passed to `NewStubX(cfg)`. The constructor is the only configuration seam.
@@ -41,6 +57,7 @@
 - Callback-valued fields on stubs (`ListChecksFunc func(...)`, `CreatePRFunc func(...)`) are forbidden. They smuggle test logic into the stub through a side channel that production code does not have. The subject under test must only see the production interface.
 - Partial-stub hybrids — types that embed a stub and override a subset of its methods — are forbidden. The pattern confuses which layer is under test and, in Go, silently breaks when the embedded stub's methods call each other (static dispatch keeps those calls inside the embedded type). Build one stub that fully implements the interface via plain state.
 - Stubs live at external boundaries (network, subprocess, filesystem the test does not want to touch), not at module boundaries. When testing module A, use real A with stubs at A's external dependencies. When testing a consumer of A, use a fully-constructed stub A. Never build a half-real, half-stub instance of the same module.
+- A test that drives a state transition — a value written on one call and read back on a later call — needs a double that stores real mutable state. A purely static double that returns fixed values will either pass vacuously or loop forever waiting for a change that can never happen. Choose the stateful double for those tests.
 
 ## Go test package naming
 Go test files declare either the **internal** package (`package foo`) or the **external** package (`package foo_test`).
