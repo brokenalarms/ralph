@@ -287,24 +287,21 @@ func (r *repo) PruneOrphanedWorktrees() {
 
 	r.gitCmd(r.projectDir, "worktree", "prune")
 
-	out := r.gitOutput(r.projectDir, "worktree", "list", "--porcelain")
-	tracked := make(map[string]bool)
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "worktree ") {
-			tracked[strings.TrimPrefix(line, "worktree ")] = true
-		}
-	}
-
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		dirPath := filepath.Join(worktreeRoot, e.Name())
-		resolved, err := filepath.EvalSymlinks(dirPath)
-		if err != nil {
-			resolved = dirPath
+		// Re-verify immediately before removal instead of trusting a snapshot
+		// taken earlier in this call: a concurrent process may have registered
+		// dirPath as a live worktree in the meantime (TOCTOU race).
+		if r.isLiveWorktree(dirPath) {
+			continue
 		}
-		if tracked[dirPath] || tracked[resolved] {
+		// Last-instant re-check: isLiveWorktree's own `git worktree list`
+		// query can itself be the moment a concurrent registration lands, so
+		// check the gitdir link one more time right at the point of no return.
+		if hasValidGitdirLink(dirPath) {
 			continue
 		}
 		if r.logger != nil {
@@ -312,4 +309,54 @@ func (r *repo) PruneOrphanedWorktrees() {
 		}
 		os.RemoveAll(dirPath)
 	}
+}
+
+// isLiveWorktree reports whether dirPath is currently a registered git
+// worktree. It is called immediately before a removal decision, so it never
+// trusts a stale snapshot — it either finds a valid `.git` gitdir link
+// written by `git worktree add` (checked first since it can't lag behind a
+// concurrent registration the way a cached `git worktree list` would) or
+// falls back to a fresh `git worktree list --porcelain` query.
+func (r *repo) isLiveWorktree(dirPath string) bool {
+	if hasValidGitdirLink(dirPath) {
+		return true
+	}
+	resolved, err := filepath.EvalSymlinks(dirPath)
+	if err != nil {
+		resolved = dirPath
+	}
+	out := r.gitOutput(r.projectDir, "worktree", "list", "--porcelain")
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		tracked := strings.TrimPrefix(line, "worktree ")
+		if tracked == dirPath || tracked == resolved {
+			return true
+		}
+	}
+	return false
+}
+
+// hasValidGitdirLink reports whether dirPath contains a `.git` file (as
+// git worktrees do, in contrast to a full `.git` directory) whose `gitdir:`
+// target still exists as a worktree admin entry.
+func hasValidGitdirLink(dirPath string) bool {
+	gitFile := filepath.Join(dirPath, ".git")
+	info, err := os.Lstat(gitFile)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return false
+	}
+	const prefix = "gitdir:"
+	content := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(content, prefix) {
+		return false
+	}
+	gitdir := strings.TrimSpace(strings.TrimPrefix(content, prefix))
+	_, err = os.Stat(gitdir)
+	return err == nil
 }
