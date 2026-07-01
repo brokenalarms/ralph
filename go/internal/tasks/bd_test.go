@@ -372,7 +372,7 @@ func TestBD_SkipTask_SetsStatusOpen(t *testing.T) {
 		return "", nil
 	}
 	b := setupBD(t, runner)
-	if err := b.SkipTask("abc123", "stuck_loop"); err != nil {
+	if err := b.SkipTask("abc123", "stuck_loop", ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(updateArgs) == 0 {
@@ -398,7 +398,7 @@ func TestBD_SkipTask_RecordsReasonAsComment(t *testing.T) {
 		return "updated", nil
 	}
 	b := setupBD(t, runner)
-	if err := b.SkipTask("abc123", "merge_failed"); err != nil {
+	if err := b.SkipTask("abc123", "merge_failed", ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(commentArgs) == 0 {
@@ -416,6 +416,33 @@ func TestBD_SkipTask_RecordsReasonAsComment(t *testing.T) {
 	}
 }
 
+// Proves: bd SkipTask records reason and detail as distinct pieces of the
+// comment body rather than requiring the caller to pre-concatenate them.
+func TestBD_SkipTask_RecordsDetailInComment(t *testing.T) {
+	var commentArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 1 && args[0] == "comments" {
+			commentArgs = args
+			return "ok", nil
+		}
+		return "updated", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", SkipPushFailed, "ralph/some-branch"); err != nil {
+		t.Fatal(err)
+	}
+	if len(commentArgs) == 0 {
+		t.Fatal("expected bd comments add to be called")
+	}
+	joined := strings.Join(commentArgs, " ")
+	if !strings.Contains(joined, string(SkipPushFailed)) {
+		t.Errorf("expected reason category in comment body, got: %v", commentArgs)
+	}
+	if !strings.Contains(joined, "ralph/some-branch") {
+		t.Errorf("expected detail in comment body, got: %v", commentArgs)
+	}
+}
+
 // Proves: bd SkipTask reassigns the bead to config.TaskAssignee and adds the
 // skipped label via --add-label so it leaves the loop's inbox with no separate
 // filter needed. --label is not a valid bd update flag and must not be used.
@@ -428,7 +455,7 @@ func TestBD_SkipTask_ReassignsToTaskAssignee(t *testing.T) {
 		return "", nil
 	}
 	b := setupBD(t, runner)
-	if err := b.SkipTask("abc123", "transport_error"); err != nil {
+	if err := b.SkipTask("abc123", "transport_error", ""); err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(updateArgs, " ")
@@ -454,7 +481,7 @@ func TestBD_SkipTask_EmptyID(t *testing.T) {
 		return "", nil
 	}
 	b := setupBD(t, runner)
-	if err := b.SkipTask("", "reason"); err != nil {
+	if err := b.SkipTask("", "reason", ""); err != nil {
 		t.Fatal(err)
 	}
 	if called {

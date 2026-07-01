@@ -960,11 +960,11 @@ func (b *seqTaskBackend) GetNextTaskID() (string, error) {
 	return info.ID, err
 }
 
-func (b *seqTaskBackend) SkipTask(id, reason string) error {
+func (b *seqTaskBackend) SkipTask(id string, reason tasks.SkipReason, detail string) error {
 	b.mu.Lock()
 	b.pos++
 	b.mu.Unlock()
-	return b.TrackingBackend.SkipTask(id, reason)
+	return b.TrackingBackend.SkipTask(id, reason, detail)
 }
 
 // A transient transport error (exit 128 from fetch) during BranchForTask is
@@ -1047,8 +1047,11 @@ func TestLoop_BranchForTask_TransportError_SkipsTask(t *testing.T) {
 		t.Errorf("expected second skipped id=%q, got %q", "ralph-def", backend.SkippedIDs[1])
 	}
 	for i, reason := range backend.SkipReasons {
-		if reason != "transport_error:fetch" {
-			t.Errorf("skip[%d]: expected reason %q, got %q", i, "transport_error:fetch", reason)
+		if reason != string(tasks.SkipTransportError) {
+			t.Errorf("skip[%d]: expected reason %q, got %q", i, tasks.SkipTransportError, reason)
+		}
+		if backend.SkipDetails[i] != "fetch" {
+			t.Errorf("skip[%d]: expected detail %q, got %q", i, "fetch", backend.SkipDetails[i])
 		}
 	}
 

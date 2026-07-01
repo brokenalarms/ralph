@@ -191,7 +191,7 @@ func TestSkipTask_ClearsCurrentTask(t *testing.T) {
 	l, st := clearTaskTestLoop(t, backend, git.StubRepoConfig{})
 	st.BeginIteration("ralph-xyz", "Fix auth", 0)
 
-	l.skipTask("ralph-xyz", "test_reason")
+	l.skipTask("ralph-xyz", "test_reason", "")
 
 	assertCurrentTaskCleared(t, st)
 }

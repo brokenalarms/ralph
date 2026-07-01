@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -245,13 +245,17 @@ func TestLoop_Ship_PushFailed_SkipsTask(t *testing.T) {
 	backend.SkipMu.Lock()
 	skippedIDs := backend.SkippedIDs
 	skipReasons := backend.SkipReasons
+	skipDetails := backend.SkipDetails
 	backend.SkipMu.Unlock()
 
 	if len(skippedIDs) != 1 || skippedIDs[0] != "ralph-5g57t" {
 		t.Errorf("expected task ralph-5g57t to be skipped, got %v", skippedIDs)
 	}
-	if len(skipReasons) == 0 || !strings.HasPrefix(skipReasons[0], "push_failed:") {
-		t.Errorf("expected skip reason with push_failed: prefix, got %v", skipReasons)
+	if len(skipReasons) == 0 || skipReasons[0] != string(tasks.SkipPushFailed) {
+		t.Errorf("expected skip reason %q, got %v", tasks.SkipPushFailed, skipReasons)
+	}
+	if len(skipDetails) == 0 || skipDetails[0] == "" {
+		t.Errorf("expected skip detail to carry the branch name, got %v", skipDetails)
 	}
 
 	backend.CloseMu.Lock()

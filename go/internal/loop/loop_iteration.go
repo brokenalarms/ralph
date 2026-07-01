@@ -139,7 +139,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		})
 		if !verified {
 			if skipReason != "" {
-				l.skipTask(p.taskID, skipReason)
+				l.skipTask(p.taskID, tasks.SkipVerificationRejected, skipReason)
 			}
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Verification failed for no-code-needed claim — retrying")
 			l.recordAttempt(AttemptEvent{
@@ -237,14 +237,16 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			}
 			closeReason := "verified complete (no new commits)"
 			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
-				skipReason := "close_failed"
+				skipReason := tasks.SkipCloseFailed
+				detail := ""
 				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
 					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
-					skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+					skipReason = tasks.SkipDependencyBlocked
+					detail = strings.Join(blockers, ",")
 				} else {
 					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
 				}
-				l.skipTask(p.taskID, skipReason)
+				l.skipTask(p.taskID, skipReason, detail)
 			} else {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 				l.persistCompleted(p.taskID, false)
@@ -345,8 +347,7 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 					l.setPhaseInterrupted(p.taskID)
 					return completeTaskOut{action: signalComplete}
 				}
-				// Machine-parseable reason: "push_failed:<branch>".
-				l.skipTask(p.taskID, fmt.Sprintf("push_failed:%s", branch))
+				l.skipTask(p.taskID, tasks.SkipPushFailed, branch)
 			}
 			return completeTaskOut{action: signalSkipped}
 		}
@@ -361,10 +362,9 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 					l.setPhaseInterrupted(p.taskID)
 					return completeTaskOut{action: signalComplete}
 				}
-				// Machine-parseable reason: "pr_creation_failed:<branch>".
 				// Downstream triage (and the task-manager prompt) parses this
 				// to locate orphaned remote branches whose PRs failed to create.
-				l.skipTask(p.taskID, fmt.Sprintf("pr_creation_failed:%s", pushedBranch))
+				l.skipTask(p.taskID, tasks.SkipPRCreationFailed, pushedBranch)
 			}
 			return completeTaskOut{action: signalSkipped}
 		}
@@ -405,14 +405,16 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 			}
 			closeReason := fmt.Sprintf("Verified — %s open, merge pending CI recovery", prRef)
 			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
-				skipReason := "close_failed"
+				skipReason := tasks.SkipCloseFailed
+				detail := ""
 				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
 					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
-					skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+					skipReason = tasks.SkipDependencyBlocked
+					detail = strings.Join(blockers, ",")
 				} else {
 					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
 				}
-				l.skipTask(p.taskID, skipReason)
+				l.skipTask(p.taskID, skipReason, detail)
 			} else {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 				l.persistCompleted(p.taskID, false)
@@ -447,14 +449,16 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 			closeReason = fmt.Sprintf("Fixed in %s", prRef)
 		}
 		if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
-			skipReason := "close_failed"
+			skipReason := tasks.SkipCloseFailed
+			detail := ""
 			if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
-				skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+				skipReason = tasks.SkipDependencyBlocked
+				detail = strings.Join(blockers, ",")
 			} else {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
 			}
-			l.skipTask(p.taskID, skipReason)
+			l.skipTask(p.taskID, skipReason, detail)
 		} else {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 			l.persistCompleted(p.taskID, merged)
@@ -696,7 +700,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		}
 		if count := l.incrementCompactionParkCount(taskID); count >= l.maxCompactionParks() {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.WorkingModel}, "Agent exceeded the context limit (200K) %d time(s) — task too big. Skipping task.", count)
-			l.skipTask(taskID, "compaction_detected")
+			l.skipTask(taskID, tasks.SkipCompaction, "")
 			return actionSkip
 		}
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Agent exceeded the context limit (200K) — retrying (below park cap)")
@@ -735,13 +739,13 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		if !hasNewCommits {
 			if count := l.incrementFailedStartCount(taskID); count >= l.maxFailedStarts() {
 				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Failed start %d times with no progress for %s — skipping task", count, taskID)
-				l.skipTask(taskID, "failed_start_limit_reached")
+				l.skipTask(taskID, tasks.SkipFailedStart, "")
 				return actionRetry
 			}
 		}
 		if l.taskIdleTimeouts >= l.maxIdleTimeoutFailures() {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Idle timeout %d times for %s — skipping task", l.taskIdleTimeouts, taskID)
-			l.skipTask(taskID, "idle_timeout_max_failures")
+			l.skipTask(taskID, tasks.SkipIdleTimeout, "")
 			return actionRetry
 		}
 		l.releaseClaimForRetry(taskID)

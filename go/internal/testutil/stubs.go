@@ -21,6 +21,7 @@ type StubBackend struct {
 	FullContext        string
 	SkippedTask        string
 	SkipReason         string
+	SkipDetail         string
 	ReopenedTask       string
 	ResumeIDSet        string           // last value passed to SetResumeTaskID
 	HasRemainingResult *bool            // when non-nil, HasRemaining returns this value instead of Remaining > 0
@@ -47,9 +48,10 @@ func (s *StubBackend) GetNextTaskInfo() (tasks.TaskInfo, error) {
 func (s *StubBackend) HasTasks() (bool, error)        { return s.Total > 0, nil }
 func (s *StubBackend) CloseTask(string, string) error { return nil }
 func (s *StubBackend) ClaimTask(string) error         { return nil }
-func (s *StubBackend) SkipTask(id, reason string) error {
+func (s *StubBackend) SkipTask(id string, reason tasks.SkipReason, detail string) error {
 	s.SkippedTask = id
-	s.SkipReason = reason
+	s.SkipReason = string(reason)
+	s.SkipDetail = detail
 	return nil
 }
 func (s *StubBackend) SetResumeTaskID(id string) {
@@ -189,6 +191,7 @@ type TrackingBackend struct {
 	CloseMu      sync.Mutex
 	SkippedIDs   []string
 	SkipReasons  []string
+	SkipDetails  []string
 	SkipMu       sync.Mutex
 }
 
@@ -201,10 +204,11 @@ func (t *TrackingBackend) CloseTask(id string, reason string) error {
 	return err
 }
 
-func (t *TrackingBackend) SkipTask(id string, reason string) error {
+func (t *TrackingBackend) SkipTask(id string, reason tasks.SkipReason, detail string) error {
 	t.SkipMu.Lock()
 	t.SkippedIDs = append(t.SkippedIDs, id)
-	t.SkipReasons = append(t.SkipReasons, reason)
+	t.SkipReasons = append(t.SkipReasons, string(reason))
+	t.SkipDetails = append(t.SkipDetails, detail)
 	t.SkipMu.Unlock()
 	return nil
 }

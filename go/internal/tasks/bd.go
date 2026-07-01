@@ -645,18 +645,19 @@ func (b *BD) ReopenTask(id string) error {
 	return err
 }
 
-func (b *BD) SkipTask(id string, reason string) error {
+func (b *BD) SkipTask(id string, reason SkipReason, detail string) error {
 	if id == "" {
 		return nil
 	}
 	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open", "--assignee="+config.TaskAssignee, "--add-label=skipped"); err != nil {
 		return err
 	}
-	if reason != "" {
-		_, err := b.runner()(b.ctx(), b.ProjectDir, "comments", "add", id, "skipped: "+reason)
-		return err
+	comment := string(reason)
+	if detail != "" {
+		comment += ": " + detail
 	}
-	return nil
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "comments", "add", id, "skipped: "+comment)
+	return err
 }
 
 func (b *BD) ExecutionInstructions() (string, error) {
