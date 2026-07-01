@@ -234,7 +234,12 @@ func (r *repo) SetupWorktree(ctx context.Context) error {
 	}
 
 	defaultBranch := r.baseBranch
-	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", defaultBranch)
+	// --prune with no explicit refspec argument uses the remote's configured
+	// fetch refspec, so this also removes remote-tracking refs (e.g.
+	// origin/ralph/*) for branches GitHub already deleted after merge.
+	// Passing a branch argument here would scope --prune to that one ref and
+	// leave stale refs for every other branch untouched.
+	r.gitCmdCtx(ctx, r.projectDir, "fetch", "--prune", "origin")
 
 	if !r.refExists(r.projectDir, "origin/"+defaultBranch) &&
 		r.refExists(r.projectDir, "HEAD") &&
@@ -368,7 +373,7 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 	candidateDir := filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-%02d", today, runSeq))
 
 	defaultBranch := r.baseBranch
-	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", defaultBranch)
+	r.gitCmdCtx(ctx, r.projectDir, "fetch", "--prune", "origin")
 
 	if !r.refExists(r.projectDir, "origin/"+defaultBranch) &&
 		r.refExists(r.projectDir, "HEAD") &&

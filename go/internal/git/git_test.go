@@ -445,6 +445,65 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	}
 }
 
+// GitHub deletes a merged PR's head branch on the remote (delete_branch_on_merge),
+// but plain `git fetch origin <base>` never prunes the now-dangling local
+// origin/<branch> tracking ref for it. SetupWorktree's routine fetch must be
+// prune-aware so that ref disappears on the next fetch, while a genuinely
+// live remote branch's tracking ref survives.
+//
+// The branch deletion is done directly on the bare "remote" repo (not via a
+// push --delete from project) because deleting through the same clone that
+// holds the tracking ref updates that ref as a side effect of the push
+// itself — that wouldn't reproduce the real staleness GitHub's independent
+// deletion leaves behind.
+func TestSetupWorktree_PrunesStaleRemoteTrackingRefs(t *testing.T) {
+	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "bare.git")
+	run(t, "git", "init", "--bare", "-b", "main", bare)
+
+	project := filepath.Join(tmp, "project")
+	run(t, "git", "clone", bare, project)
+	run(t, "git", "-C", project, "config", "user.name", "test")
+	run(t, "git", "-C", project, "config", "user.email", "test@test")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
+	run(t, "git", "-C", project, "push", "-u", "origin", "main")
+	run(t, "git", "-C", project, "remote", "set-head", "origin", "main")
+
+	run(t, "git", "-C", project, "checkout", "-b", "ralph/merged-and-deleted")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "merged work")
+	run(t, "git", "-C", project, "push", "-u", "origin", "ralph/merged-and-deleted")
+	run(t, "git", "-C", project, "checkout", "-b", "ralph/still-live")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "live work")
+	run(t, "git", "-C", project, "push", "-u", "origin", "ralph/still-live")
+	run(t, "git", "-C", project, "checkout", "main")
+
+	if !refExistsForTest(t, project, "refs/remotes/origin/ralph/merged-and-deleted") {
+		t.Fatal("setup: origin/ralph/merged-and-deleted tracking ref should exist before delete")
+	}
+
+	// GitHub auto-deletes the merged branch on the remote; the live one stays.
+	run(t, "git", "-C", bare, "branch", "-D", "ralph/merged-and-deleted")
+
+	ralphDir := filepath.Join(project, ".ralph")
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	if refExistsForTest(t, project, "refs/remotes/origin/ralph/merged-and-deleted") {
+		t.Error("origin/ralph/merged-and-deleted tracking ref should be pruned after SetupWorktree's fetch, but still exists")
+	}
+	if !refExistsForTest(t, project, "refs/remotes/origin/ralph/still-live") {
+		t.Error("origin/ralph/still-live tracking ref should survive — it is still live on the remote")
+	}
+}
+
+func refExistsForTest(t *testing.T, dir, ref string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--verify", ref)
+	return cmd.Run() == nil
+}
+
 // SetupWorktree in a non-git directory should return an error
 func TestSetupWorktree_NonGitDirErrors(t *testing.T) {
 	tmp := t.TempDir()
