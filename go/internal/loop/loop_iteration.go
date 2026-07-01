@@ -698,9 +698,15 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 				return actionCompactionShip
 			}
 		}
+		if l.appWideRecurrence(tasks.SkipCompaction) {
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.WorkingModel}, "Agent exceeded the context limit (200K) again — compaction already caused a skip this streak, halting instead of parking another task.")
+			l.haltAppWide(taskID, tasks.SkipCompaction, "")
+			return actionDone
+		}
 		if count := l.incrementCompactionParkCount(taskID); count >= l.maxCompactionParks() {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: l.cfg.WorkingModel}, "Agent exceeded the context limit (200K) %d time(s) — task too big. Skipping task.", count)
 			l.skipTask(taskID, tasks.SkipCompaction, "")
+			l.recordSkipStreak(tasks.SkipCompaction)
 			return actionSkip
 		}
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Agent exceeded the context limit (200K) — retrying (below park cap)")
@@ -737,15 +743,27 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		// The in-session taskIdleTimeouts guard remains as an additional ceiling.
 		hasNewCommits := l.git.LogOneline(headBefore, l.git.HeadRev()) != ""
 		if !hasNewCommits {
+			if l.appWideRecurrence(tasks.SkipFailedStart) {
+				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Failed start with no progress for %s again — this reason already caused a skip this streak, halting instead of retrying.", taskID)
+				l.haltAppWide(taskID, tasks.SkipFailedStart, "")
+				return actionDone
+			}
 			if count := l.incrementFailedStartCount(taskID); count >= l.maxFailedStarts() {
 				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Failed start %d times with no progress for %s — skipping task", count, taskID)
 				l.skipTask(taskID, tasks.SkipFailedStart, "")
+				l.recordSkipStreak(tasks.SkipFailedStart)
 				return actionRetry
 			}
 		}
 		if l.taskIdleTimeouts >= l.maxIdleTimeoutFailures() {
+			if l.appWideRecurrence(tasks.SkipIdleTimeout) {
+				l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Idle timeout for %s again — this reason already caused a skip this streak, halting instead of retrying.", taskID)
+				l.haltAppWide(taskID, tasks.SkipIdleTimeout, "")
+				return actionDone
+			}
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Idle timeout %d times for %s — skipping task", l.taskIdleTimeouts, taskID)
 			l.skipTask(taskID, tasks.SkipIdleTimeout, "")
+			l.recordSkipStreak(tasks.SkipIdleTimeout)
 			return actionRetry
 		}
 		l.releaseClaimForRetry(taskID)

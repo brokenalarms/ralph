@@ -105,12 +105,15 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 		}
 	}
 
-	// --- Stagnation: 3 consecutive no-change iterations → halt ---
+	// --- Stagnation: 3 consecutive no-change iterations → skip this task ---
+	// A single task idling does not mean the whole loop is stuck — other
+	// ready tasks may make progress fine, so this only skips the task
+	// (routing through Loop's skip path) rather than halting everything.
 	hasChanges := state.HasDiff || state.NewCommits
 	if !hasChanges && !state.HasSignal && !state.NewCommits {
 		a.stagnantCount++
 		if a.stagnantCount >= 3 {
-			return Result{Action: Halt, Reason: "stagnation"}
+			return Result{Action: Skip, Reason: "stagnation"}
 		}
 		return Result{Action: Continue}
 	}

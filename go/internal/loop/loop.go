@@ -268,6 +268,7 @@ type Loop struct {
 	sessionSkippedIDs       map[string]bool // in-memory skip set for this session; no state.json persistence
 	activeReviewers         []git.Reviewer
 	reviewersDetected       bool
+	skipStreakReason        tasks.SkipReason // reason of the most recent skip in the current unbroken run of consecutive skips; reset once a task succeeds
 }
 
 // New creates an execution loop from the given configuration and module
@@ -387,6 +388,40 @@ func (l *Loop) skipTask(id string, reason tasks.SkipReason, detail string) {
 		l.sessionSkippedIDs = make(map[string]bool)
 	}
 	l.sessionSkippedIDs[id] = true
+}
+
+// appWideRecurrence reports whether reason already caused a skip earlier in
+// the current unbroken run of consecutive skips. A reason that has already
+// exhausted one task's retries is conclusive — a second task hitting the
+// same failure category should halt the loop immediately rather than burn
+// its own in-task retry bracket. Empty reasons never recur.
+func (l *Loop) appWideRecurrence(reason tasks.SkipReason) bool {
+	return reason != "" && reason == l.skipStreakReason
+}
+
+// recordSkipStreak marks reason as having caused a skip in the current
+// streak, so a later task hitting the same reason halts on first failure.
+func (l *Loop) recordSkipStreak(reason tasks.SkipReason) {
+	if reason != "" {
+		l.skipStreakReason = reason
+	}
+}
+
+// resetSkipStreak clears the streak reason once a task succeeds, breaking
+// the chain of consecutive skips.
+func (l *Loop) resetSkipStreak() {
+	l.skipStreakReason = ""
+}
+
+// haltAppWide skips the task and halts the whole loop because reason
+// already caused a skip earlier in this streak — the recurrence across
+// tasks is what makes it app-wide rather than a single task's problem.
+func (l *Loop) haltAppWide(taskID string, reason tasks.SkipReason, detail string) {
+	l.skipTask(taskID, reason, detail)
+	haltReason := "app_wide:" + string(reason)
+	l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", haltReason)
+	l.state.Write("status", "halted_"+haltReason)
+	l.git.TagTaskEnd(taskID)
 }
 
 // ensureActiveReviewers populates l.activeReviewers on first call. Subsequent
@@ -794,7 +829,10 @@ iterLoop:
 					// iteration starts from a clean worktree.
 					l.teardownWorktree()
 					worktreeNeedsSetup = true
-					// Task skipped by analyzer. Track consecutive skips for cascade detection.
+					// Task skipped. Same-reason recurrences already halted at the
+					// skip site (haltAppWide) before reaching here — this numeric
+					// cascade is the fallback for runs of skips with differing
+					// reasons, which the reason-aware check does not catch.
 					consecutiveSkipCount++
 					if consecutiveSkipCount >= l.cascadeSkipLimit() {
 						haltReason := fmt.Sprintf("cascade_skipped:%d", consecutiveSkipCount)
@@ -845,6 +883,9 @@ iterLoop:
 			}
 			if out.merged {
 				lastTaskMerged = true
+				// A task actually shipped — real progress breaks the skip streak,
+				// since whatever reason caused prior skips is not app-wide.
+				l.resetSkipStreak()
 			}
 			if out.action == signalRetry {
 				continue

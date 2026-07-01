@@ -52,6 +52,22 @@ func appendErrors(t *testing.T, path, msg string, n int) {
 	}
 }
 
+// appendBenignLines appends n copies of a plain assistant-text log line to
+// path — matches neither the stuck-phrase nor error-fingerprint detectors,
+// so it only feeds the analyzer's stagnation counter.
+func appendBenignLines(t *testing.T, path string, n int) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("appendBenignLines: %v", err)
+	}
+	defer f.Close()
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"still working on it"}]}}`
+	for i := 0; i < n; i++ {
+		f.WriteString(line + "\n")
+	}
+}
+
 // Proves: the first time a task triggers repeated_error, the loop skips the
 // task and continues — it does NOT immediately halt (AC6).
 func TestLoop_RepeatedError_FirstIterationSkipsTask(t *testing.T) {
@@ -123,9 +139,11 @@ func TestLoop_RepeatedError_FirstIterationSkipsTask(t *testing.T) {
 	}
 }
 
-// Proves: three consecutive task skips (different tasks, each triggering
-// repeated_error) halt the loop with cascade_skipped:3 (AC7).
-func TestLoop_ConsecutiveSkips_CascadeHalts(t *testing.T) {
+// Proves: when the same skip reason (repeated_error) recurs on a second,
+// different task, the loop halts immediately with app_wide:<reason> instead
+// of letting the streak continue to the numeric cascade limit — the second
+// same-reason failure is conclusive (ralph-qlmy AC2, AC4 non-retryable case).
+func TestLoop_SameReasonSkipRecurs_HaltsAppWide(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -136,13 +154,12 @@ func TestLoop_ConsecutiveSkips_CascadeHalts(t *testing.T) {
 	backend := &seqTaskBackend{
 		TrackingBackend: &testutil.TrackingBackend{
 			MutableBackend: testutil.MutableBackend{
-				StubBackend: testutil.StubBackend{Total: 3},
+				StubBackend: testutil.StubBackend{Total: 2},
 			},
 		},
 		queue: []tasks.TaskInfo{
 			{ID: "ralph-a1", Title: "Task one"},
 			{ID: "ralph-a2", Title: "Task two"},
-			{ID: "ralph-a3", Title: "Task three"},
 		},
 	}
 
@@ -150,7 +167,7 @@ func TestLoop_ConsecutiveSkips_CascadeHalts(t *testing.T) {
 		onRunCfg: func(cfg claude.RunConfig) {
 			// Each task appends 4 identical error lines. readLogFrom skips the first
 			// line when logStart=0 (off-by-one), so 3 are seen for task 1 — enough
-			// to reach the threshold. Tasks 2 and 3 have logStart>0 and see all 4.
+			// to reach the threshold. Task 2 has logStart>0 and sees all 4.
 			appendErrors(t, cfg.RawLog, "Error: cannot find module 'foo'", 4)
 		},
 	}
@@ -179,19 +196,19 @@ func TestLoop_ConsecutiveSkips_CascadeHalts(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
+	// Non-retryable-style run-count guarantee: repeated_error skips on the
+	// very first iteration of each task, so this is 1 run on task 1 + 1 run
+	// on task 2 (2 total) before halting — no third task is ever selected.
 	status, _ := st.Read("status")
-	if !strings.HasPrefix(status, "halted_cascade_skipped:") {
-		t.Errorf("expected status halted_cascade_skipped:3, got %q", status)
-	}
-	if status != "halted_cascade_skipped:3" {
-		t.Errorf("expected exactly 3 consecutive skips, got %q", status)
+	if status != "halted_app_wide:analyzer" {
+		t.Errorf("expected status halted_app_wide:analyzer, got %q", status)
 	}
 
 	backend.SkipMu.Lock()
 	skippedCount := len(backend.SkippedIDs)
 	backend.SkipMu.Unlock()
-	if skippedCount != 3 {
-		t.Errorf("expected 3 skipped tasks, got %d", skippedCount)
+	if skippedCount != 2 {
+		t.Errorf("expected exactly 2 skipped tasks (halt on 2nd, no 3rd run), got %d", skippedCount)
 	}
 }
 
@@ -258,23 +275,24 @@ func TestLoop_RepeatedError_TwoConsecutiveIterationsHalt(t *testing.T) {
 	}
 }
 
-// Proves: CascadeSkipLimit=2 in config halts the loop after 2 consecutive
-// distinct-task skips instead of the default 3.
+// Proves: CascadeSkipLimit=1 in config halts the loop after a single
+// distinct-task skip instead of waiting for the default limit of 2 — the
+// numeric fallback (which fires only when the reason-aware app-wide check
+// does not match) still honors the configured value.
 func TestCascadeSkipLimit_ConfigOverridesDefault(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &seqTaskBackend{
-		TrackingBackend: &testutil.TrackingBackend{
-			MutableBackend: testutil.MutableBackend{
-				StubBackend: testutil.StubBackend{Total: 2},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:  "Fix login",
+				NextID:    "ralph-c1",
 			},
-		},
-		queue: []tasks.TaskInfo{
-			{ID: "ralph-c1", Title: "Task one"},
-			{ID: "ralph-c2", Title: "Task two"},
 		},
 	}
 
@@ -294,7 +312,7 @@ func TestCascadeSkipLimit_ConfigOverridesDefault(t *testing.T) {
 		},
 		MaxIterations:    10,
 		CallsPerHour:     80,
-		CascadeSkipLimit: 2,
+		CascadeSkipLimit: 1,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -310,8 +328,85 @@ func TestCascadeSkipLimit_ConfigOverridesDefault(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	status, _ := st.Read("status")
-	if status != "halted_cascade_skipped:2" {
-		t.Errorf("expected halted_cascade_skipped:2 with CascadeSkipLimit=2, got %q", status)
+	if status != "halted_cascade_skipped:1" {
+		t.Errorf("expected halted_cascade_skipped:1 with CascadeSkipLimit=1, got %q", status)
+	}
+}
+
+// Proves: a single task's stagnation (3 consecutive no-change iterations)
+// skips that task and the loop proceeds to the next ready task rather than
+// halting the whole loop (ralph-qlmy AC1) — proven here by observing that a
+// second task is actually attempted afterward. When the SAME reason
+// (stagnation) recurs on that second task, the loop halts app-wide instead
+// of letting it burn its own 3-iteration stagnation bracket a second time
+// (AC2/AC7).
+func TestLoop_StagnationSkipsTask_ThenSameReasonRecurrenceHalts(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &seqTaskBackend{
+		TrackingBackend: &testutil.TrackingBackend{
+			MutableBackend: testutil.MutableBackend{
+				StubBackend: testutil.StubBackend{Total: 2},
+			},
+		},
+		queue: []tasks.TaskInfo{
+			{ID: "ralph-s1", Title: "Task one"},
+			{ID: "ralph-s2", Title: "Task two"},
+		},
+	}
+
+	runner := &stubRunner{
+		onRunCfg: func(cfg claude.RunConfig) {
+			appendBenignLines(t, cfg.RawLog, 2)
+		},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+	})
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	backend.SkipMu.Lock()
+	skippedIDs := append([]string(nil), backend.SkippedIDs...)
+	skipReasons := append([]string(nil), backend.SkipReasons...)
+	backend.SkipMu.Unlock()
+
+	if len(skippedIDs) < 1 || skippedIDs[0] != "ralph-s1" {
+		t.Fatalf("expected ralph-s1 to be skipped first, got %v", skippedIDs)
+	}
+	if skipReasons[0] != string(tasks.SkipStagnation) {
+		t.Errorf("expected skip reason %q for the first task, got %q", tasks.SkipStagnation, skipReasons[0])
+	}
+
+	if len(skippedIDs) != 2 || skippedIDs[1] != "ralph-s2" {
+		t.Fatalf("expected ralph-s2 to also be attempted and skipped (proving the loop proceeded past ralph-s1's stagnation instead of halting), got %v", skippedIDs)
+	}
+
+	status, _ := st.Read("status")
+	if status != "halted_app_wide:stagnation" {
+		t.Errorf("expected status halted_app_wide:stagnation, got %q", status)
 	}
 }
 

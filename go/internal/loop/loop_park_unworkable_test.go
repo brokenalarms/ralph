@@ -10,6 +10,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -197,6 +198,128 @@ func TestMaxCompactionParks_ConfigOverridesDefault(t *testing.T) {
 	}
 	if action != actionRetry {
 		t.Fatalf("expected actionRetry on first compaction below cap, got %d", action)
+	}
+}
+
+// Proves the ralph-qlmy non-retryable run-count guarantee: when compaction
+// (park cap=1) already caused a skip on one task, a second task hitting
+// compaction halts the whole loop app-wide on its very first run — 1 run on
+// task A + 1 run on task B, 2 total, never a third.
+func TestHandleRunResult_CompactionSameReason_SecondTaskHaltsOnFirstRun(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+
+	backend := &testutil.MutableBackend{StubBackend: testutil.StubBackend{}}
+	l.taskBackend = backend
+
+	actionA := handleRunResultCall(l, context.Background(), claude.Result{Compacted: true}, nil,
+		"task-a", "Task A", "abc123", 1)
+	if actionA != actionSkip {
+		t.Fatalf("task A: expected actionSkip, got %d", actionA)
+	}
+	if backend.StubBackend.SkippedTask != "task-a" {
+		t.Fatalf("task A: expected task-a parked, got %q", backend.StubBackend.SkippedTask)
+	}
+
+	actionB := handleRunResultCall(l, context.Background(), claude.Result{Compacted: true}, nil,
+		"task-b", "Task B", "abc123", 1)
+	if actionB != actionDone {
+		t.Fatalf("task B: expected actionDone (app-wide halt on first run), got %d", actionB)
+	}
+	if backend.StubBackend.SkippedTask != "task-b" {
+		t.Errorf("task B: expected task-b also parked before halting, got %q", backend.StubBackend.SkippedTask)
+	}
+
+	status, _ := l.state.Read("status")
+	if status != "halted_app_wide:"+string(tasks.SkipCompaction) {
+		t.Errorf("expected status halted_app_wide:%s, got %q", tasks.SkipCompaction, status)
+	}
+}
+
+// Proves the ralph-qlmy retryable run-count guarantee: when failed_start
+// (in-task cap=2) already caused a skip on one task (after burning its full
+// 2-run retry bracket), a second task hitting the same reason halts the
+// whole loop app-wide on its very first run instead of also burning its own
+// 2-run bracket — 2 runs on task A + 1 run on task B, 3 total, never a
+// fourth (AC2: "without that later task re-running its in-task retry
+// bracket").
+func TestHandleRunResult_FailedStartSameReason_SecondTaskHaltsOnFirstRun(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+
+	backend := &testutil.MutableBackend{StubBackend: testutil.StubBackend{}}
+	l.taskBackend = backend
+
+	result := claude.Result{IdleTimeout: true}
+
+	// Task A: 1st run below cap → retry, no skip yet.
+	actionA1 := handleRunResultCall(l, context.Background(), result, nil,
+		"task-a", "Task A (1st attempt)", "abc123", 1)
+	if actionA1 != actionRetry {
+		t.Fatalf("task A run 1: expected actionRetry, got %d", actionA1)
+	}
+	if backend.StubBackend.SkippedTask != "" {
+		t.Fatalf("task A run 1: expected no skip yet, got %q", backend.StubBackend.SkippedTask)
+	}
+
+	// Task A: 2nd run reaches the cap → skip, recording the streak reason.
+	actionA2 := handleRunResultCall(l, context.Background(), result, nil,
+		"task-a", "Task A (2nd attempt)", "abc123", 2)
+	if actionA2 != actionRetry {
+		t.Fatalf("task A run 2: expected actionRetry (skip-and-move-on path), got %d", actionA2)
+	}
+	if backend.StubBackend.SkippedTask != "task-a" {
+		t.Fatalf("task A run 2: expected task-a parked, got %q", backend.StubBackend.SkippedTask)
+	}
+
+	// Task B: 1st run already matches the streak reason — halt immediately,
+	// never reaching a 2nd run for task B.
+	actionB1 := handleRunResultCall(l, context.Background(), result, nil,
+		"task-b", "Task B (1st attempt)", "abc123", 1)
+	if actionB1 != actionDone {
+		t.Fatalf("task B run 1: expected actionDone (app-wide halt), got %d", actionB1)
+	}
+	if backend.StubBackend.SkippedTask != "task-b" {
+		t.Errorf("task B run 1: expected task-b also parked before halting, got %q", backend.StubBackend.SkippedTask)
+	}
+
+	status, _ := l.state.Read("status")
+	if status != "halted_app_wide:"+string(tasks.SkipFailedStart) {
+		t.Errorf("expected status halted_app_wide:%s, got %q", tasks.SkipFailedStart, status)
+	}
+}
+
+// Proves AC3: a different skip reason does not trigger the same-reason
+// app-wide halt. Task A skips on compaction (park cap=1); task B, hitting an
+// unrelated idle timeout with no commits, independently runs its own
+// failed_start retry bracket (cap=2) to completion without being
+// short-circuited, since failed_start_limit_reached != compaction_detected.
+func TestHandleRunResult_MixedReasonSkips_NoAppWideHalt(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+
+	backend := &testutil.MutableBackend{StubBackend: testutil.StubBackend{}}
+	l.taskBackend = backend
+
+	actionA := handleRunResultCall(l, context.Background(), claude.Result{Compacted: true}, nil,
+		"task-a", "Task A", "abc123", 1)
+	if actionA != actionSkip {
+		t.Fatalf("task A: expected actionSkip, got %d", actionA)
+	}
+
+	result := claude.Result{IdleTimeout: true}
+	for i := 1; i <= 2; i++ {
+		action := handleRunResultCall(l, context.Background(), result, nil,
+			"task-b", "Task B", "abc123", i)
+		if action == actionDone {
+			t.Fatalf("task B run %d: unexpected app-wide halt for a differing reason", i)
+		}
+	}
+
+	if backend.StubBackend.SkippedTask != "task-b" {
+		t.Errorf("expected task-b parked after its own 2-failure failed_start bracket, got %q", backend.StubBackend.SkippedTask)
+	}
+
+	status, _ := l.state.Read("status")
+	if strings.Contains(status, "app_wide") {
+		t.Errorf("expected no app-wide halt for mixed reasons, got status %q", status)
 	}
 }
 
