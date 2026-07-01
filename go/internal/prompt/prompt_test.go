@@ -1434,3 +1434,83 @@ func TestBuildTaskManagerPrompt_NoManualVerifyGating(t *testing.T) {
 		}
 	}
 }
+
+// Proves: task-manager.md's Release discipline section forbids offering the
+// user a "hold vs release" choice when a bead is adjacent to other in-flight
+// work — the manager must decide itself via dependency edge, lower priority,
+// or natural priority, never punt the choice to the user.
+func TestBuildTaskManagerPrompt_NeverOfferHoldVsRelease(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"hold vs release", "must name the forbidden question 'hold vs release'"},
+		{"Hard dependency", "must direct hard dependencies to bd dep add + immediate release"},
+		{"bd dep add", "must specify the dependency edge command for hard dependencies"},
+		{"LOWER PRIORITY", "must direct independent-but-preferably-later beads to release at a lower priority"},
+		{"natural priority", "must direct independent-no-preference beads to release at natural priority"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	releaseIdx := strings.Index(result, "## Release discipline")
+	nextSectionIdx := strings.Index(result, "## Constraints")
+	holdIdx := strings.Index(result, "hold vs release")
+	if releaseIdx < 0 {
+		t.Fatal("Release discipline section not found")
+	}
+	if holdIdx < releaseIdx || (nextSectionIdx > 0 && holdIdx > nextSectionIdx) {
+		t.Error("'hold vs release' prohibition must live inside the Release discipline section")
+	}
+}
+
+// Proves: task-manager.md's Priority reference section is expanded with a
+// rubric explaining WHEN to assign each P0-P4 level, so priority becomes a
+// consistent ordering lever (e.g. the "do this after" lever for independent
+// but preferably-later beads) rather than being set ad hoc.
+func TestBuildTaskManagerPrompt_PriorityAssignmentRubric(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Assigning priority", "must have an assignment rubric heading"},
+		{"loop-blocking", "P0 must be described as loop-blocking / critical"},
+		{"do this after", "P3 must be described as the 'do this after' lever"},
+		{"DEFAULT", "P2 must be marked as the default level"},
+		{"someday/maybe", "P4 must be described as someday/maybe backlog"},
+		{"soft near-term nudge", "rubric must state priority is a soft near-term ordering nudge"},
+		{"dependency edge", "rubric must state a hard 'must run after' is a dependency edge, not a low priority"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	priorityIdx := strings.Index(result, "## Priority reference")
+	nextSectionIdx := strings.Index(result, "## Screenshots")
+	rubricIdx := strings.Index(result, "Assigning priority")
+	if priorityIdx < 0 {
+		t.Fatal("Priority reference section not found")
+	}
+	if rubricIdx < priorityIdx || (nextSectionIdx > 0 && rubricIdx > nextSectionIdx) {
+		t.Error("priority assignment rubric must live inside the Priority reference section")
+	}
+}
