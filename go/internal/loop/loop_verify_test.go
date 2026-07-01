@@ -542,7 +542,6 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 }
 
 // Proves: every runAgent call uses cfg.Model — no model escalation exists.
-// AgentEscalationModel config is accepted but has no effect on model selection.
 func TestAgentModelEscalation(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -552,13 +551,11 @@ func TestAgentModelEscalation(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
 	const baseModel = verify.ModelSonnet
-	const escalationModel = verify.ModelOpus
 	cfg := Config{
-		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations:        1,
-		CallsPerHour:         80,
-		Model:                baseModel,
-		AgentEscalationModel: escalationModel,
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		Model:         baseModel,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -593,52 +590,6 @@ func TestAgentModelEscalation(t *testing.T) {
 	}
 	if capturedModels[1] != baseModel {
 		t.Errorf("attempt 2: expected %s (sonnet, not escalation), got %s", baseModel, capturedModels[1])
-	}
-}
-
-// Proves: ModelCap is applied as a ceiling over both agent model and escalation model.
-func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
-	cfg := Config{
-		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations:        1,
-		CallsPerHour:         80,
-		Model:                verify.ModelSonnet,
-		AgentEscalationModel: verify.ModelOpus,
-		ModelCap:             verify.ModelHaiku, // cap everything to haiku
-	}
-	logger := logging.New(nil)
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"},
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-	})
-
-	var capturedModels []string
-	l.runner = &stubRunner{
-		onRunCfg: func(cfg claude.RunConfig) {
-			capturedModels = append(capturedModels, cfg.Model)
-		},
-	}
-
-	// Seed a prior attempt — ModelCap must still be applied as ceiling over cfg.Model.
-	l.currentTaskID = "ralph-cap"
-	l.taskAttempts = append(l.taskAttempts, AttemptEvent{Summary: "first try failed", Analysis: "continue"})
-
-	l.runAgent(context.Background(), taskContext{id: "ralph-cap", title: "Fix login"}, 1)
-
-	if len(capturedModels) != 1 {
-		t.Fatalf("expected 1 runner call, got %d", len(capturedModels))
-	}
-	if capturedModels[0] != verify.ModelHaiku {
-		t.Errorf("ModelCap not applied: expected %s (haiku), got %s", verify.ModelHaiku, capturedModels[0])
 	}
 }
 
@@ -767,46 +718,6 @@ func TestFixModelEscalation(t *testing.T) {
 	}
 	if capturedModels[1] != escalationModel {
 		t.Errorf("attempt 2: expected %s, got %s", escalationModel, capturedModels[1])
-	}
-}
-
-// Proves: ModelCap clamps the fix-agent escalation model. With ModelCap=sonnet
-// and FixEscalationModel=opus, attempt 2 still uses sonnet.
-func TestFixModelEscalation_ModelCapApplied(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	var capturedModels []string
-	vrf := verifier.New(verifier.Config{
-		FixModel:           verify.ModelSonnet,
-		FixEscalationModel: verify.ModelOpus,
-		ModelCap:           verify.ModelSonnet,
-		RalphDir:           ralphDir,
-	}, logging.New(nil), func() verifier.Runner {
-		return &stubRunner{
-			result: claude.Result{SignalDetected: true},
-			onRunCfg: func(cfg claude.RunConfig) {
-				capturedModels = append(capturedModels, cfg.Model)
-			},
-		}
-	}, nil)
-
-	// Attempt 2 would normally escalate to opus, but ModelCap=sonnet clamps it.
-	vrf.SpawnFixAgent(verifier.FixAgentInput{
-		Ctx:         context.Background(),
-		Template:    "verify-tests.md",
-		Vars:        map[string]string{"{{TASK_TITLE}}": "t", "{{TASK_DESCRIPTION}}": "ac", "{{TEST_OUTPUT}}": "out"},
-		Attempt:     2,
-		WorkDir:     dir,
-		Description: "test failures",
-	})
-
-	if len(capturedModels) != 1 {
-		t.Fatalf("expected 1 runner call, got %d", len(capturedModels))
-	}
-	if capturedModels[0] != verify.ModelSonnet {
-		t.Errorf("ModelCap not applied: expected %s (sonnet), got %s", verify.ModelSonnet, capturedModels[0])
 	}
 }
 

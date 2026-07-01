@@ -46,7 +46,6 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
 		FixModel:              cfg.FixModel,
 		FixEscalationModel:    cfg.FixEscalationModel,
-		ModelCap:              cfg.ModelCap,
 		PromptsDir:            cfg.Dirs.PromptsDir,
 		RalphDir:              cfg.Dirs.RalphDir,
 		Timeouts:              cfg.Timeouts,

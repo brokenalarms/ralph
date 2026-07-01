@@ -16,7 +16,7 @@ var Version = "0.1.0-dev"
 // the latest released model in that family, so Ralph automatically picks up
 // new model versions without code changes. Use full version strings (e.g.
 // "claude-opus-4-6") only when reproducibility against a specific release
-// is required, via --model-ceiling, fix_escalation_model, etc.
+// is required, via fix_escalation_model, etc.
 const (
 	ModelHaiku  = "haiku"
 	ModelSonnet = "sonnet"
@@ -56,7 +56,6 @@ type Config struct {
 	Wait                       bool
 	Verbose                    bool
 	Model                      string
-	AgentEscalationModel       string // deprecated: no effect; cross-iteration escalation removed
 	VerifyModel                string
 	VerifyEscalationModel      string
 	FixModel                   string

@@ -155,8 +155,6 @@ type Config struct {
 	Wait                  bool
 	Verbose               bool
 	Model                 string
-	AgentEscalationModel  string // deprecated: no effect; cross-iteration escalation was removed in ralph-pg95
-	ModelCap              string // maximum model tier for all LLM calls; empty means no cap
 	Version               string
 	Verify                string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
@@ -464,7 +462,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 	}
 
 	taskStart := time.Now()
-	agentModel := verify.CapModel(l.cfg.ModelCap, l.cfg.Model)
+	agentModel := l.cfg.Model
 	l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
 	result, runErr := l.runner.Run(claude.RunConfig{
 		Ctx:          ctx,

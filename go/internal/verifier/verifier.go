@@ -57,7 +57,6 @@ type Config struct {
 	VerifyEscalationModel string
 	FixModel              string // model for fix agents on attempt 1; defaults to ModelSonnet
 	FixEscalationModel    string // model for fix agents on attempt 2+; defaults to ModelOpus
-	ModelCap              string // maximum model tier ceiling from --model flag; empty means no cap
 	PromptsDir            string
 	RalphDir              string
 	Timeouts              claude.Timeouts
@@ -261,9 +260,9 @@ func (v *Verifier) LLMVerify(opts LLMVerifyOpts) (verify.Result, string) {
 	return result, model
 }
 
-// verifyModel returns the model for the given 1-indexed attempt number,
-// capped by ModelCap when set. Attempt 1 uses VerifyModel (haiku);
-// subsequent attempts escalate to VerifyEscalationModel (sonnet).
+// verifyModel returns the model for the given 1-indexed attempt number.
+// Attempt 1 uses VerifyModel (haiku); subsequent attempts escalate to
+// VerifyEscalationModel (sonnet).
 func (v *Verifier) verifyModel(attempt int) string {
 	var model string
 	if attempt <= 1 {
@@ -277,13 +276,13 @@ func (v *Verifier) verifyModel(attempt int) string {
 			model = verify.ModelSonnet
 		}
 	}
-	return verify.CapModel(v.cfg.ModelCap, model)
+	return model
 }
 
-// FixModel returns the model for the given 1-indexed attempt number, capped
-// by ModelCap when set. Attempt 1 uses FixModel (sonnet); subsequent attempts
-// escalate to FixEscalationModel (opus). Exported so callers (e.g. loop
-// pipeline logging) can reference the same model the fix agent will use.
+// FixModel returns the model for the given 1-indexed attempt number.
+// Attempt 1 uses FixModel (sonnet); subsequent attempts escalate to
+// FixEscalationModel (opus). Exported so callers (e.g. loop pipeline
+// logging) can reference the same model the fix agent will use.
 func (v *Verifier) FixModel(attempt int) string {
 	var model string
 	if attempt <= 1 {
@@ -297,7 +296,7 @@ func (v *Verifier) FixModel(attempt int) string {
 			model = verify.ModelOpus
 		}
 	}
-	return verify.CapModel(v.cfg.ModelCap, model)
+	return model
 }
 
 // FixAgentResult is the result of a fix-agent spawn. It is an alias for
