@@ -38,18 +38,14 @@ func TestNoFuncFieldsInModuleStructs(t *testing.T) {
 	// callbackDebt: known legacy violations that are scheduled for removal
 	// in tracked remediation beads. MUST ONLY SHRINK — never add to this
 	// list; remove each entry as the corresponding remediation bead lands.
-	callbackDebt := map[string]bool{
-		// git/git_merge.go — MergeRetryOpts cross-boundary merge callbacks
-		// (ralph-ajkv). OnCIFailure/OnConflict spawn fix agents across the
-		// git/loop boundary; ResolveConflict is filled from repo.ResolveConflict
-		// by repo.MergeWithRetry so the package-level MergeWithRetry can compose
-		// without a repo receiver. AwaitCI/SleepFunc and the shipInfra cluster
-		// were migrated to constructor-DI/real methods/local interfaces by
-		// ralph-p6du.
-		"git.MergeRetryOpts.OnCIFailure":     true,
-		"git.MergeRetryOpts.OnConflict":      true,
-		"git.MergeRetryOpts.ResolveConflict": true,
-	}
+	//
+	// Empty: git_merge.go's MergeRetryOpts.{OnCIFailure,OnConflict} were
+	// migrated to data-in/data-out sequenced by Loop.doShip (ralph-ajkv);
+	// ResolveConflict became a constructor-DI'd conflictResolver interface.
+	// AwaitCI/SleepFunc and the shipInfra cluster were migrated by
+	// ralph-p6du. Every module-package func-field callback tracked by this
+	// test has been remediated.
+	callbackDebt := map[string]bool{}
 
 	// permanentExceptions: func-typed fields that are intentional
 	// architectural patterns, not scheduled for removal.

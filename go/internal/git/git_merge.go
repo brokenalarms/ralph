@@ -507,7 +507,6 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 
 	gh := r.github
 	nwo := NWOFromRemote(r.RemoteURL())
-	repoURL := r.RemoteURL()
 	prLink := logging.PRLinkOpt(nwo, result.PRNumber)
 
 	// Reviewer polling.
@@ -543,21 +542,17 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		return result, nil
 	}
 
-	// Attempt merge (no OnCIFailure/OnConflict — return errors for loop to handle).
+	// Attempt merge — no callbacks. Returns typed errors (CIFailureError,
+	// UnresolvedConflictError) with the data the loop needs; the loop decides
+	// whether to spawn a fix agent and calls Ship again to retry.
 	r.SetKnownPRNumber(result.PRNumber)
 	defer r.SetKnownPRNumber(0)
 
 	merged, mergeErr := r.MergeWithRetry(ctx, MergeRetryOpts{
-		Logger:    r.logger,
-		RemoteURL: repoURL,
+		Logger: r.logger,
 	})
 	if mergeErr != nil {
-		var ciExhausted *CIFixExhaustedError
 		var ciFailure *CIFailureError
-		if errors.As(mergeErr, &ciExhausted) {
-			result.CIFailure = true
-			return result, nil
-		}
 		if errors.As(mergeErr, &ciFailure) {
 			result.CIFailure = true
 			result.CIFailureDetail = ciFailure
@@ -998,71 +993,28 @@ func (r *repo) DeleteRemoteBranch() {
 }
 
 // MaxMergeAttempts is the total number of merge attempts including retries
-// after conflict resolution and CI fixes.
+// after conflict resolution.
 const MaxMergeAttempts = 4
 
-// MaxInfraRetries is the number of times to retry when CI fails due to
-// infrastructure issues (fix agent ran but made no commits).
-const MaxInfraRetries = 3
-
-// infraBackoff returns the delay before retrying after an infrastructure failure.
-// Uses exponential backoff: 30s, 60s, 120s.
-func infraBackoff(attempt int) time.Duration {
-	d := 30 * time.Second
-	for i := 0; i < attempt; i++ {
-		d *= 2
-	}
-	return d
+// conflictResolver rebases and force-pushes to resolve a PR merge conflict.
+// *repo satisfies it via ResolveConflict; the package-level MergeWithRetry
+// function accepts it so it composes without a repo receiver. This is the
+// constructor-DI seam in place of an injected ResolveConflict callback field.
+type conflictResolver interface {
+	ResolveConflict(ctx context.Context) error
 }
 
 // MergeRetryOpts configures the merge-with-retry pipeline.
 type MergeRetryOpts struct {
-	// OnCIFailure is called when CI checks fail on the PR. It should attempt
-	// to fix the failure (e.g. by spawning a fix agent) and return a result:
-	//   CIFixApplied   — fix was pushed, retry merge after waiting for CI
-	//   CIFixNoCommits — no commits (infrastructure failure), retry with backoff
-	//   CIFixFailed    — agent couldn't fix, stop retrying
-	OnCIFailure func(ciErr *CIFailureError) CIFixResult
-
-	// OnConflict is called when automatic rebase cannot resolve merge
-	// conflicts (UnresolvedConflictError). It should spawn a conflict
-	// resolution agent and return true if the conflict was resolved and
-	// force-pushed, ready for a merge retry.
-	OnConflict func(conflictErr *UnresolvedConflictError) bool
-
-	// Sleep is used for infrastructure backoff delays. Defaults to a real
-	// time.Sleep-backed sleeper when nil.
-	Sleep sleeper
-
-	// The following fields are filled by repo.MergeWithRetry before delegating
-	// to the package-level MergeWithRetry function. They enable callers to compose
-	// the retry pipeline without a repo receiver.
-
-	// ResolveConflict is called to rebase and force-push when a merge conflict
-	// is detected. Defaults to repo.ResolveConflict when nil.
-	ResolveConflict func(ctx context.Context) error
-
-	// CI polls CI status after a fix agent pushes. pushedAt filters out
-	// stale check results that started before the push.
-	CI ciPoller
+	// Resolver rebases and force-pushes to resolve a merge conflict. Filled
+	// by repo.MergeWithRetry with the repo itself (via its ResolveConflict
+	// method) when nil, so callers can compose the retry pipeline without a
+	// repo receiver.
+	Resolver conflictResolver
 
 	// Logger receives progress and warning messages. Logging is skipped when nil.
 	Logger Log
-
-	// RemoteURL is the repository remote URL, used for CI polling after a fix.
-	RemoteURL string
 }
-
-// sleeper abstracts backoff delays for infrastructure retries so tests can
-// observe delays without real waits. realSleeper is the production
-// implementation, backed by time.Sleep.
-type sleeper interface {
-	Sleep(time.Duration)
-}
-
-type realSleeper struct{}
-
-func (realSleeper) Sleep(d time.Duration) { time.Sleep(d) }
 
 // ResolveConflict rebases onto the default branch and force-pushes to
 // resolve PR merge conflicts before the next merge attempt. Returns an
@@ -1073,8 +1025,8 @@ func (r *repo) ResolveConflict(ctx context.Context) error {
 	r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Rebasing onto %s to resolve merge conflicts...", baseBranch)
 	if err := r.EnsureUpToDate(ctx); err != nil {
 		// A local rebase abort in the PR-merge pipeline IS an unresolvable
-		// merge conflict — surface it with PR semantics so MergeWithRetry
-		// routes it to OnConflict.
+		// merge conflict — surface it with PR semantics so the caller treats
+		// it as an UnresolvedConflictError rather than retrying.
 		var localConflict *LocalRebaseConflictError
 		if errors.As(err, &localConflict) {
 			return &UnresolvedConflictError{}
@@ -1102,23 +1054,17 @@ func (r *repo) ResolveConflict(ctx context.Context) error {
 	return r.Push(ctx)
 }
 
-// MergeWithRetry is the single merge pipeline: try mergeFunc, detect error
-// type, handle it, retry. Conflicts trigger ResolveConflict from opts; CI
-// failures delegate to the OnCIFailure callback. Code fix retries share the
-// main attempt budget. Infrastructure failures use a separate retry counter
-// with exponential backoff.
+// MergeWithRetry is the single merge pipeline: try mergeFunc, and when it
+// fails with a MergeConflictError, resolve via opts.Resolver and retry.
+// Any other error (including CIFailureError) is returned immediately with
+// the data the caller needs — the orchestrator (Loop.doShip) decides
+// whether to spawn a fix agent and calls Ship again, sequencing the retry
+// itself rather than this pipeline calling back into it.
 //
 // It is a package function — callers compose it without a repo receiver.
-// repo.MergeWithRetry delegates here after filling in infrastructure callbacks.
+// repo.MergeWithRetry delegates here after filling in infrastructure from
+// repo fields.
 func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, error), opts MergeRetryOpts) (bool, error) {
-	sleep := opts.Sleep
-	if sleep == nil {
-		sleep = realSleeper{}
-	}
-
-	infraRetries := 0
-	ciFixApplied := false
-
 	for attempt := 0; attempt < MaxMergeAttempts; attempt++ {
 		merged, err := mergeFunc(ctx)
 		if err == nil {
@@ -1131,92 +1077,34 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 
 		var conflictErr *MergeConflictError
 		if errors.As(err, &conflictErr) {
-			if opts.ResolveConflict == nil {
+			if opts.Resolver == nil {
 				return false, err
 			}
-			resolveErr := opts.ResolveConflict(ctx)
+			resolveErr := opts.Resolver.ResolveConflict(ctx)
 			if resolveErr == nil {
 				continue
 			}
 			var unresolved *UnresolvedConflictError
 			if errors.As(resolveErr, &unresolved) {
 				unresolved.PRNumber = conflictErr.PRNumber
-				if opts.OnConflict != nil && opts.OnConflict(unresolved) {
-					continue
-				}
 				return false, unresolved
 			}
 			return false, resolveErr
 		}
 
-		var ciErr *CIFailureError
-		if errors.As(err, &ciErr) {
-			if opts.OnCIFailure == nil {
-				return false, err
-			}
-			pushedAt := time.Now()
-			result := opts.OnCIFailure(ciErr)
-			switch result {
-			case CIFixApplied:
-				ciFixApplied = true
-				// Fix was applied and force-pushed. Wait for fresh CI
-				// checks that started after the push.
-				if opts.CI != nil {
-					repoURL := opts.RemoteURL
-					_, ciStatus, waitErr := opts.CI.AwaitCI(ctx, ciErr.PRNumber, repoURL, pushedAt)
-					if waitErr != nil && opts.Logger != nil {
-						opts.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling after fix: %v", waitErr)
-					}
-					if ciStatus == CIFailed && opts.Logger != nil {
-						opts.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI still failing after fix — will retry")
-					}
-				}
-				continue
-			case CIFixNoCommits:
-				// Infrastructure failure — fix agent found no code issue.
-				// Retry with backoff instead of giving up.
-				if infraRetries >= MaxInfraRetries {
-					if opts.Logger != nil {
-						opts.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "Infrastructure retries exhausted (%d) — giving up", MaxInfraRetries)
-					}
-					return false, err
-				}
-				delay := infraBackoff(infraRetries)
-				if opts.Logger != nil {
-					opts.Logger.Emit(logging.Opts{Domain: logging.CI}, "CI infrastructure failure — retrying in %s (%d/%d)", delay, infraRetries+1, MaxInfraRetries)
-				}
-				sleep.Sleep(delay)
-				infraRetries++
-				// Don't consume the code-fix attempt budget for infra retries.
-				attempt--
-				continue
-			default:
-				return false, err
-			}
-		}
-
 		return false, err
-	}
-	if ciFixApplied {
-		return false, &CIFixExhaustedError{Attempts: MaxMergeAttempts}
 	}
 	return false, fmt.Errorf("merge failed after %d attempts", MaxMergeAttempts)
 }
 
 // repo.MergeWithRetry delegates to the package-level MergeWithRetry function
-// after filling in infrastructure callbacks from repo fields.
+// after filling in infrastructure from repo fields.
 func (r *repo) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error) {
-	if opts.ResolveConflict == nil {
-		opts.ResolveConflict = r.ResolveConflict
-	}
-	if opts.CI == nil {
-		opts.CI = r
+	if opts.Resolver == nil {
+		opts.Resolver = r
 	}
 	if opts.Logger == nil {
 		opts.Logger = r.logger
-	}
-	if opts.RemoteURL == "" {
-		opts.RemoteURL = r.RemoteURL()
 	}
 	return MergeWithRetry(ctx, r.AutoMergeCurrentBranch, opts)
 }

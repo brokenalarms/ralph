@@ -779,9 +779,10 @@ func TestPostMergeUpdateMain_RebasesWorktree(t *testing.T) {
 	}
 }
 
-// MergeWithRetry returns CIFailureError to the caller when no OnCIFailure
-// callback is provided, so the caller can decide what to do with the failure.
-func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
+// MergeWithRetry returns CIFailureError to the caller immediately (no
+// internal retry), so the loop can decide whether to spawn a fix agent and
+// call Ship again.
+func TestMergeWithRetry_CIFailure_ReturnsErrorImmediately(t *testing.T) {
 	stubCISleep(t)
 
 	runner := newStubRunner()
@@ -815,7 +816,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 
 	_, err := repo.MergeWithRetry(context.Background(), MergeRetryOpts{})
 	if err == nil {
-		t.Fatal("expected CIFailureError when no callback provided")
+		t.Fatal("expected CIFailureError")
 	}
 
 	var ciErr *CIFailureError
@@ -887,56 +888,8 @@ func TestMergeWithRetry_PackageFunc_MergesSuccessfully(t *testing.T) {
 	}
 }
 
-// When CIFixApplied is returned repeatedly and MaxMergeAttempts is exhausted,
-// MergeWithRetry returns CIFixExhaustedError rather than a generic error.
-// This signals genuine test failures so the loop can leave the task open.
-func TestMergeWithRetry_CIFixApplied_Exhausted_ReturnsCIFixExhaustedError(t *testing.T) {
-	ciFixCalls := 0
-	ciErr := &CIFailureError{PRNumber: 42, Failures: []CICheckResult{{Name: "tests", State: "FAILURE", Bucket: "fail"}}}
-
-	mergeFunc := func(_ context.Context) (bool, error) {
-		return false, ciErr
-	}
-
-	// Base: without CIFixApplied, returns generic error
-	_, err := MergeWithRetry(context.Background(), mergeFunc, MergeRetryOpts{
-		Logger: discardLog{},
-		OnCIFailure: func(*CIFailureError) CIFixResult {
-			return CIFixFailed // infra failure — no code applied
-		},
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	var exhausted *CIFixExhaustedError
-	if errors.As(err, &exhausted) {
-		t.Error("expected non-CIFixExhaustedError when CIFixFailed returned (infra), got CIFixExhaustedError")
-	}
-
-	// Delta: with CIFixApplied, returns CIFixExhaustedError
-	_, err = MergeWithRetry(context.Background(), mergeFunc, MergeRetryOpts{
-		Logger: discardLog{},
-		OnCIFailure: func(*CIFailureError) CIFixResult {
-			ciFixCalls++
-			return CIFixApplied // fix applied but CI still failing
-		},
-	})
-	if err == nil {
-		t.Fatal("expected error after exhaustion")
-	}
-	if !errors.As(err, &exhausted) {
-		t.Fatalf("expected CIFixExhaustedError when CIFixApplied exhausted, got %T: %v", err, err)
-	}
-	if exhausted.Attempts != MaxMergeAttempts {
-		t.Errorf("expected Attempts=%d, got %d", MaxMergeAttempts, exhausted.Attempts)
-	}
-	if ciFixCalls != MaxMergeAttempts {
-		t.Errorf("expected %d CI fix calls, got %d", MaxMergeAttempts, ciFixCalls)
-	}
-}
-
-// MergeWithRetry package function invokes ResolveConflict from opts when
-// a MergeConflictError occurs, without needing a Manager receiver.
+// MergeWithRetry package function invokes ResolveConflict via opts.Resolver
+// when a MergeConflictError occurs, without needing a Manager receiver.
 func TestMergeWithRetry_PackageFunc_InvokesResolveConflictFromOpts(t *testing.T) {
 	attempts := 0
 	resolveConflictCalled := false
@@ -948,14 +901,16 @@ func TestMergeWithRetry_PackageFunc_InvokesResolveConflictFromOpts(t *testing.T)
 		}
 		return true, nil
 	}
-	resolveConflict := func(_ context.Context) error {
-		resolveConflictCalled = true
-		return nil
+	resolver := &stubConflictResolver{
+		ResolveConflictFn: func(_ context.Context) error {
+			resolveConflictCalled = true
+			return nil
+		},
 	}
 
 	merged, err := MergeWithRetry(context.Background(), mergeFunc, MergeRetryOpts{
-		Logger:          discardLog{},
-		ResolveConflict: resolveConflict,
+		Logger:   discardLog{},
+		Resolver: resolver,
 	})
 	if err != nil {
 		t.Fatalf("MergeWithRetry: %v", err)
@@ -964,7 +919,7 @@ func TestMergeWithRetry_PackageFunc_InvokesResolveConflictFromOpts(t *testing.T)
 		t.Error("expected merged=true after conflict resolution")
 	}
 	if !resolveConflictCalled {
-		t.Error("expected ResolveConflict to be called from opts")
+		t.Error("expected ResolveConflict to be called from opts.Resolver")
 	}
 }
 

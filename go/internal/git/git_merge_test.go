@@ -487,60 +487,6 @@ func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
 	}
 }
 
-// MergeWithRetry gives up after MaxMergeAttempts, preventing infinite loops.
-// Static-world variant: PR is persistently Blocked, OnCIFailure callback is
-// invoked on each retry but cannot un-block branch protection.
-func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
-	project := t.TempDir()
-
-	gh := newStubGitHub(StubGitHubConfig{
-		Available: true,
-		PRs: []StubPR{{
-			Number:  99,
-			Branch:  "ralph/test/01-exhaust",
-			State:   PRStateOpen,
-			Blocked: true, // world: branch protection permanently blocks
-		}},
-		Checks: map[int][]CICheckResult{99: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
-	})
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-
-	repo := newRepoForTest(
-		Config{
-			ProjectDir: project,
-			WorkDir:    filepath.Join(t.TempDir(), "wt"),
-			BaseBranch: "main",
-			Logger:     &testLog{},
-		},
-		gh,
-		withRunner(runner),
-		withWorktreeBranch("ralph/test/01-exhaust"),
-	)
-
-	ciFixCalls := 0
-	_, err := repo.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
-			ciFixCalls++
-			return CIFixApplied
-		},
-	})
-	if err == nil {
-		t.Fatal("expected error after exhausting retries")
-	}
-	if ciFixCalls != MaxMergeAttempts {
-		t.Errorf("expected %d CI fix attempts, got %d", MaxMergeAttempts, ciFixCalls)
-	}
-}
-
 // Push squashes multiple commits into one and force-pushes. Verifies the
 // remote branch has exactly 1 commit after push, with identical tree content.
 func TestPush_SquashesMultipleCommits(t *testing.T) {
@@ -994,77 +940,6 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 	pr, _ := gh.GetPR(context.Background(), "", 438)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 438 to remain merged, got state=%v", pr)
-	}
-}
-
-// When the fix agent makes no commits (CIFixNoCommits), MergeWithRetry retries
-// with exponential backoff instead of immediately giving up. After MaxInfraRetries,
-// it returns the CI error. This covers the case where CI fails due to infrastructure
-// issues (billing, runner allocation) rather than actual test failures.
-func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
-	project := t.TempDir()
-
-	gh := newStubGitHub(StubGitHubConfig{
-		Available: true,
-		PRs: []StubPR{{
-			Number:  77,
-			Branch:  "ralph/test/01-infra",
-			State:   PRStateOpen,
-			Blocked: true, // world: blocked until CI clears
-		}},
-		Checks: map[int][]CICheckResult{77: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
-	})
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-
-	repo := newRepoForTest(
-		Config{
-			ProjectDir: project,
-			WorkDir:    filepath.Join(t.TempDir(), "wt"),
-			BaseBranch: "main",
-			Logger:     &testLog{},
-		},
-		gh,
-		withRunner(runner),
-		withWorktreeBranch("ralph/test/01-infra"),
-	)
-
-	noCommitCalls := 0
-	sleeper := &recordingSleeper{}
-	_, err := repo.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
-			noCommitCalls++
-			return CIFixNoCommits
-		},
-		Sleep: sleeper,
-	})
-
-	if err == nil {
-		t.Fatal("expected error after exhausting infrastructure retries")
-	}
-
-	if noCommitCalls != MaxInfraRetries+1 {
-		t.Errorf("expected %d CI fix calls (initial + %d retries), got %d", MaxInfraRetries+1, MaxInfraRetries, noCommitCalls)
-	}
-
-	if len(sleeper.delays) != MaxInfraRetries {
-		t.Fatalf("expected %d backoff sleeps, got %d", MaxInfraRetries, len(sleeper.delays))
-	}
-
-	// Verify exponential backoff: 30s, 60s, 120s
-	expectedDelays := []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second}
-	for i, want := range expectedDelays {
-		if sleeper.delays[i] != want {
-			t.Errorf("backoff[%d] = %s, want %s", i, sleeper.delays[i], want)
-		}
 	}
 }
 
