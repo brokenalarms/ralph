@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -411,7 +412,9 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	// the CLI's exit message before printing the resume hint.
 	time.Sleep(100 * time.Millisecond)
 
-	printTaskResumeHint(os.Stdout, workDir, sessionID)
+	if promptKeepOrCleanupWorktree(os.Stdout, os.Stdin, gm) {
+		printTaskResumeHint(os.Stdout, workDir, sessionID)
+	}
 	return exitCode
 }
 
@@ -567,6 +570,24 @@ func printTaskResumeHint(w io.Writer, workDir, sessionID string) {
 	fmt.Fprintf(w, "\n%s%s┌%s┐%s\n", logging.Cyan, logging.Bold, line, logging.Reset)
 	fmt.Fprintf(w, "%s%s│  %s  │%s\n", logging.Cyan, logging.Bold, cmd, logging.Reset)
 	fmt.Fprintf(w, "%s%s└%s┘%s\n\n", logging.Cyan, logging.Bold, line, logging.Reset)
+}
+
+// promptKeepOrCleanupWorktree asks the user whether to keep the task worktree
+// for resume or clean it up, defaulting to Keep on empty/EOF input — which
+// also covers the non-TTY case, since a closed or non-interactive stdin reads
+// as EOF. On cleanup it removes the worktree and its ralph/task/YYYYMMDD-NN
+// branch via gm.RemoveWorktreeForBranch (registration-aware, never a raw
+// os.RemoveAll) and returns false so the caller skips the resume hint.
+func promptKeepOrCleanupWorktree(w io.Writer, r io.Reader, gm git.Ops) bool {
+	fmt.Fprint(w, "Keep this task worktree for resume, or clean it up? [K/c] ")
+	line, _ := bufio.NewReader(r).ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer != "c" && answer != "clean" && answer != "cleanup" {
+		return true
+	}
+	gm.RemoveWorktreeForBranch(gm.GetWorktreeBranch())
+	fmt.Fprintln(w, "Task worktree cleaned up.")
+	return false
 }
 
 func findBD() (string, error) {

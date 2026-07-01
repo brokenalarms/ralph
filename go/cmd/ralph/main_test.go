@@ -969,6 +969,50 @@ func TestPrintTaskResumeHint_ContainsResumeCommand(t *testing.T) {
 	}
 }
 
+// Proves: on `ralph task` exit, answering "c" cleans up the task worktree —
+// removing it via the registration-aware RemoveWorktreeForBranch (never a raw
+// os.RemoveAll) — and signals the caller to skip the resume hint.
+func TestPromptKeepOrCleanupWorktree_Cleanup(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
+	var out strings.Builder
+
+	keep := promptKeepOrCleanupWorktree(&out, strings.NewReader("c\n"), gm)
+
+	if keep {
+		t.Error("expected keep=false when answering 'c'")
+	}
+	inspector := gm.(git.StubInspector)
+	if got := inspector.GetRemoveWorktreeForBranchCalls(); got != 1 {
+		t.Errorf("expected RemoveWorktreeForBranch to be called once, got %d", got)
+	}
+	if got := inspector.GetRemovedWorktreeForBranch(); got != "ralph/task/20260701-01" {
+		t.Errorf("expected cleanup of branch 'ralph/task/20260701-01', got %q", got)
+	}
+	if !strings.Contains(out.String(), "cleaned up") {
+		t.Errorf("expected a cleanup confirmation message, got:\n%s", out.String())
+	}
+}
+
+// Proves: on `ralph task` exit, keeping the worktree (explicit "k", empty
+// input, or EOF from a non-TTY stdin) preserves the worktree and branch —
+// RemoveWorktreeForBranch must never be called — and signals the caller to
+// print the resume hint.
+func TestPromptKeepOrCleanupWorktree_Keep(t *testing.T) {
+	for _, answer := range []string{"k\n", "\n", ""} {
+		gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
+		var out strings.Builder
+
+		keep := promptKeepOrCleanupWorktree(&out, strings.NewReader(answer), gm)
+
+		if !keep {
+			t.Errorf("answer %q: expected keep=true", answer)
+		}
+		if got := gm.(git.StubInspector).GetRemoveWorktreeForBranchCalls(); got != 0 {
+			t.Errorf("answer %q: expected RemoveWorktreeForBranch not called, got %d calls", answer, got)
+		}
+	}
+}
+
 // Proves: handleTask does not delete the worktree on exit, so the printed
 // resume command remains valid. handleReview keeps its cleanup (regression guard).
 func TestHandleTask_NoWorktreeRemovalOnExit(t *testing.T) {
