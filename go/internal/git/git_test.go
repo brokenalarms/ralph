@@ -679,6 +679,103 @@ func TestSetupTaskWorktree_ErrorDoesNotSetWorkDirToProject(t *testing.T) {
 }
 
 
+// SetupTaskWorktree must skip seq N when a ralph/task/YYYYMMDD-N branch exists
+// but the matching directory does not (e.g. the directory was cleaned but the
+// branch was preserved for claude --resume). The new invocation must land on
+// the next free slot without "branch already exists" errors.
+func TestSetupTaskWorktree_SkipsSeqWithExistingBranchNoDir(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatalf("mkdir worktreeRoot: %v", err)
+	}
+
+	today := time.Now().Format("20060102")
+	// Pre-create the seq-01 branch with no worktree dir to simulate a quit
+	// session whose dir was cleaned but whose branch survives.
+	seq01Branch := TaskBranchName(today, 1)
+	run(t, "git", "-C", project, "branch", seq01Branch, "main")
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupTaskWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupTaskWorktree: %v", err)
+	}
+
+	// Must have chosen seq 02, not seq 01.
+	if mgr.worktreeBranch == seq01Branch {
+		t.Errorf("new invocation reused the existing branch %q instead of skipping to a free slot", seq01Branch)
+	}
+	seq02Branch := TaskBranchName(today, 2)
+	if mgr.worktreeBranch != seq02Branch {
+		t.Errorf("expected branch %q, got %q", seq02Branch, mgr.worktreeBranch)
+	}
+	if _, err := os.Stat(mgr.workDir); err != nil {
+		t.Errorf("new worktree dir does not exist: %v", err)
+	}
+}
+
+// SetupTaskWorktree must never RemoveAll a preserved worktree directory even
+// when a sequence-number gap causes the old dir-count heuristic to land on an
+// occupied slot. Scenario: seq-01 has no dir (gap), seq-02 has both a branch
+// and a dir (preserved quit session). A new invocation counting only one dir
+// would compute runSeq=2 and RemoveAll seq-02's dir with the old code. The fix
+// must detect the seq-02 branch, skip the slot, and use the first fully-free
+// slot instead.
+func TestSetupTaskWorktree_DoesNotRemoveAllPreservedDirOnSeqGap(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatalf("mkdir worktreeRoot: %v", err)
+	}
+
+	today := time.Now().Format("20060102")
+
+	// Simulate a preserved quit session at seq-02: branch exists, dir exists,
+	// but no git worktree registration (the registration was pruned when the
+	// user quit). seq-01 has neither dir nor branch — it's the gap.
+	seq02Branch := TaskBranchName(today, 2)
+	seq02Dir := filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-02", today))
+	run(t, "git", "-C", project, "branch", seq02Branch, "main")
+	if err := os.MkdirAll(seq02Dir, 0o755); err != nil {
+		t.Fatalf("mkdir seq02Dir: %v", err)
+	}
+	sentinel := filepath.Join(seq02Dir, "preserved-work.txt")
+	if err := os.WriteFile(sentinel, []byte("must survive"), 0o644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	// With the buggy code: dir count=1 (seq02Dir) → runSeq=2 → RemoveAll(seq02Dir)!
+	// With the fix: seq-01 is fully free → use seq-01, never touch seq-02.
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupTaskWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupTaskWorktree: %v", err)
+	}
+
+	// New invocation must not have used seq-02 (the preserved slot).
+	if mgr.worktreeBranch == seq02Branch {
+		t.Errorf("new invocation reused/clobbered preserved branch %q", seq02Branch)
+	}
+	if mgr.workDir == seq02Dir {
+		t.Errorf("new invocation reused/clobbered preserved dir %q", seq02Dir)
+	}
+
+	// Preserved dir, sentinel, and branch must all still be intact.
+	if _, err := os.Stat(seq02Dir); err != nil {
+		t.Errorf("preserved worktree dir was deleted: %v", err)
+	}
+	if data, err := os.ReadFile(sentinel); err != nil {
+		t.Errorf("sentinel deleted (preserved work would be lost): %v", err)
+	} else if string(data) != "must survive" {
+		t.Errorf("sentinel modified: got %q", string(data))
+	}
+	r := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil)
+	if !r.refExists(project, seq02Branch) {
+		t.Errorf("preserved branch %q was deleted", seq02Branch)
+	}
+}
+
 // RenameBranchForTask does not set PrevBranch — that's controlled by
 // setStackHead in the loop via SetPrevBranch. Rename only changes the
 // branch name.

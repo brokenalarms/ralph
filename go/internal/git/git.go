@@ -328,18 +328,6 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 	}
 
 	today := time.Now().Format("20060102")
-	runSeq := 1
-	if entries, err := os.ReadDir(worktreeRoot); err == nil {
-		prefix := "ralph-task-" + today + "-"
-		for _, e := range entries {
-			if e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
-				runSeq++
-			}
-		}
-	}
-
-	candidateBranch := TaskBranchName(today, runSeq)
-	candidateDir := filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-%02d", today, runSeq))
 
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
 		return fmt.Errorf("creating worktrees dir: %w", err)
@@ -347,24 +335,37 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 
 	r.gitCmd(r.projectDir, "worktree", "prune")
 
-	// If a previous task-manager session crashed and left this exact
-	// candidate dir behind, clear the directory and any stale branch
-	// reference for THIS branch only. Never touch other worktrees.
-	if _, err := os.Stat(candidateDir); err == nil {
-		os.RemoveAll(candidateDir)
-	}
-	if r.refExists(r.projectDir, candidateBranch) {
-		// Only delete the branch if no live worktree currently has it
-		// checked out. If something does have it checked out, that's a
-		// concurrent run with a colliding seq — bump runSeq instead.
-		if wt := r.findWorktreeForBranch(r.projectDir, candidateBranch); wt == "" {
-			_ = r.gitCmdErr(r.projectDir, "branch", "-D", candidateBranch)
-		} else {
-			runSeq++
-			candidateBranch = TaskBranchName(today, runSeq)
-			candidateDir = filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-%02d", today, runSeq))
+	// Find the lowest seq where the slot is fully free: the directory does
+	// not exist, the branch does not exist, and no worktree is registered
+	// for the branch. This loop handles sequence gaps (from cleaned sessions)
+	// and orphaned branches (from preserved sessions) without clobbering
+	// either. A candidate dir with no branch and no registered worktree is a
+	// genuinely dead leftover and may be cleaned; all other occupied slots
+	// are skipped.
+	runSeq := 1
+	for {
+		candidateBranch := TaskBranchName(today, runSeq)
+		candidateDir := filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-%02d", today, runSeq))
+
+		branchExists := r.refExists(r.projectDir, candidateBranch)
+		registeredWT := r.findWorktreeForBranch(r.projectDir, candidateBranch)
+		_, statErr := os.Stat(candidateDir)
+		dirExists := statErr == nil
+
+		if !branchExists && registeredWT == "" {
+			// No branch and no registration — slot is logically free.
+			// Clean a dead leftover dir if one sits here, then use the slot.
+			if dirExists {
+				os.RemoveAll(candidateDir)
+			}
+			break
 		}
+		// Slot is occupied (branch or registered worktree exists) — skip it.
+		runSeq++
 	}
+
+	candidateBranch := TaskBranchName(today, runSeq)
+	candidateDir := filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-%02d", today, runSeq))
 
 	defaultBranch := r.baseBranch
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", defaultBranch)
