@@ -1038,15 +1038,13 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 	)
 
 	noCommitCalls := 0
-	var sleepDelays []time.Duration
+	sleeper := &recordingSleeper{}
 	_, err := repo.MergeWithRetry(context.Background(), MergeRetryOpts{
 		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
 			noCommitCalls++
 			return CIFixNoCommits
 		},
-		SleepFunc: func(d time.Duration) {
-			sleepDelays = append(sleepDelays, d)
-		},
+		Sleep: sleeper,
 	})
 
 	if err == nil {
@@ -1057,15 +1055,15 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 		t.Errorf("expected %d CI fix calls (initial + %d retries), got %d", MaxInfraRetries+1, MaxInfraRetries, noCommitCalls)
 	}
 
-	if len(sleepDelays) != MaxInfraRetries {
-		t.Fatalf("expected %d backoff sleeps, got %d", MaxInfraRetries, len(sleepDelays))
+	if len(sleeper.delays) != MaxInfraRetries {
+		t.Fatalf("expected %d backoff sleeps, got %d", MaxInfraRetries, len(sleeper.delays))
 	}
 
 	// Verify exponential backoff: 30s, 60s, 120s
 	expectedDelays := []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second}
 	for i, want := range expectedDelays {
-		if sleepDelays[i] != want {
-			t.Errorf("backoff[%d] = %s, want %s", i, sleepDelays[i], want)
+		if sleeper.delays[i] != want {
+			t.Errorf("backoff[%d] = %s, want %s", i, sleeper.delays[i], want)
 		}
 	}
 }

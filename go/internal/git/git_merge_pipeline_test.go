@@ -212,13 +212,13 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 		BaseBranch: "main",
 	}
 	infra := shipInfra{
-		push:           func(ctx context.Context) error { pushedCalled = true; return nil },
-		hasUncommitted: func() bool { return false },
-		commitAll:      func(string) {},
-		logger:         discardLog{},
+		hooks: &stubShipHooks{
+			PushFn: func(ctx context.Context) error { pushedCalled = true; return nil },
+		},
+		logger: discardLog{},
 	}
 
-	result, err := shipPR(context.Background(), nil, gh, "/wt", "ralph/gmxa-ship", "https://github.com/test/repo.git", opts, infra)
+	result, err := shipPR(context.Background(), gh, "/wt", "ralph/gmxa-ship", "https://github.com/test/repo.git", opts, infra)
 	if err != nil {
 		t.Fatalf("shipPR failed: %v", err)
 	}
@@ -240,14 +240,13 @@ func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
 
 	opts := ShipOpts{}
 	infra := shipInfra{
-		push:                  func(ctx context.Context) error { return nil },
-		hasUncommitted:        func() bool { return false },
-		commitAll:             func(string) {},
-		branchHasUnmergedWork: func(string) bool { return false },
-		logger:                discardLog{},
+		hooks: &stubShipHooks{
+			BranchHasUnmergedWorkFn: func(string) bool { return false },
+		},
+		logger: discardLog{},
 	}
 
-	result, err := shipPR(context.Background(), nil, gh, "/wt", "ralph/test-branch", "", opts, infra)
+	result, err := shipPR(context.Background(), gh, "/wt", "ralph/test-branch", "", opts, infra)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,14 +280,13 @@ func TestShip_CreatesPRWhenDivergedFromMain(t *testing.T) {
 	// Branch is diverged: has commits ahead of main (branchHasUnmergedWork=true)
 	// but is NOT a linear ancestor of main (BranchIsAheadOfMain would be false).
 	infra := shipInfra{
-		push:                  func(ctx context.Context) error { return nil },
-		hasUncommitted:        func() bool { return false },
-		commitAll:             func(string) {},
-		branchHasUnmergedWork: func(string) bool { return true },
-		logger:                discardLog{},
+		hooks: &stubShipHooks{
+			BranchHasUnmergedWorkFn: func(string) bool { return true },
+		},
+		logger: discardLog{},
 	}
 
-	result, err := shipPR(context.Background(), nil, gh, "/wt", "ralph/e63z-diverged", "https://github.com/test/repo.git", opts, infra)
+	result, err := shipPR(context.Background(), gh, "/wt", "ralph/e63z-diverged", "https://github.com/test/repo.git", opts, infra)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -621,7 +619,7 @@ func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
 		// ListChecksErr causes AwaitCI to exhaust its timeout returning an error.
 		// GetJobStepCountErr makes isInfrastructureFailure return false so the
 		// timeout is treated as a real timeout (not an infra outage), leaving the PR open.
-		ListChecksErr:    fmt.Errorf("API unavailable"),
+		ListChecksErr:      fmt.Errorf("API unavailable"),
 		GetJobStepCountErr: fmt.Errorf("API unavailable"),
 	})
 
@@ -850,8 +848,10 @@ func TestExecuteMerge_PackageFunc_MergesSuccessfully(t *testing.T) {
 		WorkDir:        "/tmp/workdir",
 		DefaultBranch:  "main",
 		MergeOpts:      MergeOpts{DeleteBranch: true},
-		AwaitCI: func(_ context.Context, _ int, _ string, _ time.Time) ([]CICheckResult, CIStatus, error) {
-			return nil, CIPassed, nil
+		CI: &stubCIPoller{
+			AwaitCIFn: func(_ context.Context, _ int, _ string, _ time.Time) ([]CICheckResult, CIStatus, error) {
+				return nil, CIPassed, nil
+			},
 		},
 	}
 

@@ -365,71 +365,52 @@ type ShipResult struct {
 	PushedBranch string
 }
 
-// shipInfra holds the infrastructure callbacks used by shipPR. These are
-// separated from ShipOpts to keep ShipOpts data-only.
+// shipHooks are the repo operations shipPR needs to prepare and push a
+// branch before creating its PR. *repo satisfies shipHooks via its own
+// methods; tests supply a local stub. This is the constructor-DI seam for
+// shipPR in place of individually injected callback fields.
+type shipHooks interface {
+	Push(ctx context.Context) error
+	HasUncommittedChanges() bool
+	CommitAll(message string)
+	BranchHasUnmergedWork(branch string) bool
+}
+
+// shipInfra holds the infrastructure shipPR needs. Separated from ShipOpts
+// to keep ShipOpts data-only.
 type shipInfra struct {
-	push                 func(context.Context) error
-	hasUncommitted       func() bool
-	commitAll            func(string)
-	branchHasUnmergedWork func(string) bool
-	logger               Log
+	hooks  shipHooks
+	logger Log
 }
 
 // shipPR is the single "get work into a PR" pipeline: auto-commit any
 // uncommitted changes, push (squash + rebase + force-push), and create
 // or update a PR. Returns the PR number and URL.
-func shipPR(ctx context.Context, runner Runner, gh gitHub, workDir, branch, remoteURL string, opts ShipOpts, infra shipInfra) (ShipResult, error) {
-	hasChanges := infra.hasUncommitted
-	if hasChanges == nil {
-		r := runner
-		if r == nil {
-			r = defaultRunner
-		}
-		hasChanges = func() bool {
-			_, err1 := r.Run(context.Background(), workDir, "diff", "--quiet")
-			_, err2 := r.Run(context.Background(), workDir, "diff", "--cached", "--quiet")
-			return err1 != nil || err2 != nil
-		}
-	}
-
-	commitAll := infra.commitAll
-	if commitAll == nil {
-		r := runner
-		if r == nil {
-			r = defaultRunner
-		}
-		commitAll = func(msg string) {
-			r.Run(context.Background(), workDir, "add", "-A")
-			r.Run(context.Background(), workDir, "commit", "-m", msg)
-		}
-	}
-
-	if hasChanges() {
+func shipPR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string, opts ShipOpts, infra shipInfra) (ShipResult, error) {
+	if infra.hooks.HasUncommittedChanges() {
 		msg := "auto-commit agent changes"
 		if opts.TaskID != "" {
 			msg = fmt.Sprintf("[%s] %s", opts.TaskID, msg)
 		}
-		commitAll(msg)
+		infra.hooks.CommitAll(msg)
 	}
 
 	pushedBranch := ""
-	if infra.push != nil {
-		if err := infra.push(ctx); err != nil {
-			if ctx.Err() != nil {
-				return ShipResult{}, ctx.Err()
-			}
-			if infra.logger != nil {
-				infra.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v", err)
-			}
-			return ShipResult{}, fmt.Errorf("push failed: %w", err)
+	if err := infra.hooks.Push(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ShipResult{}, ctx.Err()
 		}
-		// Push succeeded — commits are now on the remote branch. Downstream
-		// callers use this signal to avoid closing a bead when CreatePR fails
-		// (which would orphan the pushed branch).
-		pushedBranch = branch
+		if infra.logger != nil {
+			infra.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v", err)
+		}
+		return ShipResult{}, fmt.Errorf("push failed: %w", err)
 	}
+	// Push succeeded — commits are now on the remote branch. Downstream
+	// callers use this signal to avoid closing a bead when CreatePR fails
+	// (which would orphan the pushed branch).
+	pushedBranch = branch
 
-	if infra.branchHasUnmergedWork != nil && !infra.branchHasUnmergedWork(branch) {
+	if !infra.hooks.BranchHasUnmergedWork(branch) {
 		if infra.logger != nil {
 			infra.logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s has no commits ahead of main — skipping PR creation", branch)
 		}
@@ -511,13 +492,10 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 			return ShipResult{}, err
 		}
 		infra := shipInfra{
-			push:                 r.Push,
-			hasUncommitted:       r.HasUncommittedChanges,
-			commitAll:            r.CommitAll,
-			branchHasUnmergedWork: r.BranchHasUnmergedWork,
-			logger:               r.logger,
+			hooks:  r,
+			logger: r.logger,
 		}
-		result, err = shipPR(ctx, r.run(), r.github, r.workDir, r.worktreeBranch, r.RemoteURL(), opts, infra)
+		result, err = shipPR(ctx, r.github, r.workDir, r.worktreeBranch, r.RemoteURL(), opts, infra)
 		if err != nil {
 			return result, err
 		}
@@ -848,8 +826,16 @@ type ExecuteMergeOpts struct {
 	WorkDir        string
 	DefaultBranch  string
 	MergeOpts      MergeOpts
-	// AwaitCI polls CI check status for the PR. Required for the Blocked path.
-	AwaitCI func(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error)
+	// CI polls CI check status for the PR. Required for the Blocked path.
+	CI ciPoller
+}
+
+// ciPoller polls CI check status for a PR. *repo satisfies it via AwaitCI;
+// package-level merge functions accept it so they compose without a repo
+// receiver. This is the constructor-DI seam in place of an injected
+// AwaitCI callback field.
+type ciPoller interface {
+	AwaitCI(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error)
 }
 
 // executeMerge attempts the squash-merge and handles CI-gated retries.
@@ -884,10 +870,10 @@ func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger 
 		if logger != nil {
 			logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "blocked by branch protection: %s — waiting for CI...", result.Message)
 		}
-		if opts.AwaitCI == nil {
+		if opts.CI == nil {
 			return "", false, fmt.Errorf("auto-merge blocked for PR #%d: %s", opts.PRNumber, result.Message)
 		}
-		checks, status, waitErr := opts.AwaitCI(ctx, opts.PRNumber, opts.RepoURL, time.Time{})
+		checks, status, waitErr := opts.CI.AwaitCI(ctx, opts.PRNumber, opts.RepoURL, time.Time{})
 		if waitErr != nil {
 			return "", false, fmt.Errorf("CI polling failed for PR #%d: %w", opts.PRNumber, waitErr)
 		}
@@ -936,7 +922,7 @@ func (r *repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (
 		WorkDir:        r.workDir,
 		DefaultBranch:  r.baseBranch,
 		MergeOpts:      r.mergeOpts(),
-		AwaitCI:        r.AwaitCI,
+		CI:             r,
 	}, r.logger)
 	if !merged || err != nil {
 		return merged, err
@@ -962,7 +948,7 @@ func (r *repo) executeMergeWithAdminOverride(ctx context.Context, prNumber int, 
 		WorkDir:        r.workDir,
 		DefaultBranch:  r.baseBranch,
 		MergeOpts:      opts,
-		AwaitCI:        r.AwaitCI,
+		CI:             r,
 	}, r.logger)
 	if !merged || err != nil {
 		return merged, err
@@ -1001,7 +987,6 @@ func NWOFromRemote(remoteURL string) string {
 	}
 	return ""
 }
-
 
 // DeleteRemoteBranch removes the current branch from the remote. Used to
 // clean up after a PR has been merged externally.
@@ -1045,8 +1030,9 @@ type MergeRetryOpts struct {
 	// force-pushed, ready for a merge retry.
 	OnConflict func(conflictErr *UnresolvedConflictError) bool
 
-	// SleepFunc is used for infrastructure backoff delays. Defaults to time.Sleep.
-	SleepFunc func(time.Duration)
+	// Sleep is used for infrastructure backoff delays. Defaults to a real
+	// time.Sleep-backed sleeper when nil.
+	Sleep sleeper
 
 	// The following fields are filled by repo.MergeWithRetry before delegating
 	// to the package-level MergeWithRetry function. They enable callers to compose
@@ -1056,16 +1042,27 @@ type MergeRetryOpts struct {
 	// is detected. Defaults to repo.ResolveConflict when nil.
 	ResolveConflict func(ctx context.Context) error
 
-	// AwaitCI polls CI status after a fix agent pushes. pushedAt filters
-	// out stale check results that started before the push.
-	AwaitCI func(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error)
+	// CI polls CI status after a fix agent pushes. pushedAt filters out
+	// stale check results that started before the push.
+	CI ciPoller
 
 	// Logger receives progress and warning messages. Logging is skipped when nil.
 	Logger Log
 
-	// RemoteURL is the repository remote URL, used for AwaitCI after a fix.
+	// RemoteURL is the repository remote URL, used for CI polling after a fix.
 	RemoteURL string
 }
+
+// sleeper abstracts backoff delays for infrastructure retries so tests can
+// observe delays without real waits. realSleeper is the production
+// implementation, backed by time.Sleep.
+type sleeper interface {
+	Sleep(time.Duration)
+}
+
+type realSleeper struct{}
+
+func (realSleeper) Sleep(d time.Duration) { time.Sleep(d) }
 
 // ResolveConflict rebases onto the default branch and force-pushes to
 // resolve PR merge conflicts before the next merge attempt. Returns an
@@ -1114,9 +1111,9 @@ func (r *repo) ResolveConflict(ctx context.Context) error {
 // It is a package function — callers compose it without a repo receiver.
 // repo.MergeWithRetry delegates here after filling in infrastructure callbacks.
 func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, error), opts MergeRetryOpts) (bool, error) {
-	sleepFn := opts.SleepFunc
-	if sleepFn == nil {
-		sleepFn = time.Sleep
+	sleep := opts.Sleep
+	if sleep == nil {
+		sleep = realSleeper{}
 	}
 
 	infraRetries := 0
@@ -1164,9 +1161,9 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 				ciFixApplied = true
 				// Fix was applied and force-pushed. Wait for fresh CI
 				// checks that started after the push.
-				if opts.AwaitCI != nil {
+				if opts.CI != nil {
 					repoURL := opts.RemoteURL
-					_, ciStatus, waitErr := opts.AwaitCI(ctx, ciErr.PRNumber, repoURL, pushedAt)
+					_, ciStatus, waitErr := opts.CI.AwaitCI(ctx, ciErr.PRNumber, repoURL, pushedAt)
 					if waitErr != nil && opts.Logger != nil {
 						opts.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling after fix: %v", waitErr)
 					}
@@ -1188,7 +1185,7 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 				if opts.Logger != nil {
 					opts.Logger.Emit(logging.Opts{Domain: logging.CI}, "CI infrastructure failure — retrying in %s (%d/%d)", delay, infraRetries+1, MaxInfraRetries)
 				}
-				sleepFn(delay)
+				sleep.Sleep(delay)
 				infraRetries++
 				// Don't consume the code-fix attempt budget for infra retries.
 				attempt--
@@ -1212,8 +1209,8 @@ func (r *repo) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, e
 	if opts.ResolveConflict == nil {
 		opts.ResolveConflict = r.ResolveConflict
 	}
-	if opts.AwaitCI == nil {
-		opts.AwaitCI = r.AwaitCI
+	if opts.CI == nil {
+		opts.CI = r
 	}
 	if opts.Logger == nil {
 		opts.Logger = r.logger

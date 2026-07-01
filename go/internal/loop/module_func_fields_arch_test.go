@@ -39,21 +39,16 @@ func TestNoFuncFieldsInModuleStructs(t *testing.T) {
 	// in tracked remediation beads. MUST ONLY SHRINK — never add to this
 	// list; remove each entry as the corresponding remediation bead lands.
 	callbackDebt := map[string]bool{
-		// git/git_merge.go — shipInfra helper cluster (ralph-ff8z)
-		"git.shipInfra.push":                  true,
-		"git.shipInfra.hasUncommitted":        true,
-		"git.shipInfra.commitAll":             true,
-		"git.shipInfra.branchHasUnmergedWork": true,
-
-		// git/git_merge.go — ExecuteMergeOpts (ralph-ff8z)
-		"git.ExecuteMergeOpts.AwaitCI": true,
-
-		// git/git_merge.go — MergeRetryOpts (ralph-ff8z)
+		// git/git_merge.go — MergeRetryOpts cross-boundary merge callbacks
+		// (ralph-ajkv). OnCIFailure/OnConflict spawn fix agents across the
+		// git/loop boundary; ResolveConflict is filled from repo.ResolveConflict
+		// by repo.MergeWithRetry so the package-level MergeWithRetry can compose
+		// without a repo receiver. AwaitCI/SleepFunc and the shipInfra cluster
+		// were migrated to constructor-DI/real methods/local interfaces by
+		// ralph-p6du.
 		"git.MergeRetryOpts.OnCIFailure":     true,
 		"git.MergeRetryOpts.OnConflict":      true,
-		"git.MergeRetryOpts.SleepFunc":       true,
 		"git.MergeRetryOpts.ResolveConflict": true,
-		"git.MergeRetryOpts.AwaitCI":         true,
 	}
 
 	// permanentExceptions: func-typed fields that are intentional
