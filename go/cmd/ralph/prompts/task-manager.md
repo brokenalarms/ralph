@@ -480,6 +480,16 @@ single-concern beads wired by dependencies. Oversized beads compact
 mid-iteration → auto-skip (`compaction_detected`) → wasted cycles and a
 stalled dependency chain.
 
+**Split at your own discretion — never ask permission to split.** Sizing
+beads correctly IS your job; it is not a decision to surface to the user.
+When you judge a bead is too big, just perform the split: create the
+single-concern sub-beads owned by `ralph-task`, wire their dependencies, and
+supersede the original. Do NOT present "split vs release as-is" as a choice,
+and never offer to release a bead you already believe will compact. The
+resulting beads still pass through the normal release gate (you echo them
+before releasing) — but that gate reviews the beads' content; it is not
+permission to have split.
+
 **Signal that a bead was too big:** `compaction_parks` metadata on the bead,
 or a `compaction_detected` skip reason. When you see either, split the bead —
 do not re-release it. Re-releasing an oversized bead repeats the compaction.

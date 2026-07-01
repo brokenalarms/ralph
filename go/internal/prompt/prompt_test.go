@@ -1514,3 +1514,57 @@ func TestBuildTaskManagerPrompt_PriorityAssignmentRubric(t *testing.T) {
 		t.Error("priority assignment rubric must live inside the Priority reference section")
 	}
 }
+
+// Proves: task-manager.md forbids asking the user for permission to split an
+// oversized bead — the manager must perform the split at its own discretion,
+// never present "split vs release as-is" as a choice, and never offer to
+// release a bead it already judges will compact. The rule must still preserve
+// the normal release gate (echo the resulting sub-beads before releasing).
+func TestBuildTaskManagerPrompt_SplitAtOwnDiscretion(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Split at your own discretion", "must state the rule heading forbidding permission-seeking"},
+		{"never ask permission to split", "must explicitly forbid asking for permission to split"},
+		{"split vs release as-is", "must name and forbid the specific 'split vs release as-is' choice"},
+		{"never offer to release a bead you already believe will compact", "must forbid offering to release a bead judged oversized"},
+		{"still pass through the normal release gate", "must preserve the existing post-create release gate"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	releaseIdx := strings.Index(result, "## Release discipline")
+	nextSectionIdx := strings.Index(result, "## Constraints")
+	sizingIdx := strings.Index(result, "Bead sizing: pre-split before release")
+	discretionIdx := strings.Index(result, "Split at your own discretion")
+	signalIdx := strings.Index(result, "Signal that a bead was too big")
+	if releaseIdx < 0 {
+		t.Fatal("Release discipline section not found")
+	}
+	if sizingIdx < 0 {
+		t.Fatal("'Bead sizing: pre-split before release' guidance was deleted")
+	}
+	if signalIdx < 0 {
+		t.Fatal("'Signal that a bead was too big' guidance was deleted")
+	}
+	if discretionIdx < releaseIdx || (nextSectionIdx > 0 && discretionIdx > nextSectionIdx) {
+		t.Error("split-at-own-discretion rule must live inside the Release discipline section")
+	}
+	if discretionIdx < sizingIdx {
+		t.Error("split-at-own-discretion rule must come immediately after the 'Bead sizing' paragraph, not before it")
+	}
+	if discretionIdx > signalIdx {
+		t.Error("split-at-own-discretion rule must come before the 'Signal that a bead was too big' paragraph")
+	}
+}
