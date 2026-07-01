@@ -24,7 +24,6 @@ package verifier
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,127 +305,39 @@ func (v *Verifier) FixModel(attempt int) string {
 // package directly.
 type FixAgentResult = claude.Result
 
-// FixAgentSpawn carries inputs shared by the various SpawnXFixAgent helpers.
-type FixAgentSpawn struct {
-	Ctx        context.Context
-	TaskTitle  string
-	WorkDir    string
-	RawLogPath string
+// FixAgentInput is the data-only input for SpawnFixAgent. Template is the
+// prompt template filename; Vars holds its substitution map (do not include
+// {{SIGNAL_COMPLETE}} — SpawnFixAgent injects it from cfg.RalphDir).
+// Attempt drives FixModel selection; Description tags log lines (defaults to
+// the template name when empty).
+type FixAgentInput struct {
+	Ctx         context.Context
+	Template    string
+	Vars        map[string]string
+	Attempt     int
+	WorkDir     string
+	RawLogPath  string
+	Description string
 }
 
-// SpawnTestFixAgent spawns a fix agent to address test-suite failures.
-// Returns the claude result so Loop can check SignalDetected.
-func (v *Verifier) SpawnTestFixAgent(in FixAgentSpawn, taskAcceptance, testOutput string, attempt, maxAttempts int) claude.Result {
-	v.logger.Emit(logging.Opts{Domain: logging.Test}, "Spawning fix agent for test failures (attempt %d/%d)", attempt, maxAttempts)
-
+// SpawnFixAgent loads in.Template, substitutes in.Vars plus
+// {{SIGNAL_COMPLETE}} (derived from cfg.RalphDir), and spawns a fix-agent
+// subprocess. Model is chosen by FixModel(in.Attempt). Returns the agent
+// result so the caller can check SignalDetected.
+func (v *Verifier) SpawnFixAgent(in FixAgentInput) FixAgentResult {
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
-		"{{TASK_TITLE}}":       in.TaskTitle,
-		"{{TASK_DESCRIPTION}}": fmt.Sprintf("Tests failed after completion. Fix the failures.\n\nAcceptance criteria:\n%s", taskAcceptance),
-		"{{TEST_OUTPUT}}":      testOutput,
-		"{{SIGNAL_COMPLETE}}":  signalPath,
-	})
-
-	return v.runFixAgent(in.Ctx, "test failures", fixPrompt, in.WorkDir, in.RawLogPath, attempt)
-}
-
-// SpawnCompileFixAgent spawns a fix agent to address compile/type errors.
-func (v *Verifier) SpawnCompileFixAgent(in FixAgentSpawn, taskAcceptance, compileOutput string, attempt, maxAttempts int) claude.Result {
-	v.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed — spawning fix agent (attempt %d/%d)", attempt, maxAttempts)
-
-	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
-		"{{TASK_TITLE}}":       in.TaskTitle,
-		"{{TASK_DESCRIPTION}}": fmt.Sprintf("Build/type check failed after completion. Fix the compile errors.\n\nAcceptance criteria:\n%s", taskAcceptance),
-		"{{TEST_OUTPUT}}":      compileOutput,
-		"{{SIGNAL_COMPLETE}}":  signalPath,
-	})
-
-	return v.runFixAgent(in.Ctx, "build errors", fixPrompt, in.WorkDir, in.RawLogPath, attempt)
-}
-
-// SpawnVerifyFixAgent spawns a fix agent to address LLM verification rejection.
-func (v *Verifier) SpawnVerifyFixAgent(in FixAgentSpawn, taskDesc, taskAcceptance, rejectionDetails string, attempt, maxAttempts int) claude.Result {
-	v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.FixModel(attempt)}, "Spawning fix agent for verification rejection (attempt %d/%d)", attempt, maxAttempts)
-
-	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	fixPrompt := v.loadVerifyPrompt("verify-fix.md", map[string]string{
-		"{{TASK_TITLE}}":          in.TaskTitle,
-		"{{TASK_DESCRIPTION}}":    taskDesc,
-		"{{ACCEPTANCE_CRITERIA}}": taskAcceptance,
-		"{{REJECTION_REASON}}":    rejectionDetails,
-		"{{SIGNAL_COMPLETE}}":     signalPath,
-	})
-
-	return v.runFixAgent(in.Ctx, "verification rejection", fixPrompt, in.WorkDir, in.RawLogPath, attempt)
-}
-
-// CIFixInput is the per-call input for SpawnCIFixAgent. RequiredFailures is
-// pre-filtered by the caller (Loop) using git.RequiredFailedChecks so
-// verifier doesn't need to know about git types.
-type CIFixInput struct {
-	Spawn            FixAgentSpawn
-	CILog            string
-	PRNumber         int
-	RequiredFailures []string // names of failed required checks
-	OptionalFailures []string // names of failed optional checks (for logging)
-}
-
-// SpawnCIFixAgent spawns a fix agent to address CI failures. Returns empty
-// claude.Result (SignalDetected=false) without spawning if RequiredFailures
-// is empty — only optional/deploy checks failed.
-func (v *Verifier) SpawnCIFixAgent(in CIFixInput) claude.Result {
-	if len(in.OptionalFailures) > 0 {
-		v.logger.Emit(logging.Opts{Domain: logging.CI}, "Ignoring optional/deploy check failures: %s", strings.Join(in.OptionalFailures, ", "))
+	vars := make(map[string]string, len(in.Vars)+1)
+	for k, val := range in.Vars {
+		vars[k] = val
 	}
-	if len(in.RequiredFailures) == 0 {
-		v.logger.Emit(logging.Opts{Domain: logging.CI}, "Only optional checks failed on PR #%d — skipping fix agent", in.PRNumber)
-		return claude.Result{}
+	vars["{{SIGNAL_COMPLETE}}"] = signalPath
+
+	prompt := v.loadVerifyPrompt(in.Template, vars)
+	desc := in.Description
+	if desc == "" {
+		desc = strings.TrimSuffix(in.Template, ".md")
 	}
-
-	v.logger.Emit(logging.Opts{Domain: logging.CI}, "CI failed on PR #%d — spawning fix agent for required checks", in.PRNumber)
-
-	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	fixPrompt := v.loadVerifyPrompt("verify-ci.md", map[string]string{
-		"{{TASK_TITLE}}":      in.Spawn.TaskTitle,
-		"{{FAILED_CHECKS}}":   strings.Join(in.RequiredFailures, ", "),
-		"{{CI_LOG}}":          in.CILog,
-		"{{SIGNAL_COMPLETE}}": signalPath,
-	})
-
-	return v.runFixAgent(in.Spawn.Ctx, "CI failures", fixPrompt, in.Spawn.WorkDir, in.Spawn.RawLogPath, 1)
-}
-
-// SpawnCopilotFixAgent spawns a fix agent to address actionable Copilot review
-// comments. reviewContext is the pre-formatted comment block including file
-// paths and line numbers.
-func (v *Verifier) SpawnCopilotFixAgent(in FixAgentSpawn, reviewContext string) claude.Result {
-	v.logger.Emit(logging.Opts{Domain: logging.Git}, "Spawning Copilot review fix agent")
-
-	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	fixPrompt := v.loadVerifyPrompt("verify-copilot-review.md", map[string]string{
-		"{{TASK_TITLE}}":      in.TaskTitle,
-		"{{REVIEW_FEEDBACK}}": reviewContext,
-		"{{SIGNAL_COMPLETE}}": signalPath,
-	})
-
-	return v.runFixAgent(in.Ctx, "Copilot review feedback", fixPrompt, in.WorkDir, in.RawLogPath, 1)
-}
-
-// SpawnConflictFixAgent spawns a fix agent to resolve merge conflicts that
-// the automatic rebase could not handle.
-func (v *Verifier) SpawnConflictFixAgent(in FixAgentSpawn, conflictDiff, beadDesc string) claude.Result {
-	v.logger.Emit(logging.Opts{Domain: logging.Git}, "Unresolvable merge conflict — spawning conflict resolution agent")
-
-	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	fixPrompt := v.loadVerifyPrompt("resolve-conflict.md", map[string]string{
-		"{{TASK_TITLE}}":       in.TaskTitle,
-		"{{TASK_DESCRIPTION}}": beadDesc,
-		"{{CONFLICT_DIFF}}":    conflictDiff,
-		"{{SIGNAL_COMPLETE}}":  signalPath,
-	})
-
-	return v.runFixAgent(in.Ctx, "conflict resolution", fixPrompt, in.WorkDir, in.RawLogPath, 1)
+	return v.runFixAgent(in.Ctx, desc, prompt, in.WorkDir, in.RawLogPath, in.Attempt)
 }
 
 // PreIterationInput holds inputs for RunPreIterationTests.

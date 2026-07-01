@@ -110,22 +110,33 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 		}
 	}
 
+	if len(optionalNames) > 0 {
+		l.logger.Emit(logging.Opts{Domain: logging.CI}, "Ignoring optional/deploy check failures: %s", strings.Join(optionalNames, ", "))
+	}
+	if len(requiredNames) == 0 {
+		l.logger.Emit(logging.Opts{Domain: logging.CI}, "Only optional checks failed on PR #%d — skipping fix agent", ciErr.PRNumber)
+		return git.CIFixFailed
+	}
+
+	l.logger.Emit(logging.Opts{Domain: logging.CI}, "CI failed on PR #%d — spawning fix agent for required checks", ciErr.PRNumber)
+
 	result := l.fixLoop(ctx, fixLoopSpec{
 		fixName:       "CI",
 		autoCommitMsg: "fix: auto-commit CI fix agent changes",
 		noCommitsMsg:  "Fix agent made no new commits — likely infrastructure failure",
 		spawn: func() verifier.FixAgentResult {
-			return l.verifier.SpawnCIFixAgent(verifier.CIFixInput{
-				Spawn: verifier.FixAgentSpawn{
-					Ctx:        ctx,
-					TaskTitle:  nextTask,
-					WorkDir:    workDir,
-					RawLogPath: rawLogPath,
+			return l.verifier.SpawnFixAgent(verifier.FixAgentInput{
+				Ctx:      ctx,
+				Template: "verify-ci.md",
+				Vars: map[string]string{
+					"{{TASK_TITLE}}":    nextTask,
+					"{{FAILED_CHECKS}}": strings.Join(requiredNames, ", "),
+					"{{CI_LOG}}":        ciLog,
 				},
-				CILog:            ciLog,
-				PRNumber:         ciErr.PRNumber,
-				RequiredFailures: requiredNames,
-				OptionalFailures: optionalNames,
+				Attempt:     1,
+				WorkDir:     workDir,
+				RawLogPath:  rawLogPath,
+				Description: "CI failures",
 			})
 		},
 	})
@@ -147,16 +158,25 @@ func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, ra
 	conflictDiff := l.git.ConflictDiff()
 	taskDesc := l.taskDescription(taskID)
 
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Unresolvable merge conflict — spawning conflict resolution agent")
+
 	result := l.fixLoop(ctx, fixLoopSpec{
 		fixName:      "Conflict",
 		noCommitsMsg: "Conflict agent made no new commits — nothing to push",
 		spawn: func() verifier.FixAgentResult {
-			return l.verifier.SpawnConflictFixAgent(verifier.FixAgentSpawn{
-				Ctx:        ctx,
-				TaskTitle:  nextTask,
-				WorkDir:    workDir,
-				RawLogPath: rawLogPath,
-			}, conflictDiff, taskDesc)
+			return l.verifier.SpawnFixAgent(verifier.FixAgentInput{
+				Ctx:      ctx,
+				Template: "resolve-conflict.md",
+				Vars: map[string]string{
+					"{{TASK_TITLE}}":       nextTask,
+					"{{TASK_DESCRIPTION}}": taskDesc,
+					"{{CONFLICT_DIFF}}":    conflictDiff,
+				},
+				Attempt:     1,
+				WorkDir:     workDir,
+				RawLogPath:  rawLogPath,
+				Description: "conflict resolution",
+			})
 		},
 	})
 	return result == fixApplied
@@ -244,17 +264,25 @@ func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, re
 	}
 	reviewCtx := formatReviewContext(reviewerName, prNumber, actionable)
 
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Spawning %s review fix agent", reviewerName)
+
 	result := l.fixLoop(ctx, fixLoopSpec{
 		fixName:       reviewerName,
 		autoCommitMsg: "fix: address " + reviewerName + " review feedback",
 		noCommitsMsg:  fmt.Sprintf("%s fix agent made no new commits — proceeding to merge anyway", reviewerName),
 		spawn: func() verifier.FixAgentResult {
-			return l.verifier.SpawnCopilotFixAgent(verifier.FixAgentSpawn{
-				Ctx:        ctx,
-				TaskTitle:  nextTask,
-				WorkDir:    workDir,
-				RawLogPath: rawLogPath,
-			}, reviewCtx)
+			return l.verifier.SpawnFixAgent(verifier.FixAgentInput{
+				Ctx:      ctx,
+				Template: "verify-copilot-review.md",
+				Vars: map[string]string{
+					"{{TASK_TITLE}}":      nextTask,
+					"{{REVIEW_FEEDBACK}}": reviewCtx,
+				},
+				Attempt:     1,
+				WorkDir:     workDir,
+				RawLogPath:  rawLogPath,
+				Description: "Copilot review feedback",
+			})
 		},
 		onPushed: func() error {
 			return l.git.ReplyToAndResolveComments(ctx, prNumber, actionable)

@@ -92,26 +92,19 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	maxTestFix := l.maxTestFixAttempts()
 	maxLLMVerify := l.maxLLMVerifyAttempts()
 
-	spawn := verifier.FixAgentSpawn{
-		Ctx:        p.ctx,
-		TaskTitle:  p.nextTask,
-		WorkDir:    p.workDir,
-		RawLogPath: p.rawLogPath,
-	}
-
 	// ── Test fix loop ──
 	testResult, _ := l.verifier.RunTests(p.ctx, p.workDir)
 	if testResult.ScriptMissing {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "No ralph:verify script — skipping test verification. Add a verify script for stronger guarantees.")
 	} else if !testResult.Passed {
-		if !l.runTestFixLoop(spawn, taskAccept, testResult.Details, maxTestFix) {
+		if !l.runTestFixLoop(p, taskAccept, testResult.Details, maxTestFix) {
 			return false, ""
 		}
 	}
 
 	// ── Compile fix loop (post-tests) ──
 	if p.workDir != "" {
-		if !l.runCompileFixLoop(spawn, taskAccept, maxTestFix) {
+		if !l.runCompileFixLoop(p, taskAccept, maxTestFix) {
 			return false, ""
 		}
 	}
@@ -138,7 +131,7 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	}
 
 	// ── LLM verification fix loop ──
-	verified, skipReason = l.runLLMVerifyFixLoop(p, spawn, taskDesc, taskAccept, maxLLMVerify, maxTestFix)
+	verified, skipReason = l.runLLMVerifyFixLoop(p, taskDesc, taskAccept, maxLLMVerify, maxTestFix)
 	if !verified {
 		return false, skipReason
 	}
@@ -147,7 +140,7 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	// Fix agents spawned during LLM verification may have introduced new
 	// build errors; re-check before accepting the signal.
 	if p.workDir != "" {
-		if !l.runCompileFixLoop(spawn, taskAccept, maxTestFix) {
+		if !l.runCompileFixLoop(p, taskAccept, maxTestFix) {
 			return false, ""
 		}
 	}
@@ -158,7 +151,7 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 // runTestFixLoop handles the "tests failed; spawn fix agent; re-run" retry
 // cycle. Returns true when tests eventually pass, false when attempts are
 // exhausted or the fix agent fails to signal.
-func (l *Loop) runTestFixLoop(spawn verifier.FixAgentSpawn, taskAccept, testDetails string, maxAttempts int) bool {
+func (l *Loop) runTestFixLoop(p verifyPipelineInput, taskAccept, testDetails string, maxAttempts int) bool {
 	attempts := 0
 	for {
 		attempts++
@@ -169,13 +162,25 @@ func (l *Loop) runTestFixLoop(spawn verifier.FixAgentSpawn, taskAccept, testDeta
 			return false
 		}
 
-		result := l.verifier.SpawnTestFixAgent(spawn, taskAccept, testDetails, attempts, maxAttempts)
+		result := l.verifier.SpawnFixAgent(verifier.FixAgentInput{
+			Ctx:      p.ctx,
+			Template: "verify-tests.md",
+			Vars: map[string]string{
+				"{{TASK_TITLE}}":       p.nextTask,
+				"{{TASK_DESCRIPTION}}": fmt.Sprintf("Tests failed after completion. Fix the failures.\n\nAcceptance criteria:\n%s", taskAccept),
+				"{{TEST_OUTPUT}}":      testDetails,
+			},
+			Attempt:     attempts,
+			WorkDir:     p.workDir,
+			RawLogPath:  p.rawLogPath,
+			Description: "test failures",
+		})
 		if !result.SignalDetected {
 			return false
 		}
 
 		l.logger.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after test fix agent...")
-		rerun, rerunElapsed := l.verifier.RunTests(spawn.Ctx, spawn.WorkDir)
+		rerun, rerunElapsed := l.verifier.RunTests(p.ctx, p.workDir)
 		if rerun.Passed {
 			l.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", rerunElapsed)
 			return true
@@ -188,8 +193,8 @@ func (l *Loop) runTestFixLoop(spawn verifier.FixAgentSpawn, taskAccept, testDeta
 // re-check" retry cycle. Uses its own attempt counter independent of test
 // fix attempts. Returns true when compilation passes, false when attempts
 // are exhausted.
-func (l *Loop) runCompileFixLoop(spawn verifier.FixAgentSpawn, taskAccept string, maxAttempts int) bool {
-	compileResult := l.verifier.CompileCheck(spawn.Ctx, spawn.WorkDir)
+func (l *Loop) runCompileFixLoop(p verifyPipelineInput, taskAccept string, maxAttempts int) bool {
+	compileResult := l.verifier.CompileCheck(p.ctx, p.workDir)
 	if compileResult.Passed {
 		l.logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
 		return true
@@ -207,12 +212,24 @@ func (l *Loop) runCompileFixLoop(spawn verifier.FixAgentSpawn, taskAccept string
 			return false
 		}
 
-		result := l.verifier.SpawnCompileFixAgent(spawn, taskAccept, details, attempts, maxAttempts)
+		result := l.verifier.SpawnFixAgent(verifier.FixAgentInput{
+			Ctx:      p.ctx,
+			Template: "verify-tests.md",
+			Vars: map[string]string{
+				"{{TASK_TITLE}}":       p.nextTask,
+				"{{TASK_DESCRIPTION}}": fmt.Sprintf("Build/type check failed after completion. Fix the compile errors.\n\nAcceptance criteria:\n%s", taskAccept),
+				"{{TEST_OUTPUT}}":      details,
+			},
+			Attempt:     attempts,
+			WorkDir:     p.workDir,
+			RawLogPath:  p.rawLogPath,
+			Description: "build errors",
+		})
 		if !result.SignalDetected {
 			return false
 		}
 
-		recheck := l.verifier.CompileCheck(spawn.Ctx, spawn.WorkDir)
+		recheck := l.verifier.CompileCheck(p.ctx, p.workDir)
 		if recheck.Passed {
 			l.logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed after fix agent")
 			return true
@@ -232,7 +249,7 @@ func (l *Loop) runCompileFixLoop(spawn verifier.FixAgentSpawn, taskAccept string
 //
 // Returns (verified, skipReason). A non-empty skipReason means the LLM
 // exhausted its attempts and the task should be skipped.
-func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgentSpawn, taskDesc, taskAccept string, maxLLMAttempts, maxTestFix int) (bool, string) {
+func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, taskDesc, taskAccept string, maxLLMAttempts, maxTestFix int) (bool, string) {
 	attempts := 0
 	for {
 		// Assert signal-time HEAD is still reachable before consuming an attempt.
@@ -275,7 +292,20 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 			return false, ""
 		}
 
-		result := l.verifier.SpawnVerifyFixAgent(spawn, taskDesc, taskAccept, llmResult.Details, attempts, maxLLMAttempts)
+		result := l.verifier.SpawnFixAgent(verifier.FixAgentInput{
+			Ctx:      p.ctx,
+			Template: "verify-fix.md",
+			Vars: map[string]string{
+				"{{TASK_TITLE}}":          p.nextTask,
+				"{{TASK_DESCRIPTION}}":    taskDesc,
+				"{{ACCEPTANCE_CRITERIA}}": taskAccept,
+				"{{REJECTION_REASON}}":    llmResult.Details,
+			},
+			Attempt:     attempts,
+			WorkDir:     p.workDir,
+			RawLogPath:  p.rawLogPath,
+			Description: "verification rejection",
+		})
 		if !result.SignalDetected {
 			return false, ""
 		}
