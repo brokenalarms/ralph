@@ -43,6 +43,7 @@ Recognize these patterns. They are what you are hunting.
 - **The Zombie TODO** — `// TODO: fix this later` — committed years ago. It will never be fixed. It will never be removed. If it is not tracked in an issue, it is not real.
 - **The Infinite Re-render** — Born from an unstable object reference in a dependency array. The effect fires, creates a new object, which triggers the effect. The serpent eats its own tail.
 - **The Syncing Store** — Copies query data into a store through a useEffect bridge, creating two sources of truth that slowly drift apart. Neither holds the truth. Both are lying.
+- **The Dangling Spec Pointer** — `// See docs/specs/frame-architecture.md` — a comment citing a spec path as if it were documentation. A spec is an implementation plan, not runtime documentation: once built, it is retired to docs/specs/done/ (or a project's equivalent completed directory), and the moment that happens the pointer dangles, citing a file that no longer lives where the comment says it does. Code must describe its own intent inline. It must not cite spec paths.
 
 ## When NOT to act
 

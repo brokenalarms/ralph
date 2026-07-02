@@ -1612,3 +1612,42 @@ func TestBeadCreation_SpecRetirementAC(t *testing.T) {
 		t.Error("spec-retirement bullet must live inside the 'Acceptance criteria as regression guards' section")
 	}
 }
+
+// Proves: style-guide.md's Bestiary forbids source code from citing
+// docs/specs/ paths in comments (e.g. "See docs/specs/foo.md"), since specs
+// are retired to docs/specs/done/ after implementation and any in-code
+// pointer to the original path goes dangling.
+func TestStyleGuide_ForbidsSpecPathReferences(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "style-guide.md"))
+	if err != nil {
+		t.Fatalf("reading style-guide.md: %v", err)
+	}
+	s := string(content)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"docs/specs/", "must name the docs/specs/ path pattern being forbidden"},
+		{"docs/specs/done/", "must explain specs are retired to docs/specs/done/ after implementation"},
+		{"implementation plan", "must explain a spec is a plan, not runtime documentation"},
+	}
+	for _, tc := range required {
+		if !strings.Contains(s, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	bestiaryIdx := strings.Index(s, "## The Bestiary")
+	whenNotIdx := strings.Index(s, "## When NOT to act")
+	specIdx := strings.Index(s, "docs/specs/done/")
+	if bestiaryIdx < 0 {
+		t.Fatal("'The Bestiary' section not found")
+	}
+	if whenNotIdx < 0 {
+		t.Fatal("'When NOT to act' section not found")
+	}
+	if specIdx < bestiaryIdx || specIdx > whenNotIdx {
+		t.Error("spec-path-reference rule must live inside 'The Bestiary' section as a creature entry")
+	}
+}
