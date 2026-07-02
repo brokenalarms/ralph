@@ -971,7 +971,6 @@ func (g *ghCLI) PollReview(ctx context.Context, nwo string, botUsername string, 
 		return nil, err
 	}
 	if existing != nil {
-		fmt.Printf("review received (%d comments)\n", len(existing.Comments))
 		return existing, nil
 	}
 
@@ -981,7 +980,6 @@ func (g *ghCLI) PollReview(ctx context.Context, nwo string, botUsername string, 
 		return nil, err
 	}
 	if !requested {
-		fmt.Printf("not assigned — skipping\n")
 		return nil, nil
 	}
 
@@ -992,7 +990,6 @@ func (g *ghCLI) PollReview(ctx context.Context, nwo string, botUsername string, 
 			return nil, err
 		}
 		if review != nil {
-			fmt.Printf("review received (%d comments)\n", len(review.Comments))
 			return review, nil
 		}
 		remaining := time.Until(deadline)
