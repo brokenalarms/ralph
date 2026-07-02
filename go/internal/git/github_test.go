@@ -861,6 +861,57 @@ func TestPollReview_NotRequested_ReturnsNilImmediately(t *testing.T) {
 	}
 }
 
+// PollReview must not write anything to stdout — status ("not assigned",
+// "review received") is the caller's responsibility to log through the
+// structured logger. Raw prints show up as orphan lines with no [o][git]
+// domain prefix or PR link.
+func TestPollReview_DoesNotWriteToStdout(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"if echo \"$@\" | grep -q 'requested_reviewers'; then\n" +
+		"  echo '{\"users\":[],\"teams\":[]}'\n" +
+		"else\n" +
+		"  echo '[]'\n" +
+		"fi\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+
+	g := &ghCLI{}
+	review, pollErr := g.PollReview(context.Background(), "owner/repo", "copilot-pull-request-reviewer", 42, 60*time.Second)
+
+	w.Close()
+	os.Stdout = origStdout
+	var captured strings.Builder
+	buf := make([]byte, 1024)
+	for {
+		n, readErr := r.Read(buf)
+		captured.Write(buf[:n])
+		if readErr != nil {
+			break
+		}
+	}
+
+	if pollErr != nil {
+		t.Fatalf("unexpected error: %v", pollErr)
+	}
+	if review != nil {
+		t.Errorf("expected nil review, got %+v", review)
+	}
+	if captured.Len() != 0 {
+		t.Errorf("expected PollReview to write nothing to stdout, got %q", captured.String())
+	}
+}
+
 // PollReview keeps polling when the bot's review state is PENDING (review not yet
 // submitted) and returns the review once it reaches a terminal state like APPROVED.
 func TestPollReview_PendingStateKeepsPolling(t *testing.T) {

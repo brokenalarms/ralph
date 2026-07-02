@@ -526,7 +526,7 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 			result.PendingReviewer = reviewer.BotUsername
 			return result, nil
 		}
-		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "No %s review arrived within timeout — proceeding to merge", reviewer.BotUsername)
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "No %s review pending — continuing to CI-gated merge (waits for CI, merges only if it passes)", reviewer.BotUsername)
 	}
 
 	// Check if stacked (PR targets non-default branch — merge skipped).
@@ -673,7 +673,7 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		return false, ErrStackedPRWaiting
 	}
 
-	r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: prLink}, "Auto-merging...")
+	r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: prLink}, "Waiting for CI — will merge only if it passes")
 
 	// Fast path: when local HEAD already matches the PR head SHA and CI is already
 	// passing, skip the rebase+push cycle — no new tree to test, no push needed.

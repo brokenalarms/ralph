@@ -591,6 +591,65 @@ func TestShip_InfrastructureFailure_FalseWhenJobStepsExecuted(t *testing.T) {
 	}
 }
 
+// Ship logs that no review is pending and the loop is continuing to a
+// CI-gated merge when PollReview returns nil — it must not claim a timeout
+// occurred (PollReview returns immediately, without waiting, when the bot was
+// never a requested reviewer) or that a merge is happening next (the loop
+// still has to rebase, push, and wait on CI before any merge attempt).
+func TestShip_NoReviewPending_LogsCIGatedMergeNotTimeoutOrImmediateMerge(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("rev-parse HEAD", "sha-review-log", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  101,
+			Branch:  "ralph/test/01-ship-review-log",
+			Base:    "main",
+			HeadSHA: "sha-review-log",
+			State:   PRStateOpen,
+		}},
+		Checks: map[int][]CICheckResult{101: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
+		// PollReviewResult/PollReviewErr default to nil — no review arrives.
+	})
+
+	log := &testLog{}
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: log},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-ship-review-log"),
+	)
+
+	result, err := repo.Ship(context.Background(), ShipOpts{
+		AutoMerge: true,
+		PRNumber:  101,
+		Reviewers: []Reviewer{{BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: time.Millisecond}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Merged {
+		t.Error("expected Merged=true once CI passes with no review pending")
+	}
+
+	if log.contains("proceeding to merge") {
+		t.Error("log must not say 'proceeding to merge' — a CI-gated merge attempt follows, not an immediate merge")
+	}
+	if log.contains("within timeout") {
+		t.Error("log must not claim a timeout occurred — PollReview returns immediately when the bot isn't a requested reviewer")
+	}
+	if !log.contains("No copilot-pull-request-reviewer review pending") {
+		t.Errorf("expected log to state no review is pending, got: %v", log.messages)
+	}
+	if !log.contains("CI-gated merge") {
+		t.Errorf("expected log to describe the CI-gated merge that follows, got: %v", log.messages)
+	}
+}
+
 // AutoMergeCurrentBranch returns an error when CI times out (does not complete
 // within the poll timeout). The PR is left open unmerged for CI to gate naturally.
 func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
@@ -1106,6 +1165,48 @@ func TestAutoMerge_CIAlreadyPassing_SkipsPushAndMergesDirectly(t *testing.T) {
 	// Log must confirm the fast path was taken.
 	if !log.contains("CI already passing on sha-already-passing") {
 		t.Errorf("expected fast-path log message, got: %v", log.messages)
+	}
+}
+
+// AutoMergeCurrentBranch logs that it is waiting for CI and will merge only if
+// it passes, not "Auto-merging..." — which reads as an immediate merge before
+// the CI-gated rebase/push/AwaitCI sequence has even started.
+func TestAutoMergeCurrentBranch_LogsWaitingForCINotImmediateMerge(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("rev-parse HEAD", "sha-wait-ci-log", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  81,
+			Branch:  "ralph/test/01-wait-ci-log",
+			Title:   "wait for ci wording",
+			HeadSHA: "sha-wait-ci-log",
+			State:   PRStateOpen,
+		}},
+		Checks: map[int][]CICheckResult{81: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
+	})
+
+	log := &testLog{}
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: log},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-wait-ci-log"),
+	)
+
+	if _, err := repo.AutoMergeCurrentBranch(context.Background()); err != nil {
+		t.Fatalf("expected merge to succeed, got: %v", err)
+	}
+
+	if log.contains("Auto-merging...") {
+		t.Error("log must not contain 'Auto-merging...' — it overstates an immediate merge")
+	}
+	if !log.contains("Waiting for CI") || !log.contains("merge only if it passes") {
+		t.Errorf("expected log to convey waiting for CI and merging only if it passes, got: %v", log.messages)
 	}
 }
 
