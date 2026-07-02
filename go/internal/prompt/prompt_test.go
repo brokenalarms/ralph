@@ -1568,3 +1568,47 @@ func TestBuildTaskManagerPrompt_SplitAtOwnDiscretion(t *testing.T) {
 		t.Error("split-at-own-discretion rule must come before the 'Signal that a bead was too big' paragraph")
 	}
 }
+
+// Proves: bead-creation.md's 'Acceptance criteria as regression guards' section
+// requires a spec-driven multi-stage refactor's final dependent bead to retire
+// the implemented spec (move it to docs/specs/done/ and strip source references
+// to its path), with a standalone follow-up bead only as a fallback when the
+// final bead is already large.
+func TestBeadCreation_SpecRetirementAC(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
+	if err != nil {
+		t.Fatalf("reading bead-creation.md: %v", err)
+	}
+	s := string(content)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"docs/specs/", "must scope the rule to beads implementing a spec under docs/specs/"},
+		{"final", "must target the final dependent bead in the spec-driven bead set"},
+		{"docs/specs/done/", "must require moving the implemented spec into docs/specs/done/"},
+		{"completed/", "must name completed/ as the fallback completed-spec directory for other projects"},
+		{"no source file still references the spec path", "must require removing source references to the spec path"},
+		{"standalone follow-up bead", "must name a standalone follow-up bead as the fallback when the final bead is already large"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(s, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	guardsIdx := strings.Index(s, "### Acceptance criteria as regression guards")
+	scopeIdx := strings.Index(s, "### Scope discipline")
+	specIdx := strings.Index(s, "docs/specs/done/")
+	if guardsIdx < 0 {
+		t.Fatal("'Acceptance criteria as regression guards' section not found")
+	}
+	if scopeIdx < 0 {
+		t.Fatal("'Scope discipline' section not found")
+	}
+	if specIdx < guardsIdx || specIdx > scopeIdx {
+		t.Error("spec-retirement bullet must live inside the 'Acceptance criteria as regression guards' section")
+	}
+}

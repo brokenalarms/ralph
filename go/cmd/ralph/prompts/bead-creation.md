@@ -544,6 +544,17 @@ Anti-patterns:
   name the specific symbol or import that must no longer appear in the caller's
   file. This prevents agents from satisfying extraction beads by moving code
   without changing the dependency graph.
+- When a bead set implements a spec under `docs/specs/`, the **final**
+  dependent bead's acceptance criteria must require: (1) moving the
+  implemented spec file into the project's completed spec directory
+  (`docs/specs/done/` in this repo; a `completed/` directory elsewhere), and
+  (2) that no source file still references the spec path — e.g. `See
+  docs/specs/foo.md` comments in code are removed. A spec is an
+  implementation plan, not runtime documentation: a stale `See
+  docs/specs/...` reference and a spec left sitting in `docs/specs/` after
+  implementation both make it ambiguous whether the work is still pending.
+  Prefer this as an AC on the final bead; use a standalone follow-up bead
+  only when the final bead is already large.
 
 ### Scope discipline
 
