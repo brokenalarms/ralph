@@ -42,13 +42,13 @@ import (
 //   fetch origin <branch>          fetch              allowed
 //   branch -D                      branch delete      allowed
 //
-// git_stack.go (RebaseStack)
+// git_stack.go (rebaseInTempWorktree, shared by RebaseStack and
+// RebaseBranchOntoRemote)
 //   worktree remove / prune / add  worktree mgmt      allowed
 //   branch -D                      branch delete      allowed
 //   fetch origin <branch>          fetch              allowed
-//
-// git_stack.go (RebaseBranchOntoRemote) — FIXED: all checkout/rebase/push
-//   now run in a temp worktree; only fetch and worktree/branch ops remain in projectDir
+//   all checkout/rebase/push run in the temp worktree; only fetch and
+//   worktree/branch ops touch projectDir
 //
 // git_stack.go (ResetBranchToRemote) — checkout-aware: uses merge --ff-only
 //   when branch is checked out (worktree update), update-ref otherwise
@@ -66,84 +66,15 @@ type RebaseStackOpts struct {
 // If a worktree from a previous conflict resolution already exists and the
 // branches are already rebased, skips the rebase and goes straight to push.
 func (r *repo) RebaseStack(ctx context.Context, opts RebaseStackOpts) error {
-	slug := strings.ReplaceAll(opts.TopBranch, "/", "-")
-	wtDir := filepath.Join(r.ralphDir, "worktrees", "merge-"+slug)
-	tmpBranch := "ralph-merge/" + slug
-
-	// Check if worktree from a previous run exists. Verify branches are
-	// already rebased — stale worktrees from interrupted runs must be recreated.
-	worktreeReady := false
-	if _, err := os.Stat(filepath.Join(wtDir, ".git")); err == nil {
-		bottomBranch := opts.AllBranches[0]
-		if !r.isAncestorCtx(ctx, wtDir, "origin/"+opts.BaseBranch, bottomBranch) {
-			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
-				"Stale worktree found — branches not rebased onto %s, recreating", opts.BaseBranch)
-			r.gitCmdCtx(ctx, r.projectDir, "worktree", "remove", "--force", wtDir)
-			r.gitCmdCtx(ctx, r.projectDir, "worktree", "prune")
-		} else {
-			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Resuming from existing worktree: %s", wtDir)
-			worktreeReady = true
-		}
-	}
-
-	if !worktreeReady {
-		os.RemoveAll(wtDir)
-		r.gitCmdCtx(ctx, r.projectDir, "worktree", "prune")
-		r.gitCmdCtx(ctx, r.projectDir, "branch", "-D", tmpBranch)
-
-		// Fetch main and all stack branches so --update-refs has current refs.
-		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Fetching %s and %d stack branches...", opts.BaseBranch, len(opts.AllBranches))
-		r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", opts.BaseBranch)
-		for _, b := range opts.AllBranches {
-			r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", b)
-		}
-
-		// Create worktree on the top branch.
-		out, err := r.run().Run(ctx, r.projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+opts.TopBranch)
-		if err != nil {
-			return fmt.Errorf("worktree setup failed: %s", out)
-		}
-
-		// Set up local tracking branches for --update-refs.
-		for _, b := range opts.AllBranches {
-			r.gitCmdCtx(ctx, wtDir, "branch", "-f", b, "origin/"+b)
-		}
-
-		// Rebase with --update-refs onto base branch.
-		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Rebasing with --update-refs onto origin/%s...", opts.BaseBranch)
-		if r.gitCmdErrCtx(ctx, wtDir, "rebase", "--update-refs", "origin/"+opts.BaseBranch) != nil {
-			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict — attempting auto-resolve...")
-			if autoErr := rebasecontinue.Run(wtDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
-				r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
-					"Rebase has conflicts — resolve manually in:\n  %s", wtDir)
-				r.logger.Emit(logging.Opts{Domain: logging.Git},
-					"Then run: cd %s && git-rebase-continue", wtDir)
-				r.logger.Emit(logging.Opts{Domain: logging.Git},
-					"Then re-run: ralph merge %d", opts.TopPR)
-				r.logger.Emit(logging.Opts{}, "\n%s", autoErr.Error())
-				return fmt.Errorf("rebase conflicts in %s: %w", wtDir, autoErr)
-			}
-		}
-	}
-
-	cleanup := func() {
-		r.gitCmdCtx(ctx, r.projectDir, "worktree", "remove", "--force", wtDir)
-		r.gitCmdCtx(ctx, r.projectDir, "branch", "-D", tmpBranch)
-	}
-
-	// Force-push all branches.
-	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Force-pushing %d branches...", len(opts.AllBranches))
-	for _, b := range opts.AllBranches {
-		r.logger.Emit(logging.Opts{Domain: logging.Git}, "  Pushing %s", b)
-		if err := r.gitCmdErrCtx(ctx, wtDir, "push", "--force", "origin", b); err != nil {
-			cleanup()
-			return fmt.Errorf("push failed for %s: %w", b, err)
-		}
-	}
-
-	cleanup()
-	r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "All branches rebased and pushed")
-	return nil
+	return r.rebaseInTempWorktree(ctx, rebaseSpec{
+		kind:         "merge",
+		branch:       opts.TopBranch,
+		baseBranch:   opts.BaseBranch,
+		pushBranches: opts.AllBranches,
+		updateRefs:   true,
+		allowResume:  true,
+		topPR:        opts.TopPR,
+	})
 }
 
 // RebaseBranchOntoRemote fetches branch and baseBranch from origin, then
@@ -152,41 +83,138 @@ func (r *repo) RebaseStack(ctx context.Context, opts RebaseStackOpts) error {
 // Attempts auto-resolution of mechanical conflicts before returning an error.
 // The temp worktree is removed on success and on failure.
 func (r *repo) RebaseBranchOntoRemote(ctx context.Context, branch, baseBranch string) error {
-	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", baseBranch)
-	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
+	return r.rebaseInTempWorktree(ctx, rebaseSpec{
+		kind:           "rebase",
+		branch:         branch,
+		baseBranch:     baseBranch,
+		pushBranches:   []string{branch},
+		forceWithLease: true,
+	})
+}
 
-	slug := strings.ReplaceAll(branch, "/", "-")
-	wtDir := filepath.Join(r.ralphDir, "worktrees", "rebase-"+slug)
-	tmpBranch := "ralph-rebase/" + slug
+// rebaseSpec configures a single rebaseInTempWorktree run. branch is checked
+// out into the temp worktree; pushBranches is both the set fetched from
+// origin before the rebase and the set force-pushed after it.
+type rebaseSpec struct {
+	kind           string   // "merge" or "rebase" — worktree dir / temp branch naming
+	branch         string   // branch checked out into the temp worktree
+	baseBranch     string   // base branch to rebase onto
+	pushBranches   []string // branches fetched before, and force-pushed after, the rebase
+	updateRefs     bool     // pass --update-refs to git rebase and pre-seed local tracking branches for each pushBranch
+	forceWithLease bool     // push --force-with-lease origin HEAD:<branch> for the single pushBranch, instead of --force origin <branch> per pushBranch
+	allowResume    bool     // resume an existing worktree when pushBranches[0] is already rebased onto baseBranch
+	topPR          int      // when nonzero, log stack-specific manual-resolution guidance referencing this PR on unresolved conflict
+}
 
-	os.RemoveAll(wtDir)
-	r.gitCmdCtx(ctx, r.projectDir, "worktree", "prune")
-	r.gitCmdCtx(ctx, r.projectDir, "branch", "-D", tmpBranch)
-
-	out, err := r.run().Run(ctx, r.projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+branch)
-	if err != nil {
-		return fmt.Errorf("worktree setup failed: %s", out)
-	}
+// rebaseInTempWorktree owns the full temp-worktree lifecycle shared by
+// RebaseStack and RebaseBranchOntoRemote: derive the worktree dir and temp
+// branch from spec.branch, clean up any prior state, fetch spec.baseBranch
+// and spec.pushBranches from origin, create the worktree, rebase (with
+// rebasecontinue auto-resolve on conflict), force-push spec.pushBranches,
+// then remove the temp worktree and branch. projectDir's working tree is
+// never touched — all checkout/rebase/push run inside the temp worktree.
+func (r *repo) rebaseInTempWorktree(ctx context.Context, spec rebaseSpec) error {
+	slug := strings.ReplaceAll(spec.branch, "/", "-")
+	wtDir := filepath.Join(r.ralphDir, "worktrees", spec.kind+"-"+slug)
+	tmpBranch := "ralph-" + spec.kind + "/" + slug
 
 	cleanup := func() {
 		r.gitCmdCtx(ctx, r.projectDir, "worktree", "remove", "--force", wtDir)
 		r.gitCmdCtx(ctx, r.projectDir, "branch", "-D", tmpBranch)
 	}
 
-	if r.gitCmdErrCtx(ctx, wtDir, "rebase", "origin/"+baseBranch) != nil {
-		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict on %s — attempting auto-resolve...", branch)
-		if autoErr := rebasecontinue.Run(wtDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
-			cleanup()
-			return fmt.Errorf("rebase conflicts on %s: %w", branch, autoErr)
+	worktreeReady := false
+	if spec.allowResume {
+		// Check if a worktree from a previous run exists. Verify branches
+		// are already rebased — stale worktrees from interrupted runs must
+		// be recreated.
+		if _, err := os.Stat(filepath.Join(wtDir, ".git")); err == nil {
+			bottomBranch := spec.pushBranches[0]
+			if !r.isAncestorCtx(ctx, wtDir, "origin/"+spec.baseBranch, bottomBranch) {
+				r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+					"Stale worktree found — branches not rebased onto %s, recreating", spec.baseBranch)
+				r.gitCmdCtx(ctx, r.projectDir, "worktree", "remove", "--force", wtDir)
+				r.gitCmdCtx(ctx, r.projectDir, "worktree", "prune")
+			} else {
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Resuming from existing worktree: %s", wtDir)
+				worktreeReady = true
+			}
 		}
 	}
 
-	if _, pushErr := r.run().Run(ctx, wtDir, "push", "--force-with-lease", "origin", "HEAD:"+branch); pushErr != nil {
-		cleanup()
-		return fmt.Errorf("force-push failed for %s: %w", branch, pushErr)
+	if !worktreeReady {
+		os.RemoveAll(wtDir)
+		r.gitCmdCtx(ctx, r.projectDir, "worktree", "prune")
+		r.gitCmdCtx(ctx, r.projectDir, "branch", "-D", tmpBranch)
+
+		// Fetch the base and all push branches so the rebase (and
+		// --update-refs, when requested) sees current refs.
+		if spec.updateRefs {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Fetching %s and %d stack branches...", spec.baseBranch, len(spec.pushBranches))
+		}
+		r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", spec.baseBranch)
+		for _, b := range spec.pushBranches {
+			r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", b)
+		}
+
+		out, err := r.run().Run(ctx, r.projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+spec.branch)
+		if err != nil {
+			return fmt.Errorf("worktree setup failed: %s", out)
+		}
+
+		rebaseArgs := []string{"rebase"}
+		if spec.updateRefs {
+			// Set up local tracking branches for --update-refs.
+			for _, b := range spec.pushBranches {
+				r.gitCmdCtx(ctx, wtDir, "branch", "-f", b, "origin/"+b)
+			}
+			rebaseArgs = append(rebaseArgs, "--update-refs")
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Rebasing with --update-refs onto origin/%s...", spec.baseBranch)
+		}
+		rebaseArgs = append(rebaseArgs, "origin/"+spec.baseBranch)
+
+		if r.gitCmdErrCtx(ctx, wtDir, rebaseArgs...) != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict on %s — attempting auto-resolve...", spec.branch)
+			if autoErr := rebasecontinue.Run(wtDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
+				if spec.topPR != 0 {
+					// Resumable case: leave the worktree in place so the
+					// conflict can be resolved manually and the run resumed.
+					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+						"Rebase has conflicts — resolve manually in:\n  %s", wtDir)
+					r.logger.Emit(logging.Opts{Domain: logging.Git},
+						"Then run: cd %s && git-rebase-continue", wtDir)
+					r.logger.Emit(logging.Opts{Domain: logging.Git},
+						"Then re-run: ralph merge %d", spec.topPR)
+					r.logger.Emit(logging.Opts{}, "\n%s", autoErr.Error())
+				} else {
+					cleanup()
+				}
+				return fmt.Errorf("rebase conflicts on %s: %w", spec.branch, autoErr)
+			}
+		}
+	}
+
+	if spec.forceWithLease {
+		branch := spec.pushBranches[0]
+		if _, err := r.run().Run(ctx, wtDir, "push", "--force-with-lease", "origin", "HEAD:"+branch); err != nil {
+			cleanup()
+			return fmt.Errorf("push failed for %s: %w", branch, err)
+		}
+	} else {
+		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Force-pushing %d branches...", len(spec.pushBranches))
+		for _, b := range spec.pushBranches {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "  Pushing %s", b)
+			if err := r.gitCmdErrCtx(ctx, wtDir, "push", "--force", "origin", b); err != nil {
+				cleanup()
+				return fmt.Errorf("push failed for %s: %w", b, err)
+			}
+		}
 	}
 
 	cleanup()
+	if !spec.forceWithLease {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "All branches rebased and pushed")
+	}
 	return nil
 }
 
