@@ -344,7 +344,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 
-	taskModel := agent.ModelOpus
+	taskModel := agent.ModelFable
 
 	absDir, _ := filepath.Abs(sub.Dir)
 

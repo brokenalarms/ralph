@@ -144,6 +144,8 @@ func ModelTag(model string) string {
 		color = Yellow
 	case "opus":
 		color = Magenta
+	case "fable":
+		color = Green
 	default:
 		color = Cyan
 	}
@@ -151,7 +153,7 @@ func ModelTag(model string) string {
 }
 
 func modelShortName(model string) string {
-	for _, family := range []string{"opus", "sonnet", "haiku"} {
+	for _, family := range []string{"opus", "sonnet", "haiku", "fable"} {
 		if strings.Contains(model, family) {
 			return family
 		}
