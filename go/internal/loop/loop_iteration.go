@@ -278,7 +278,9 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 		return completeTaskOut{action: signalComplete}
 	}
 
-	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch, shipErr := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+	out := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch, shipErr :=
+		out.prNumber, out.prResultURL, out.merged, out.ciFailure, out.ciInfraFailure, out.stacked, out.pushedBranch, out.shipErr
 
 	// Record every successful push in chronological order so completedBranches()
 	// can build the correct stack for the next iteration. This captures both

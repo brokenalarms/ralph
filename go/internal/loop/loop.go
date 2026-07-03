@@ -789,72 +789,79 @@ iterLoop:
 // distinguish "push failed" (skip, work in local worktree) from "no commits"
 // (safe to close). The pr_creation_failed path is separate: push succeeded
 // (pushedBranch != "") but CreatePR returned an error.
-func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, ciInfraFailure bool, stacked bool, pushedBranch string, shipErr error) {
-	// Pre-fetch task description and acceptance criteria so git/github can
-	// build the PR body internally. The orchestrator owns the data, the
-	// git package owns the markdown formatting.
-	var taskDesc, taskAccept string
-	if taskID != "" && l.taskBackend != nil {
-		taskDesc, _ = l.taskBackend.GetDescription(taskID)
-		taskAccept, _ = l.taskBackend.GetAcceptance(taskID)
-	}
+// shipOutcome bundles doShip's result. Zero-value fields mean "nothing
+// happened on that front" (e.g. prNumber == 0 means no PR was created;
+// merged == false with shipErr == nil means a PR is open but not yet merged).
+type shipOutcome struct {
+	prNumber       int
+	prResultURL    string
+	merged         bool
+	ciFailure      bool
+	ciInfraFailure bool
+	stacked        bool
+	pushedBranch   string
+	shipErr        error
+}
 
-	callShip := func(opts git.ShipOpts) (git.ShipResult, error) {
-		result, err := l.git.Ship(ctx, opts)
-		if err != nil {
-			if !l.connectivity.IsOnline() {
-				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
-				l.connectivity.WaitForInternet(ctx, l.logger)
-				result, err = l.git.Ship(ctx, opts)
-			} else if git.IsTransientGitHubError(err) {
-				backoffs := l.cfg.ShipRetryBackoffs
-				if backoffs == nil {
-					backoffs = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
-				}
-				// attempted gates the first call: the initial Ship failure
-				// that got us into this branch already happened above, so
-				// Retry's first fn() call is a passthrough that hands back
-				// that known error rather than shipping again immediately.
-				attempted := false
-				retryErr := retry.Retry(ctx, retry.BackoffOpts{
-					Schedule: backoffs,
-					OnRetry: func(_ int, delay time.Duration) {
-						l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
-					},
-				}, git.IsTransientGitHubError, func() (bool, error) {
-					if !attempted {
-						attempted = true
-						return false, err
-					}
-					result, err = l.git.Ship(ctx, opts)
-					return err == nil, err
-				})
-				if retryErr != nil && ctx.Err() != nil {
-					return result, err
-				}
+// callShip invokes git.Ship and layers connectivity and transient-GitHub-error
+// retries on top: a dead connection waits for the internet to return before
+// retrying once, while a transient GitHub error retries on the configured
+// backoff schedule via retry.Retry.
+func (l *Loop) callShip(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+	result, err := l.git.Ship(ctx, opts)
+	if err != nil {
+		if !l.connectivity.IsOnline() {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
+			l.connectivity.WaitForInternet(ctx, l.logger)
+			result, err = l.git.Ship(ctx, opts)
+		} else if git.IsTransientGitHubError(err) {
+			backoffs := l.cfg.ShipRetryBackoffs
+			if backoffs == nil {
+				backoffs = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
 			}
-			if err != nil {
-				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
+			// attempted gates the first call: the initial Ship failure
+			// that got us into this branch already happened above, so
+			// Retry's first fn() call is a passthrough that hands back
+			// that known error rather than shipping again immediately.
+			attempted := false
+			retryErr := retry.Retry(ctx, retry.BackoffOpts{
+				Schedule: backoffs,
+				OnRetry: func(_ int, delay time.Duration) {
+					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
+				},
+			}, git.IsTransientGitHubError, func() (bool, error) {
+				if !attempted {
+					attempted = true
+					return false, err
+				}
+				result, err = l.git.Ship(ctx, opts)
+				return err == nil, err
+			})
+			if retryErr != nil && ctx.Err() != nil {
+				return result, err
 			}
 		}
-		return result, err
+		if err != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
+		}
 	}
+	return result, err
+}
 
-	// Phase 1: push + PR (no merge yet) so push happens before reviewer detection.
-	result, err := callShip(git.ShipOpts{
+// shipPhase1 pushes the branch and creates the PR (no merge yet), so the push
+// lands before reviewer detection runs. It links the task to the PR as soon
+// as one exists and kicks off lazy reviewer detection regardless of the
+// AutoMerge setting.
+func (l *Loop) shipPhase1(ctx context.Context, taskID, title, taskDesc, taskAccept, summary string) (git.ShipResult, error) {
+	result, err := l.callShip(ctx, git.ShipOpts{
 		TaskID:      taskID,
 		TaskTitle:   title,
 		Description: taskDesc,
 		Acceptance:  taskAccept,
 		Summary:     summary,
 	})
-	// result.PushedBranch is populated by shipPR when the push leg succeeded,
-	// even if CreatePR then returned an error. Thread it through so the
-	// caller can distinguish "nothing was pushed" from "push landed on
-	// remote but PR creation failed".
-	pushedBranch = result.PushedBranch
 	if err != nil {
-		return result.PRNumber, result.PRURL, false, false, false, false, pushedBranch, err
+		return result, err
 	}
 
 	// Link task to PR as soon as PR is available.
@@ -875,14 +882,16 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 	// context is established) regardless of AutoMerge setting.
 	l.ensureActiveReviewers(ctx)
 
-	if !l.cfg.AutoMerge || result.PRNumber == 0 {
-		return result.PRNumber, result.PRURL, false, false, false, false, pushedBranch, nil
-	}
+	return result, nil
+}
 
-	// Phase 2: Ship with merge enabled. Pass the PR number so Ship
-	// skips push+PR and proceeds directly to reviewer poll + merge.
-	prResultNum := result.PRNumber
-	prResultURL = result.PRURL
+// shipPhase2Merge runs the CI/merge retry state machine: it ships with merge
+// enabled and, on ReviewFixNeeded, CI failure, or a merge conflict, spawns the
+// matching fix agent and retries — up to maxShipRetries — before giving up.
+func (l *Loop) shipPhase2Merge(ctx context.Context, taskID, title, workDir, rawLogPath string, phase1 git.ShipResult) shipOutcome {
+	prResultNum := phase1.PRNumber
+	prResultURL := phase1.PRURL
+	pushedBranch := phase1.PushedBranch
 
 	// Seed review-addressed state from persistent store.
 	reviewAddressed := make(map[string]bool)
@@ -903,7 +912,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 	var mergeResult git.ShipResult
 	for attempt := 0; attempt < maxShipRetries; attempt++ {
 		var mergeErr error
-		mergeResult, mergeErr = callShip(git.ShipOpts{
+		mergeResult, mergeErr = l.callShip(ctx, git.ShipOpts{
 			PRNumber:        prResultNum,
 			AutoMerge:       true,
 			Reviewers:       l.activeReviewers,
@@ -911,7 +920,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		})
 		if mergeErr != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship (merge): %v", mergeErr)
-			return prResultNum, prResultURL, false, false, false, false, pushedBranch, nil
+			return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch}
 		}
 		if mergeResult.ReviewFixNeeded {
 			// Review fix needed: spawn fix agent, mark addressed, retry.
@@ -932,7 +941,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 			if mergeResult.InfrastructureFailure {
 				l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn},
 					"CI infrastructure failure (zero job steps) — closing bead, PR open for merge when CI recovers")
-				return prResultNum, prResultURL, false, true, true, false, pushedBranch, nil
+				return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, ciFailure: true, ciInfraFailure: true, pushedBranch: pushedBranch}
 			}
 			// Real CI failure: spawn fix agent; if it pushed new commits, retry merge.
 			fixResult := l.tryFixCI(ctx, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
@@ -952,7 +961,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 						"Push for CI re-trigger failed: %v", pushErr)
 				}
 				if retry.Wait(ctx, delay, nil) != nil {
-					return prResultNum, prResultURL, false, false, false, false, pushedBranch, nil
+					return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch}
 				}
 				continue
 			}
@@ -963,9 +972,37 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				continue
 			}
 			// Agent could not resolve — give up.
-			return prResultNum, prResultURL, false, false, false, false, pushedBranch, nil
+			return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch}
 		}
-		return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked, pushedBranch, nil
+		return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, merged: mergeResult.Merged, ciFailure: mergeResult.CIFailure, stacked: mergeResult.Stacked, pushedBranch: pushedBranch}
 	}
-	return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked, pushedBranch, nil
+	return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, merged: mergeResult.Merged, ciFailure: mergeResult.CIFailure, stacked: mergeResult.Stacked, pushedBranch: pushedBranch}
+}
+
+func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) shipOutcome {
+	// Pre-fetch task description and acceptance criteria so git/github can
+	// build the PR body internally. The orchestrator owns the data, the
+	// git package owns the markdown formatting.
+	var taskDesc, taskAccept string
+	if taskID != "" && l.taskBackend != nil {
+		taskDesc, _ = l.taskBackend.GetDescription(taskID)
+		taskAccept, _ = l.taskBackend.GetAcceptance(taskID)
+	}
+
+	result, err := l.shipPhase1(ctx, taskID, title, taskDesc, taskAccept, summary)
+	// result.PushedBranch is populated by shipPR when the push leg succeeded,
+	// even if CreatePR then returned an error. Thread it through so the
+	// caller can distinguish "nothing was pushed" from "push landed on
+	// remote but PR creation failed".
+	if err != nil {
+		return shipOutcome{prNumber: result.PRNumber, prResultURL: result.PRURL, pushedBranch: result.PushedBranch, shipErr: err}
+	}
+
+	if !l.cfg.AutoMerge || result.PRNumber == 0 {
+		return shipOutcome{prNumber: result.PRNumber, prResultURL: result.PRURL, pushedBranch: result.PushedBranch}
+	}
+
+	// Phase 2: Ship with merge enabled. Pass the PR number so Ship
+	// skips push+PR and proceeds directly to reviewer poll + merge.
+	return l.shipPhase2Merge(ctx, taskID, title, workDir, rawLogPath, result)
 }
