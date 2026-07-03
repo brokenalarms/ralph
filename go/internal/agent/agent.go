@@ -21,6 +21,7 @@ import (
 const (
 	ModelSonnet = config.ModelSonnet
 	ModelOpus   = config.ModelOpus
+	ModelFable  = config.ModelFable
 )
 
 type Runner struct {

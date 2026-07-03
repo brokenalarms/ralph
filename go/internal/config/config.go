@@ -21,6 +21,7 @@ const (
 	ModelHaiku  = "haiku"
 	ModelSonnet = "sonnet"
 	ModelOpus   = "opus"
+	ModelFable  = "fable"
 )
 
 // Bead assignee identities — the single source of truth for bead ownership.
