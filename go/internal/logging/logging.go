@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/brokenalarms/ralph/internal/config"
 )
 
 // Hyperlink returns an OSC 8 terminal hyperlink that renders visible as
@@ -153,12 +155,7 @@ func ModelTag(model string) string {
 }
 
 func modelShortName(model string) string {
-	for _, family := range []string{"opus", "sonnet", "haiku", "fable"} {
-		if strings.Contains(model, family) {
-			return family
-		}
-	}
-	return model
+	return config.ModelShortName(model)
 }
 
 // Logger provides colored logging with trailing timestamps that appear
