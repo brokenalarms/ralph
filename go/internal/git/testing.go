@@ -81,6 +81,7 @@ type StubGitHubConfig struct {
 	ReplyToReviewErr      error
 	FetchThreadIDsErr     error
 	ResolveThreadErr      error
+	PingErr               error
 }
 
 // stubGitHub is the unexported fake. Tests never see this type directly;
@@ -329,6 +330,10 @@ func (s *stubGitHub) FetchReviewThreadIDs(_ context.Context, _ string, _ int, _ 
 
 func (s *stubGitHub) ResolveReviewThread(_ context.Context, _ string) error {
 	return s.cfg.ResolveThreadErr
+}
+
+func (s *stubGitHub) Ping(_ context.Context) error {
+	return s.cfg.PingErr
 }
 
 // sortInts sorts a slice in ascending order. Local helper to avoid importing
@@ -863,4 +868,8 @@ func (s *stubRepo) GitHubAvailable() bool {
 
 func (s *stubRepo) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
 	return s.gh.ListAllPRs(ctx, workDir)
+}
+
+func (s *stubRepo) PingGitHub(ctx context.Context) error {
+	return s.gh.Ping(ctx)
 }

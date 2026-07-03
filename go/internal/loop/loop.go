@@ -45,10 +45,11 @@ import (
 // startup and between iterations. Defined locally in the loop package
 // (same dependency-inversion pattern as git.StateStore) so the loop
 // holds no peer-module reference and no function fields. When the
-// caller passes a nil Modules.Connectivity, loop.New defaults it to
-// liveConnectivity (which uses the package-level checkGitHubConnectivity
-// / isOnline / waitForInternet helpers). Tests pass non-nil stub
-// implementations to override the live network behavior.
+// caller passes a nil Modules.Connectivity, loop.New defaults it to Loop
+// itself (which delegates to git.Ops.PingGitHub and the git package's
+// connectivity helpers — see Loop's CheckGitHub/IsOnline/WaitForInternet
+// methods). Tests pass non-nil stub implementations to override the live
+// network behavior.
 type Connectivity interface {
 	// CheckGitHub returns nil when GitHub is reachable; an error otherwise.
 	// Run once at startup before any task execution.
@@ -193,27 +194,29 @@ type Config struct {
 	InfraRetryBackoffs []time.Duration
 }
 
-// liveConnectivity is the production Connectivity implementation. It
-// delegates to the package-level helpers in loop_utils.go.
+// Loop is the production Connectivity default, used when Modules.Connectivity
+// is nil. Loop is the one struct permitted to hold module references (see
+// docs/specs/orchestrator-modules.md), so the live implementation lives here
+// instead of on a separate helper struct that would have to hold git.Ops
+// itself. CheckGitHub delegates GitHub reachability to the injected git.Ops
+// interface; IsOnline delegates local network probing to the git package's
+// connectivity helpers.
 //
-// IsOnline and WaitForInternet honor the loop-level cfg.ConnectivityCheckTimeout
-// (typically 3 seconds — these are fast local-network reachability pings).
-// CheckGitHub uses its own hardcoded 10-second timeout inside
-// checkGitHubConnectivity, because the gh api round-trip is a different
-// kind of check (auth + GitHub server latency) and the same 3s budget
-// would produce false negatives. The two timeouts measure different
-// things and should not share a value.
-type liveConnectivity struct {
-	checkTimeout    time.Duration
-	restoreInterval time.Duration
-}
+// IsOnline and WaitForInternet honor cfg.ConnectivityCheckTimeout (typically
+// 3 seconds — these are fast local-network reachability pings). CheckGitHub
+// uses git.Ops.PingGitHub, which applies its own hardcoded 10-second
+// timeout, because the gh api round-trip is a different kind of check (auth
+// + GitHub server latency) and the same 3s budget would produce false
+// negatives. The two timeouts measure different things and should not share
+// a value.
+var _ Connectivity = (*Loop)(nil)
 
-func (c *liveConnectivity) CheckGitHub(ctx context.Context) error {
-	return checkGitHubConnectivity(ctx)
+func (l *Loop) CheckGitHub(ctx context.Context) error {
+	return l.git.PingGitHub(ctx)
 }
-func (c *liveConnectivity) IsOnline() bool { return isOnline(c.checkTimeout) }
-func (c *liveConnectivity) WaitForInternet(ctx context.Context, logger *logging.Logger) bool {
-	return waitForInternet(ctx, logger, c.restoreInterval, c.checkTimeout)
+func (l *Loop) IsOnline() bool { return git.IsOnline(l.cfg.ConnectivityCheckTimeout) }
+func (l *Loop) WaitForInternet(ctx context.Context, logger *logging.Logger) bool {
+	return waitForInternet(ctx, logger, l.cfg.InternetRestoreInterval, l.cfg.ConnectivityCheckTimeout)
 }
 
 // claudeRunner abstracts the streaming-agent session for testability.
@@ -300,14 +303,6 @@ func New(cfg Config, mods Modules) *Loop {
 		cfg.CompileCheckTimeout = 60 * time.Second
 	}
 
-	connectivity := mods.Connectivity
-	if connectivity == nil {
-		connectivity = &liveConnectivity{
-			checkTimeout:    cfg.ConnectivityCheckTimeout,
-			restoreInterval: cfg.InternetRestoreInterval,
-		}
-	}
-
 	runner := mods.Runner
 	if runner == nil {
 		runner = agent.New(logger, cfg.Dirs.ProjectDir)
@@ -329,12 +324,16 @@ func New(cfg Config, mods Modules) *Loop {
 		analyzer:      analyzer.New(),
 		logger:        logger,
 		signals:       signals,
-		connectivity:  connectivity,
 		iterationHook: mods.IterationHook,
 		postTaskHook:  mods.PostTaskHook,
 		waitHook:      mods.WaitHook,
 		verifyHook:    mods.VerifyHook,
 		binaryHasher:  bh,
+	}
+	if mods.Connectivity != nil {
+		l.connectivity = mods.Connectivity
+	} else {
+		l.connectivity = l
 	}
 	return l
 }
@@ -952,7 +951,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
 				l.connectivity.WaitForInternet(ctx, l.logger)
 				result, err = l.git.Ship(ctx, opts)
-			} else if isTransientGitHubError(err) {
+			} else if git.IsTransientGitHubError(err) {
 				backoffs := l.cfg.ShipRetryBackoffs
 				if backoffs == nil {
 					backoffs = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}

@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // killProcessGroup configures cmd to run in its own process group and sets
@@ -194,6 +196,106 @@ func RunTests(ctx context.Context, timeout time.Duration, configVerify string, d
 	}
 
 	return Result{Passed: true, Reason: "tests passed", Command: command, Dir: tc.Dir}
+}
+
+// RunVerifyBuildParams configures RunVerifyBuild.
+type RunVerifyBuildParams struct {
+	VerifyBuild string
+	WorktreeDir string
+	ProjectDir  string
+	TestTimeout time.Duration
+	Logger      *logging.Logger
+}
+
+// RunVerifyBuild executes the verify-build script if configured. Uses the
+// VerifyBuild config/CLI value first; falls back to detecting a
+// ralph:verify-build npm script or ralph-verify-build Makefile target
+// (worktree then project root). Runs in the project directory with a timeout
+// matching the test suite timeout. Returns empty string if the script passes
+// or is not configured. Returns a build failure message (stdout+stderr) if
+// the script exits non-zero.
+func RunVerifyBuild(ctx context.Context, p RunVerifyBuildParams) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+
+	var script string
+	if p.VerifyBuild != "" {
+		script = p.VerifyBuild
+		p.Logger.Emit(logging.Opts{Domain: "build"}, "Using verify_build config: %s", script)
+	} else {
+		tc := DetectVerifyBuild(p.WorktreeDir, p.ProjectDir)
+		if tc != nil {
+			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
+			p.Logger.Emit(logging.Opts{Domain: "build"}, "Detected ralph:verify-build script: %s (in %s)", script, tc.Dir)
+		}
+	}
+	if script == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.TestTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	cmd.Dir = p.ProjectDir
+	p.Logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", script)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		p.Logger.Emit(logging.Opts{Domain: "build", Level: logging.Success}, "Build health check passed")
+		return ""
+	}
+	output := strings.TrimSpace(string(out))
+	p.Logger.Emit(logging.Opts{Domain: "build", Level: logging.Warn}, "Build health check failed: %v", err)
+	msg := "\n- BUILD IS BROKEN. Fix the build before working on your task. Do not start the task until the build is healthy."
+	if output != "" {
+		msg += "\n  Build failure output:\n  " + strings.ReplaceAll(output, "\n", "\n  ")
+	}
+	return msg
+}
+
+// RunPostTaskParams configures RunPostTask.
+type RunPostTaskParams struct {
+	PostTask    string
+	WorktreeDir string
+	ProjectDir  string
+	Logger      *logging.Logger
+}
+
+// RunPostTask executes the post-task script if configured. Uses the PostTask
+// config/CLI value first; falls back to detecting a ralph:post-task npm script
+// or ralph-post-task Makefile target (worktree then project root). Runs in the
+// worktree directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
+// Non-zero exit warns and continues.
+func RunPostTask(ctx context.Context, p RunPostTaskParams, taskID string, prNumber int, merged bool) {
+	var script string
+	if p.PostTask != "" {
+		script = p.PostTask
+		p.Logger.Emit(logging.Opts{Domain: "post-task"}, "Using post_task config: %s (in %s)", script, p.WorktreeDir)
+	} else {
+		tc := DetectPostTask(p.WorktreeDir, p.ProjectDir)
+		if tc != nil {
+			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
+			p.Logger.Emit(logging.Opts{Domain: "post-task"}, "Detected ralph:post-task script: %s (in %s)", script, tc.Dir)
+		}
+	}
+	if script == "" {
+		p.Logger.Emit(logging.Opts{Domain: "post-task"}, "No post_task config and no ralph:post-task npm script or ralph-post-task Makefile target found — skipping post-task")
+		return
+	}
+	prStr := strconv.Itoa(prNumber)
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	cmd.Dir = p.WorktreeDir
+	cmd.Env = append(os.Environ(),
+		"RALPH_TASK_ID="+taskID,
+		"RALPH_PR_NUMBER="+prStr,
+		"RALPH_MERGED="+fmt.Sprintf("%t", merged),
+		"RALPH_PROJECT_DIR="+p.ProjectDir,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	p.Logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%d merged=%t)", script, taskID, prNumber, merged)
+	if err := cmd.Run(); err != nil {
+		p.Logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
+	}
 }
 
 // CheckCommits returns a Result indicating whether HEAD moved since the

@@ -192,6 +192,9 @@ type gitHub interface {
 	FetchReviewThreadIDs(ctx context.Context, nwo string, prNumber int, commentIDs []int) (map[int]string, error)
 	// ResolveReviewThread resolves a review thread by its GraphQL node ID.
 	ResolveReviewThread(ctx context.Context, threadID string) error
+	// Ping verifies that GitHub is reachable. Returns nil when reachable, an
+	// error otherwise (including timeout).
+	Ping(ctx context.Context) error
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -300,6 +303,25 @@ func (g *ghCLI) runGHCombined(ctx context.Context, args []string) (stdout, stder
 func (g *ghCLI) Available() bool {
 	p, err := exec.LookPath("gh")
 	return err == nil && p != ""
+}
+
+// ghPingTimeout bounds the GitHub connectivity check. Kept short (10s)
+// relative to ghCallTimeout because Ping runs at startup to fail fast on a
+// blocked connection, rather than as part of a normal operation.
+const ghPingTimeout = 10 * time.Second
+
+// Ping verifies that GitHub is reachable via gh api /rate_limit.
+func (g *ghCLI) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, ghPingTimeout)
+	defer cancel()
+	_, err := g.runGHCmd(ctx, []string{"api", "/rate_limit"})
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("GitHub connectivity check timed out after %s", ghPingTimeout)
+		}
+		return fmt.Errorf("gh api /rate_limit: %w", err)
+	}
+	return nil
 }
 
 func (g *ghCLI) FindOpenPR(ctx context.Context, branch, repoURL string) (int, error) {
