@@ -283,15 +283,15 @@ func postReviewCleanup(ralphDir string, log *logging.Logger) {
 
 	archived, err := prompt.ArchiveReflections(ralphDir)
 	if err != nil {
-		log.Emit(logging.Opts{Domain: "review", Level: logging.Warn}, "Failed to archive reflections: %v", err)
+		log.Emit(logging.Opts{Domain: logging.Review, Level: logging.Warn}, "Failed to archive reflections: %v", err)
 	} else if len(archived) > 0 {
-		log.Emit(logging.Opts{Domain: "review"}, "Archived %d reflections", len(archived))
+		log.Emit(logging.Opts{Domain: logging.Review}, "Archived %d reflections", len(archived))
 	}
 
 	if err := st.ClearCompletedTasks(); err != nil {
-		log.Emit(logging.Opts{Domain: "review", Level: logging.Warn}, "Failed to clear completed tasks: %v", err)
+		log.Emit(logging.Opts{Domain: logging.Review, Level: logging.Warn}, "Failed to clear completed tasks: %v", err)
 	} else {
-		log.Emit(logging.Opts{Domain: "review"}, "Cleared completed_tasks from state")
+		log.Emit(logging.Opts{Domain: logging.Review}, "Cleared completed_tasks from state")
 	}
 
 	os.Remove(filepath.Join(ralphDir, ".completed-tasks"))

@@ -78,6 +78,34 @@ func TestTagFormat(t *testing.T) {
 	}
 }
 
+// Verifies that Domain constants exist for loop, post-task, review, and state
+// so call sites never need to pass raw string literals to Opts.Domain.
+func TestDomainConstantsCoverAllTags(t *testing.T) {
+	tests := []struct {
+		name   string
+		domain Domain
+		want   string
+	}{
+		{"loop", Loop, "loop"},
+		{"post-task", PostTask, "post-task"},
+		{"review", Review, "review"},
+		{"state", State, "state"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if string(tt.domain) != tt.want {
+				t.Errorf("Domain %s = %q, want %q", tt.name, tt.domain, tt.want)
+			}
+			got := Tag(Cyan, Orch, tt.domain)
+			want := Cyan + "[o][" + tt.want + "]" + Reset
+			if got != want {
+				t.Errorf("Tag() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // Verifies that Phase output includes bold+blue formatting with [o] prefix.
 func TestPhaseFormatting(t *testing.T) {
 	var buf bytes.Buffer

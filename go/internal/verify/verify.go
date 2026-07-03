@@ -218,12 +218,12 @@ func RunVerifyBuild(ctx context.Context, p RunVerifyBuildParams) string {
 	var script string
 	if p.VerifyBuild != "" {
 		script = p.VerifyBuild
-		p.Logger.Emit(logging.Opts{Domain: "build"}, "Using verify_build config: %s", script)
+		p.Logger.Emit(logging.Opts{Domain: logging.Build}, "Using verify_build config: %s", script)
 	} else {
 		tc := DetectVerifyBuild(p.WorktreeDir, p.ProjectDir)
 		if tc != nil {
 			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
-			p.Logger.Emit(logging.Opts{Domain: "build"}, "Detected ralph:verify-build script: %s (in %s)", script, tc.Dir)
+			p.Logger.Emit(logging.Opts{Domain: logging.Build}, "Detected ralph:verify-build script: %s (in %s)", script, tc.Dir)
 		}
 	}
 	if script == "" {
@@ -233,14 +233,14 @@ func RunVerifyBuild(ctx context.Context, p RunVerifyBuildParams) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	cmd.Dir = p.ProjectDir
-	p.Logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", script)
+	p.Logger.Emit(logging.Opts{Domain: logging.Build}, "Running verify-build: %s", script)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		p.Logger.Emit(logging.Opts{Domain: "build", Level: logging.Success}, "Build health check passed")
+		p.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Build health check passed")
 		return ""
 	}
 	output := strings.TrimSpace(string(out))
-	p.Logger.Emit(logging.Opts{Domain: "build", Level: logging.Warn}, "Build health check failed: %v", err)
+	p.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Build health check failed: %v", err)
 	msg := "\n" + readPromptFragment(p.PromptsDir, "status-build-broken.md")
 	if output != "" {
 		msg += "\n  Build failure output:\n  " + strings.ReplaceAll(output, "\n", "\n  ")
@@ -277,16 +277,16 @@ func RunPostTask(ctx context.Context, p RunPostTaskParams, taskID string, prNumb
 	var script string
 	if p.PostTask != "" {
 		script = p.PostTask
-		p.Logger.Emit(logging.Opts{Domain: "post-task"}, "Using post_task config: %s (in %s)", script, p.WorktreeDir)
+		p.Logger.Emit(logging.Opts{Domain: logging.PostTask}, "Using post_task config: %s (in %s)", script, p.WorktreeDir)
 	} else {
 		tc := DetectPostTask(p.WorktreeDir, p.ProjectDir)
 		if tc != nil {
 			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
-			p.Logger.Emit(logging.Opts{Domain: "post-task"}, "Detected ralph:post-task script: %s (in %s)", script, tc.Dir)
+			p.Logger.Emit(logging.Opts{Domain: logging.PostTask}, "Detected ralph:post-task script: %s (in %s)", script, tc.Dir)
 		}
 	}
 	if script == "" {
-		p.Logger.Emit(logging.Opts{Domain: "post-task"}, "No post_task config and no ralph:post-task npm script or ralph-post-task Makefile target found — skipping post-task")
+		p.Logger.Emit(logging.Opts{Domain: logging.PostTask}, "No post_task config and no ralph:post-task npm script or ralph-post-task Makefile target found — skipping post-task")
 		return
 	}
 	prStr := strconv.Itoa(prNumber)
@@ -300,9 +300,9 @@ func RunPostTask(ctx context.Context, p RunPostTaskParams, taskID string, prNumb
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	p.Logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%d merged=%t)", script, taskID, prNumber, merged)
+	p.Logger.Emit(logging.Opts{Domain: logging.PostTask}, "Running %s (task=%s pr=%d merged=%t)", script, taskID, prNumber, merged)
 	if err := cmd.Run(); err != nil {
-		p.Logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
+		p.Logger.Emit(logging.Opts{Domain: logging.PostTask, Level: logging.Warn}, "Script exited with error: %v", err)
 	}
 }
 

@@ -287,7 +287,7 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 	// newest-first so the most recently pushed branch becomes the stack parent.
 	if pushedBranch != "" {
 		if err := l.state.AddPushedBranch(pushedBranch); err != nil {
-			l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddPushedBranch: %v", err)
+			l.logger.Emit(logging.Opts{Domain: logging.State, Level: logging.Warn}, "AddPushedBranch: %v", err)
 		}
 	}
 
@@ -495,7 +495,7 @@ func (l *Loop) persistCompleted(taskID string, merged bool) {
 		return
 	}
 	if err := l.state.AddCompletedTask(taskID, merged); err != nil {
-		l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.State, Level: logging.Warn}, "AddCompletedTask: %v", err)
 	}
 }
 
