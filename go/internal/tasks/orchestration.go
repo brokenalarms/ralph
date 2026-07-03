@@ -22,7 +22,10 @@ func CheckAvailability(b Backend) (Availability, error) {
 	if hasRemaining {
 		return Availability{HasRemaining: true, HasAny: true}, nil
 	}
-	hasTasks, _ := b.HasTasks()
+	hasTasks, err := b.HasTasks()
+	if err != nil {
+		return Availability{}, err
+	}
 	return Availability{HasRemaining: false, HasAny: hasTasks}, nil
 }
 
