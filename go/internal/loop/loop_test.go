@@ -298,7 +298,14 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 func createPromptTemplates(t *testing.T, dir string) {
 	t.Helper()
 	os.MkdirAll(dir, 0o755)
-	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md", "bead-creation.md"} {
+	names := []string{
+		"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md",
+		"execution-bd.md", "bead-creation.md", "verify-review.md",
+		"status-tests-pass.md", "status-tests-failing.md",
+		"status-build-failing.md", "status-build-broken.md",
+		"status-tests-failure-context.md", "status-build-failure-context.md",
+	}
+	for _, name := range names {
 		os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o644)
 	}
 }

@@ -27,6 +27,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
@@ -69,6 +70,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 
@@ -126,6 +128,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 	cfg := Config{
@@ -186,6 +189,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 
@@ -251,6 +255,7 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 	cfg := Config{
@@ -312,6 +317,7 @@ func TestOnSignal_LLMReject_FixAgent_TestFailureAfterFix_RetriesInsteadOfBailing
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	// Tests pass initially so the earlier test-fix-loop pipeline stage is a
 	// no-op and verification reaches the LLM-verify stage directly.
@@ -389,6 +395,7 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 	cfg := Config{
@@ -447,6 +454,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 	cfg := Config{
@@ -491,6 +499,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
@@ -542,6 +551,7 @@ func TestOnSignal_PriorIterationCommits_Proceeds(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	// DiffFromBaseResult is set to simulate realistic multi-iteration work: prior
 	// iterations committed something, so the branch diff is non-empty even though
@@ -595,6 +605,7 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:       dir,
@@ -698,6 +709,7 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{HeadRev: "abc123", ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
@@ -753,6 +765,7 @@ func TestTryFixReviewComments_RepliesAndResolvesAfterPush(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	// HasUncommitted=true causes fixLoop to call CommitAll, advancing headRev —
 	// simulating the fix agent committing changes for the review comment fix.
@@ -806,6 +819,7 @@ func TestFixModelSameAcrossAttempts(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	var capturedModels []string
 	vrf := verifier.New(verifier.Config{
@@ -892,6 +906,7 @@ func TestTryFixCI_OutOfScopeFixPreservedAndPushed(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	// HasUncommitted=true causes fixLoop to call CommitAll, advancing headRev
 	// from "task-head" to "stub-head-1". This simulates the fix agent modifying
@@ -1005,6 +1020,7 @@ func TestRunVerifyPipeline_SignalCommitDropped_InfraAbort(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	// Simulate: agent committed "signal-sha", then the worktree was reset
 	// to origin/main. CommitDroppedFromBranch causes IsCommitAncestorOf to
@@ -1085,6 +1101,7 @@ func TestRunVerifyPipeline_WorktreeBranchButProjectDir_InfraAbort(t *testing.T) 
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	// Contamination state: the run is configured to use a per-task worktree
 	// (cfg.Dirs.WorkDir below points at a separate dir), but git operations
@@ -1159,6 +1176,7 @@ func TestRunVerifyPipeline_EmptyDiffAheadOfBase_AbortsAsToolingError(t *testing.
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
 
 	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:         dir,

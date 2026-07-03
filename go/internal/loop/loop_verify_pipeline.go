@@ -2,7 +2,9 @@ package loop
 
 import (
 	"context"
-	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -174,7 +176,7 @@ func (l *Loop) testFixPlan(p verifyPipelineInput, taskAccept string, maxAttempts
 		checks: []fixCheck{testCheck{l: l, workDir: p.workDir}},
 		spawnVars: map[string]string{
 			"{{TASK_TITLE}}":       p.nextTask,
-			"{{TASK_DESCRIPTION}}": fmt.Sprintf("Tests failed after completion. Fix the failures.\n\nAcceptance criteria:\n%s", taskAccept),
+			"{{TASK_DESCRIPTION}}": l.loadFixContext("status-tests-failure-context.md", taskAccept),
 		},
 		spawnTemplate:    "verify-tests.md",
 		spawnDescription: "test failures",
@@ -196,7 +198,7 @@ func (l *Loop) compileFixPlan(p verifyPipelineInput, taskAccept string, maxAttem
 		checks: []fixCheck{compileCheck{l: l, workDir: p.workDir}},
 		spawnVars: map[string]string{
 			"{{TASK_TITLE}}":       p.nextTask,
-			"{{TASK_DESCRIPTION}}": fmt.Sprintf("Build/type check failed after completion. Fix the compile errors.\n\nAcceptance criteria:\n%s", taskAccept),
+			"{{TASK_DESCRIPTION}}": l.loadFixContext("status-build-failure-context.md", taskAccept),
 		},
 		spawnTemplate:    "verify-tests.md",
 		spawnDescription: "build errors",
@@ -356,6 +358,17 @@ func (l *Loop) taskAcceptance(taskID string) string {
 		return ""
 	}
 	return ac
+}
+
+// loadFixContext reads a fix-agent description fragment from PromptsDir and
+// substitutes {{ACCEPTANCE_CRITERIA}} with taskAccept. Returns empty string
+// when the fragment is missing.
+func (l *Loop) loadFixContext(name, taskAccept string) string {
+	data, err := os.ReadFile(filepath.Join(l.cfg.Dirs.PromptsDir, name))
+	if err != nil {
+		return ""
+	}
+	return strings.ReplaceAll(string(data), "{{ACCEPTANCE_CRITERIA}}", taskAccept)
 }
 
 // maxTestFixAttempts returns the configured test-fix retry ceiling, with a

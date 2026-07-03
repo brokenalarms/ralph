@@ -499,13 +499,16 @@ func TestBuildReviewPrompt_PromptChangeGuidance(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), data, 0o644)
 
-	prompt := BuildReviewPrompt(ReviewPromptInput{
+	prompt, err := BuildReviewPrompt(ReviewPromptInput{
 		PromptsDir:  promptsDir,
 		Title:       "Update agent instructions",
 		Description: "Change the prompt template",
 		DiffSource:  "PR",
 		Diff:        "diff content",
 	})
+	if err != nil {
+		t.Fatalf("BuildReviewPrompt error: %v", err)
+	}
 
 	checks := []struct {
 		desc    string
@@ -522,20 +525,19 @@ func TestBuildReviewPrompt_PromptChangeGuidance(t *testing.T) {
 	}
 }
 
-// BuildReviewPrompt fallback (no template file) still produces a usable prompt.
-func TestBuildReviewPrompt_Fallback(t *testing.T) {
-	prompt := BuildReviewPrompt(ReviewPromptInput{
+// BuildReviewPrompt returns an error when the verify-review.md template is
+// missing, instead of falling back to a divergent inline prompt — the
+// caller (Verifier.LLMVerify) treats this as an infrastructure fault.
+func TestBuildReviewPrompt_MissingTemplate(t *testing.T) {
+	_, err := BuildReviewPrompt(ReviewPromptInput{
 		PromptsDir:  "/nonexistent",
 		Title:       "task title",
 		Description: "task desc",
 		DiffSource:  "iteration",
 		Diff:        "some diff",
 	})
-	if !strings.Contains(prompt, "task title") {
-		t.Error("fallback prompt should contain task title")
-	}
-	if !strings.Contains(prompt, "some diff") {
-		t.Error("fallback prompt should contain diff")
+	if err == nil {
+		t.Error("expected error when verify-review.md template is missing")
 	}
 }
 

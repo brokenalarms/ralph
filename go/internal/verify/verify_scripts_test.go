@@ -42,6 +42,36 @@ func TestRunVerifyBuild_CancelledContext_SkipsExecution(t *testing.T) {
 	}
 }
 
+// RunVerifyBuild sources its "build is broken" instruction from the
+// status-build-broken.md prompt template instead of a hardcoded Go string —
+// a distinctive marker written to the template must appear verbatim in the
+// returned message.
+func TestRunVerifyBuild_FailureMessage_LoadedFromTemplate(t *testing.T) {
+	dir := t.TempDir()
+	promptsDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(promptsDir, "status-build-broken.md"),
+		[]byte("- CUSTOM BUILD BROKEN MARKER"), 0o644)
+
+	scriptPath := filepath.Join(dir, "verify-build.sh")
+	os.WriteFile(scriptPath, []byte("#!/bin/sh\necho 'boom'\nexit 1\n"), 0o755)
+
+	result := RunVerifyBuild(context.Background(), RunVerifyBuildParams{
+		VerifyBuild: scriptPath,
+		ProjectDir:  dir,
+		PromptsDir:  promptsDir,
+		TestTimeout: 30 * time.Second,
+		Logger:      logging.New(nil),
+	})
+
+	if !strings.Contains(result, "CUSTOM BUILD BROKEN MARKER") {
+		t.Errorf("expected message sourced from status-build-broken.md template, got: %q", result)
+	}
+	if !strings.Contains(result, "boom") {
+		t.Errorf("expected build failure output included, got: %q", result)
+	}
+}
+
 // RunPostTask passes RALPH_PROJECT_DIR set to projectDir so project-level
 // scripts like sync-and-build.sh can operate on the main checkout instead
 // of the worktree branch.
