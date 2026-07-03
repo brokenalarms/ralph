@@ -199,13 +199,35 @@ func hasHelpFlag(args []string) bool {
 	return false
 }
 
-func handleReview(sub config.Subcommand, log *logging.Logger) int {
+// interactiveSessionConfig captures everything that differs between the
+// interactive sessions launched by runInteractiveSession — currently
+// `ralph review` and `ralph task`. Everything else (help-flag check, repo
+// resolution, prompts-dir fallback, worktree setup, the Interactive call,
+// and the post-exit settle delay) is shared prologue that lives in
+// runInteractiveSession itself.
+type interactiveSessionConfig struct {
+	usage func()
+	model string
+	// buildPrompt returns the system prompt for the session given the
+	// resolved prompts/project/.ralph directories.
+	buildPrompt func(promptsDir, projectDir, ralphDir string) (string, error)
+	// extraArgs returns additional CLI args appended after the system
+	// prompt (e.g. --session-id). May be nil.
+	extraArgs func() ([]string, error)
+	// onExit runs once Interactive returns successfully, after the
+	// terminal-settle delay.
+	onExit func(gm git.Ops, projectDir, workDir string)
+}
+
+// runInteractiveSession holds the prologue shared by every interactive
+// Claude session ralph launches: help-flag handling, git-repo resolution,
+// prompts-dir fallback, worktree setup via git.Ops.InitTask, and the
+// Interactive invocation itself. Callers supply only what differs.
+func runInteractiveSession(sub config.Subcommand, log *logging.Logger, cfg interactiveSessionConfig) int {
 	if hasHelpFlag(sub.Args) {
-		printReviewUsage()
+		cfg.usage()
 		return 0
 	}
-
-	reviewModel := agent.ModelOpus
 
 	absDir, _ := filepath.Abs(sub.Dir)
 
@@ -232,19 +254,8 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		promptsDir = tmpDir
 	}
 
-	reflections, err := prompt.ReadReflections(ralphDir)
-	if err != nil {
-		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to read reflections: %v", err)
-	}
-
-	systemPrompt, err := prompt.BuildReviewPrompt(promptsDir, projectDir, ralphDir, reflections)
-	if err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Failed to build review prompt: %v", err)
-		return 1
-	}
-
-	// Spawn review inside an isolated worktree — never the project root.
-	// Mirrors `ralph task`: agents must not run with cwd == projectDir.
+	// Spawn the session inside an isolated worktree — never the project
+	// root. Agents must not run with cwd == projectDir.
 	gm := git.New(git.Config{
 		ProjectDir: projectDir,
 		RalphDir:   ralphDir,
@@ -252,29 +263,65 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		Logger:     log,
 	})
 	if err := gm.InitTask(context.Background()); err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Review worktree setup failed: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "Worktree setup failed: %v", err)
 		return 1
 	}
 	workDir := gm.GetWorkDir()
-	defer func() {
-		if workDir != projectDir && gm.LogOneline("origin/main", "HEAD") == "" {
-			gm.RemoveWorktree()
-		}
-	}()
 
-	r := newInteractiveAgent(log, projectDir, reviewModel)
-	exitCode, err := r.Interactive(workDir, systemPrompt)
+	systemPrompt, err := cfg.buildPrompt(promptsDir, projectDir, ralphDir)
 	if err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Review session failed: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
+		return 1
+	}
+
+	var extraArgs []string
+	if cfg.extraArgs != nil {
+		extraArgs, err = cfg.extraArgs()
+		if err != nil {
+			log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
+			return 1
+		}
+	}
+
+	r := newInteractiveAgent(log, projectDir, cfg.model)
+	exitCode, err := r.Interactive(workDir, systemPrompt, extraArgs...)
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "Interactive session failed: %v", err)
 		return 1
 	}
 
 	// Let the terminal finish processing any ANSI escape sequences from
-	// the CLI's exit message before printing cleanup log lines.
+	// the CLI's exit message before running exit cleanup.
 	time.Sleep(100 * time.Millisecond)
 
-	postReviewCleanup(ralphDir, log)
+	if cfg.onExit != nil {
+		cfg.onExit(gm, projectDir, workDir)
+	}
 	return exitCode
+}
+
+func handleReview(sub config.Subcommand, log *logging.Logger) int {
+	return runInteractiveSession(sub, log, interactiveSessionConfig{
+		usage: printReviewUsage,
+		model: agent.ModelOpus,
+		buildPrompt: func(promptsDir, projectDir, ralphDir string) (string, error) {
+			reflections, err := prompt.ReadReflections(ralphDir)
+			if err != nil {
+				log.Emit(logging.Opts{Level: logging.Warn}, "Failed to read reflections: %v", err)
+			}
+			systemPrompt, err := prompt.BuildReviewPrompt(promptsDir, projectDir, ralphDir, reflections)
+			if err != nil {
+				return "", fmt.Errorf("failed to build review prompt: %w", err)
+			}
+			return systemPrompt, nil
+		},
+		onExit: func(gm git.Ops, projectDir, workDir string) {
+			postReviewCleanup(filepath.Join(projectDir, ".ralph"), log)
+			if workDir != projectDir && gm.LogOneline("origin/main", "HEAD") == "" {
+				gm.RemoveWorktree()
+			}
+		},
+	})
 }
 
 // postReviewCleanup clears completed_tasks from state.json and archives reflections.
@@ -334,83 +381,32 @@ func handleAttach(sub config.Subcommand, log *logging.Logger) int {
 // handleTask launches an interactive Claude session with the task manager prompt.
 // Runs standalone — no tmux required.
 func handleTask(sub config.Subcommand, log *logging.Logger) int {
-	if hasHelpFlag(sub.Args) {
-		printTaskUsage()
-		return 0
-	}
-
-	taskModel := agent.ModelFable
-
-	absDir, _ := filepath.Abs(sub.Dir)
-
-	if !git.IsGitRepo(absDir) {
-		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", absDir)
-		return 1
-	}
-
-	projectDir, err := git.RepoRoot(absDir)
-	if err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
-		return 1
-	}
-
-	ralphDir := filepath.Join(projectDir, ".ralph")
-
-	promptsDir := filepath.Join(projectDir, "go", "cmd", "ralph", "prompts")
-	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
-		tmpDir, extractErr := extractEmbeddedPrompts()
-		if extractErr != nil {
-			log.Emit(logging.Opts{Level: logging.Error}, "Failed to extract embedded prompts: %v", extractErr)
-			return 1
-		}
-		promptsDir = tmpDir
-	}
-
-	gm := git.New(git.Config{
-		ProjectDir: projectDir,
-		RalphDir:   ralphDir,
-		BaseBranch: "main",
-		Logger:     log,
+	var sessionID string
+	return runInteractiveSession(sub, log, interactiveSessionConfig{
+		usage: printTaskUsage,
+		model: agent.ModelFable,
+		buildPrompt: func(promptsDir, projectDir, ralphDir string) (string, error) {
+			startupCtx := preloadTaskContext(&tasks.BD{ProjectDir: projectDir}, log)
+			systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupCtx)
+			if err != nil {
+				return "", fmt.Errorf("failed to build task manager prompt: %w", err)
+			}
+			return systemPrompt, nil
+		},
+		extraArgs: func() ([]string, error) {
+			id, err := generateSessionID()
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate session ID: %w", err)
+			}
+			sessionID = id
+			return []string{"--session-id", id}, nil
+		},
+		onExit: func(gm git.Ops, projectDir, workDir string) {
+			if promptKeepOrCleanupWorktree(os.Stdout, os.Stdin, gm) {
+				printTaskResumeHint(os.Stdout, workDir, sessionID)
+			}
+		},
 	})
-	ctx := context.Background()
-	// Worktree invariant: never silently fall back to projectDir. If the
-	// worktree can't be set up, the agent must not run — that fallback is
-	// the recurring root cause of "work leaking into main".
-	if err := gm.InitTask(ctx); err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Task worktree setup failed: %v", err)
-		return 1
-	}
-	workDir := gm.GetWorkDir()
-
-	startupCtx := preloadTaskContext(&tasks.BD{ProjectDir: projectDir}, log)
-
-	systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupCtx)
-	if err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Failed to build task manager prompt: %v", err)
-		return 1
-	}
-
-	sessionID, err := generateSessionID()
-	if err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Failed to generate session ID: %v", err)
-		return 1
-	}
-
-	r := newInteractiveAgent(log, projectDir, taskModel)
-	exitCode, err := r.Interactive(workDir, systemPrompt, "--session-id", sessionID)
-	if err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Task manager failed: %v", err)
-		return 1
-	}
-
-	// Let the terminal finish processing any ANSI escape sequences from
-	// the CLI's exit message before printing the resume hint.
-	time.Sleep(100 * time.Millisecond)
-
-	if promptKeepOrCleanupWorktree(os.Stdout, os.Stdin, gm) {
-		printTaskResumeHint(os.Stdout, workDir, sessionID)
-	}
-	return exitCode
 }
 
 func handleUnskip(log *logging.Logger) int {

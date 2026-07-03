@@ -1013,6 +1013,59 @@ func TestPromptKeepOrCleanupWorktree_Keep(t *testing.T) {
 	}
 }
 
+// Proves: runInteractiveSession — the helper shared by handleTask and
+// handleReview — checks the help flag before touching the config's
+// per-session closures, so `-h`/`--help` always short-circuits to the
+// usage text regardless of which subcommand supplied the config.
+func TestRunInteractiveSession_HelpFlagSkipsConfigClosures(t *testing.T) {
+	usageCalled := false
+	cfg := interactiveSessionConfig{
+		usage: func() { usageCalled = true },
+		buildPrompt: func(promptsDir, projectDir, ralphDir string) (string, error) {
+			t.Fatal("buildPrompt should not be called when the help flag is set")
+			return "", nil
+		},
+		onExit: func(gm git.Ops, projectDir, workDir string) {
+			t.Fatal("onExit should not be called when the help flag is set")
+		},
+	}
+
+	code := runInteractiveSession(config.Subcommand{Dir: t.TempDir(), Args: []string{"-h"}}, logging.New(nil), cfg)
+
+	if code != 0 {
+		t.Errorf("expected exit code 0 for help flag, got %d", code)
+	}
+	if !usageCalled {
+		t.Error("expected cfg.usage to be called for the help flag")
+	}
+}
+
+// Proves: runInteractiveSession's shared git-repo guard runs before any
+// per-session closure — a non-git directory must fail fast without
+// building a prompt, computing extra args, or running exit cleanup.
+func TestRunInteractiveSession_NonGitDirSkipsConfigClosures(t *testing.T) {
+	cfg := interactiveSessionConfig{
+		usage: func() {},
+		buildPrompt: func(promptsDir, projectDir, ralphDir string) (string, error) {
+			t.Fatal("buildPrompt should not be called for a non-git directory")
+			return "", nil
+		},
+		extraArgs: func() ([]string, error) {
+			t.Fatal("extraArgs should not be called for a non-git directory")
+			return nil, nil
+		},
+		onExit: func(gm git.Ops, projectDir, workDir string) {
+			t.Fatal("onExit should not be called for a non-git directory")
+		},
+	}
+
+	code := runInteractiveSession(config.Subcommand{Dir: t.TempDir(), Args: nil}, logging.New(nil), cfg)
+
+	if code != 1 {
+		t.Errorf("expected exit code 1 for a non-git directory, got %d", code)
+	}
+}
+
 // Proves: handleTask does not delete the worktree on exit, so the printed
 // resume command remains valid. handleReview keeps its cleanup (regression guard).
 func TestHandleTask_NoWorktreeRemovalOnExit(t *testing.T) {
