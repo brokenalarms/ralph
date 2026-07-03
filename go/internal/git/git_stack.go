@@ -75,7 +75,7 @@ func (r *repo) RebaseStack(ctx context.Context, opts RebaseStackOpts) error {
 	worktreeReady := false
 	if _, err := os.Stat(filepath.Join(wtDir, ".git")); err == nil {
 		bottomBranch := opts.AllBranches[0]
-		if r.gitCmdErrCtx(ctx, wtDir, "merge-base", "--is-ancestor", "origin/"+opts.BaseBranch, bottomBranch) != nil {
+		if !r.isAncestorCtx(ctx, wtDir, "origin/"+opts.BaseBranch, bottomBranch) {
 			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 				"Stale worktree found — branches not rebased onto %s, recreating", opts.BaseBranch)
 			r.gitCmdCtx(ctx, r.projectDir, "worktree", "remove", "--force", wtDir)

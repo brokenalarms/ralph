@@ -580,14 +580,13 @@ func (r *repo) EnsureUpToDate(ctx context.Context) error {
 		return nil
 	}
 
-	if r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") == nil {
+	if r.isAncestor(r.workDir, "origin/"+baseBranch, "HEAD") {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Already up to date with origin/%s", baseBranch)
 		return nil
 	}
 
 	// No local commits ahead of base → safe to force-reset (fresh start).
-	localCommits := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+baseBranch+"..HEAD")
-	if localCommits == "" || localCommits == "0" {
+	if r.revCount(r.workDir, "origin/"+baseBranch, "HEAD") == 0 {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Resetting to origin/%s (no local work)", baseBranch)
 		r.gitCmd(r.workDir, "reset", "--hard", "origin/"+baseBranch)
 		return nil
@@ -694,8 +693,8 @@ func (r *repo) ResetToDefaultBranch() {
 		return
 	}
 	// Preserve local work — let EnsureUpToDate rebase or abort safely.
-	if localCommits := r.gitOutput(r.workDir, "rev-list", "--count", target+"..HEAD"); localCommits != "" && localCommits != "0" {
-		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: r.worktreeBranch}, "Preserving %s local commit(s) on %s — deferring to rebase", localCommits, r.worktreeBranch)
+	if count := r.revCount(r.workDir, target, "HEAD"); count > 0 {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: r.worktreeBranch}, "Preserving %d local commit(s) on %s — deferring to rebase", count, r.worktreeBranch)
 		return
 	}
 	r.gitCmd(r.workDir, "reset", "--hard", target)
@@ -770,7 +769,7 @@ func (r *repo) branchSafeToDelete(branch string) bool {
 		if !r.refExists(r.projectDir, ref) {
 			continue
 		}
-		if r.gitCmdErr(r.projectDir, "merge-base", "--is-ancestor", branch, ref) == nil {
+		if r.isAncestor(r.projectDir, branch, ref) {
 			return true
 		}
 	}
@@ -809,10 +808,7 @@ func (r *repo) PrepareForNextTask(nextTaskID, baseRef string) {
 	// Same-task resume: if the branch already has local commits ahead of
 	// baseRef, keep the current branch — EnsureUpToDate will rebase them.
 	if nextTaskID != "" && lastTaskID != "" && nextTaskID == lastTaskID && baseRef != "" {
-		countStr := r.gitOutput(r.workDir, "rev-list", "--count", baseRef+"..HEAD")
-		var count int
-		fmt.Sscanf(countStr, "%d", &count)
-		if count > 0 {
+		if r.hasCommitsAhead(baseRef, "HEAD") {
 			return
 		}
 	}
@@ -870,11 +866,7 @@ func isFetchTransportErr(err error) bool {
 // with the given message. No-op if there is already exactly one commit
 // ahead of base. Returns an error if there are no commits to squash.
 func (r *repo) SquashToOneCommit(baseSHA, message string) error {
-	countStr := r.gitOutput(r.workDir, "rev-list", "--count", baseSHA+"..HEAD")
-	count := 0
-	if countStr != "" {
-		fmt.Sscanf(countStr, "%d", &count)
-	}
+	count := r.revCount(r.workDir, baseSHA, "HEAD")
 	if count == 0 {
 		return fmt.Errorf("no commits ahead of %s", baseSHA)
 	}
