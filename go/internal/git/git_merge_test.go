@@ -1194,7 +1194,7 @@ func TestExecuteMerge_PostMergeAncestorCheckFails(t *testing.T) {
 		withWorktreeBranch("ralph/test/01-orphan"),
 	)
 
-	merged, err := repo.executeMerge(context.Background(), 42, "https://github.com/test/repo.git")
+	merged, err := repo.executeMerge(context.Background(), 42, "https://github.com/test/repo.git", false)
 	if merged {
 		t.Error("expected merged=false when post-merge ancestor check fails")
 	}
