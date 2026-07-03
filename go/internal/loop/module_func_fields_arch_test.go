@@ -50,25 +50,27 @@ func TestNoFuncFieldsInModuleStructs(t *testing.T) {
 	// permanentExceptions: func-typed fields that are intentional
 	// architectural patterns, not scheduled for removal.
 	//
-	//   - config.FlagDef.Apply / Read: FlagDef is a data-driven dispatch
-	//     table; the func fields carry per-flag apply/read behaviour as
-	//     part of the record itself, not as injected callbacks. They are
-	//     intrinsic to the flag-registry pattern.
+	//   - config.FlagDef.Apply / Read: assessed under ralph-t47o and kept
+	//     deliberately. FlagDef is a data-driven dispatch table: each entry's
+	//     Apply/Read closes over the specific Config field it targets (e.g.
+	//     cfg.MaxIterations, cfg.CallsPerHour), which differs per entry.
+	//     Flattening this to pure data plus a generic per-Kind switch would
+	//     need a field selector into *Config (a pointer-to-field or a
+	//     reflect-based path) instead of a closure — but Flags is a package
+	//     level var initialized before any Config instance exists, so it
+	//     cannot hold a pointer into a particular instance's field. Reflection
+	//     would work but trades compile-time field-name safety for a runtime
+	//     lookup, for ~60 entries that are otherwise one-liners. The func
+	//     fields are intrinsic to the flag-registry pattern, not injected
+	//     callbacks, so they stay.
 	//
-	//   - verifier.Verifier.newRunner: a RunnerFactory submodule injected
-	//     at construction time via New(). The verifier package doc
-	//     explicitly endorses this as a peer-module pattern equivalent to
-	//     git's github relationship. See docs/specs/orchestrator-modules.md.
-	//
-	//   - tasks.BD.RunBD: an explicit override point for testing that
-	//     predates the func-field rule; retained as a named exception
-	//     because replacing it requires restructuring BD's runner selection
-	//     logic without any other driver for that change today.
+	// (verifier.Verifier.newRunner and tasks.BD.RunBD were the other two
+	// known func-typed fields; both were converted to constructor-injected
+	// interfaces (RunnerFactory / commandRunner) under ralph-t47o and no
+	// longer need an exception here.)
 	permanentExceptions := map[string]bool{
-		"config.FlagDef.Apply":        true,
-		"config.FlagDef.Read":         true,
-		"verifier.Verifier.newRunner": true,
-		"tasks.BD.RunBD":              true,
+		"config.FlagDef.Apply": true,
+		"config.FlagDef.Read":  true,
 	}
 
 	// Merge both sets into the working allowlist for the checks below.
