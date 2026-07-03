@@ -89,6 +89,42 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 	}
 }
 
+// doShip returns a single shipOutcome struct (not a multi-value tuple) whose
+// fields carry the PR number, merge state, and pushed branch through to the
+// caller.
+func TestDoShip_ReturnsShipOutcomeStruct(t *testing.T) {
+	dir, _ := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	fs := buildFinalizeSetup(t, dir, "ralph-shipout", "Add feature", backend, shipResult{
+		prNumber:     7,
+		prURL:        "https://example.com/pr/7",
+		merged:       true,
+		pushedBranch: "ralph/ralph-shipout",
+	})
+
+	out := fs.loop.doShip(context.Background(), "ralph-shipout", "Add feature", "did the thing", "", dir)
+
+	if out.prNumber != 7 {
+		t.Errorf("prNumber = %d, want 7", out.prNumber)
+	}
+	if out.prResultURL != "https://example.com/pr/7" {
+		t.Errorf("prResultURL = %q, want the stubbed PR URL", out.prResultURL)
+	}
+	if !out.merged {
+		t.Error("merged = false, want true")
+	}
+	if out.pushedBranch != "ralph/ralph-shipout" {
+		t.Errorf("pushedBranch = %q, want the stubbed branch", out.pushedBranch)
+	}
+	if out.shipErr != nil {
+		t.Errorf("shipErr = %v, want nil", out.shipErr)
+	}
+}
+
 // completeTask closes the bead when AutoMerge is off (ship returns merged=false).
 func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 	dir, _ := setupTestDir(t)
