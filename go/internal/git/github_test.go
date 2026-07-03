@@ -443,9 +443,9 @@ func TestListChecks_UsesGhAPICheckRuns(t *testing.T) {
 // State/Bucket values that evaluateChecks uses for merge-gating decisions.
 func TestMapCheckRun_ConclusionMapping(t *testing.T) {
 	cases := []struct {
-		conclusion    string
-		wantState     string
-		wantBucket    string
+		conclusion string
+		wantState  string
+		wantBucket CIBucket
 	}{
 		{"success", "SUCCESS", "pass"},
 		{"neutral", "SUCCESS", "pass"},

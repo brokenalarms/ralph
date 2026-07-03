@@ -11,15 +11,35 @@ import (
 	"github.com/brokenalarms/ralph/internal/retry"
 )
 
+// CIBucket is the normalized merge-gate verdict for a CI check, computed
+// once in mapCheckRun from the provider-reported status/conclusion.
+type CIBucket string
+
+const (
+	CIBucketPass    CIBucket = "pass"
+	CIBucketFail    CIBucket = "fail"
+	CIBucketPending CIBucket = "pending"
+)
+
 // CICheckResult represents the status of a single CI check.
 // State is the provider-reported CI state (e.g. SUCCESS, FAILURE, PENDING, CANCELLED).
-// Bucket is the normalized merge-gate bucket: pass, fail, or pending.
+// Bucket is the normalized merge-gate verdict: pass, fail, or pending.
 type CICheckResult struct {
 	Name       string    `json:"name"`
 	State      string    `json:"state"`
-	Bucket     string    `json:"bucket"`
+	Bucket     CIBucket  `json:"bucket"`
 	IsRequired bool      `json:"isRequired"`
 	StartedAt  time.Time `json:"startedAt"`
+}
+
+// Failed reports whether the check resolved to a failing or cancelled outcome.
+func (r CICheckResult) Failed() bool {
+	return r.Bucket == CIBucketFail
+}
+
+// Pending reports whether the check has not yet resolved.
+func (r CICheckResult) Pending() bool {
+	return r.Bucket == CIBucketPending
 }
 
 // CIStatus summarizes the overall state of all CI checks on a PR.
@@ -78,10 +98,10 @@ func evaluateChecks(checks []CICheckResult) CIStatus {
 
 	allResolved := true
 	for _, c := range checks {
-		if c.Bucket == "fail" || c.State == "FAILURE" || c.State == "CANCELLED" {
+		if c.Failed() {
 			return CIFailed
 		}
-		if c.Bucket == "pending" || c.State == "PENDING" || c.State == "IN_PROGRESS" {
+		if c.Pending() {
 			allResolved = false
 		}
 	}
@@ -96,7 +116,7 @@ func evaluateChecks(checks []CICheckResult) CIStatus {
 func failedChecks(checks []CICheckResult) []CICheckResult {
 	var failed []CICheckResult
 	for _, c := range checks {
-		if c.Bucket == "fail" || c.State == "FAILURE" || c.State == "CANCELLED" {
+		if c.Failed() {
 			failed = append(failed, c)
 		}
 	}
@@ -136,7 +156,7 @@ func RequiredFailedChecks(checks []CICheckResult) []CICheckResult {
 	}
 	var failed []CICheckResult
 	for _, c := range checks {
-		if c.Bucket == "fail" && (!hasRequired || c.IsRequired) {
+		if c.Failed() && (!hasRequired || c.IsRequired) {
 			failed = append(failed, c)
 		}
 	}
