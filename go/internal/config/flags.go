@@ -48,6 +48,43 @@ func parseBoolVal(val string) bool {
 	return false
 }
 
+// adminMergeOnCIInfraFailureFlag is shared between the loop's Flags registry
+// (ralph loop --auto-merge) and MergeFlags (ralph merge): the same admin-bypass
+// semantics apply whether the infra-failure classification happens during the
+// loop's own AutoMerge or a standalone `ralph merge` invocation.
+var adminMergeOnCIInfraFailureFlag = FlagDef{
+	Long:      "--admin-merge-on-ci-infra-failure",
+	Help:      "Admin-bypass branch protection when a CI failure is classified as infrastructure (zero job steps). Has no effect on real test failures.",
+	ConfigKey: "admin_merge_on_ci_infra_failure",
+	Kind:      KindBool,
+	Apply: func(cfg *Config, _ string) error {
+		cfg.AdminMergeOnCIInfraFailure = true
+		return nil
+	},
+	Read: func(cfg *Config) string { return boolStr(cfg.AdminMergeOnCIInfraFailure) },
+}
+
+// noCIWaitFlag is merge-only: it skips AwaitCI polling in MergeStack, a
+// concept the loop's own AutoMerge path has no equivalent for.
+var noCIWaitFlag = FlagDef{
+	Long: "--no-ci-wait",
+	Help: "Skip AwaitCI and rely on infrastructure-failure classification. " +
+		"Use when GitHub Actions is known to be down and required checks will never run.",
+	Kind: KindBool,
+	Apply: func(cfg *Config, _ string) error {
+		cfg.SkipCIWait = true
+		return nil
+	},
+	Read: func(cfg *Config) string { return boolStr(cfg.SkipCIWait) },
+}
+
+// MergeFlags defines the flags accepted by the `ralph merge` subcommand. It
+// is a separate per-subcommand registry built on the same FlagDef mechanism
+// as Flags, so merge's help text (FlagUsageFor) and parsing (ParseFlags)
+// derive from the same code path as every other subcommand, without adding
+// merge-only flags to the loop's own CLI surface.
+var MergeFlags = []FlagDef{noCIWaitFlag, adminMergeOnCIInfraFailureFlag}
+
 // Flags is the single source of truth for all CLI flags and config-file keys.
 // Adding a flag means adding one entry here — parsing, help text, config file
 // support, and defaults display all derive from this slice.
@@ -156,17 +193,7 @@ var Flags = []FlagDef{
 		},
 		Read: func(cfg *Config) string { return boolStr(cfg.AutoMerge) },
 	},
-	{
-		Long:      "--admin-merge-on-ci-infra-failure",
-		Help:      "Admin-bypass branch protection when AutoMerge detects a CI infrastructure failure (zero job steps). Has no effect on real test failures.",
-		ConfigKey: "admin_merge_on_ci_infra_failure",
-		Kind:      KindBool,
-		Apply: func(cfg *Config, _ string) error {
-			cfg.AdminMergeOnCIInfraFailure = true
-			return nil
-		},
-		Read: func(cfg *Config) string { return boolStr(cfg.AdminMergeOnCIInfraFailure) },
-	},
+	adminMergeOnCIInfraFailureFlag,
 	{
 		Long: "--evolve",
 		Help: "Self-improving mode: after each merged task, pull main, rebuild, restart (requires --auto-merge)",
@@ -624,22 +651,12 @@ var Flags = []FlagDef{
 	},
 }
 
-var (
-	flagMap   map[string]*FlagDef
-	configMap map[string]*FlagDef
-)
+var configMap map[string]*FlagDef
 
 func init() {
-	flagMap = make(map[string]*FlagDef, len(Flags)*2)
 	configMap = make(map[string]*FlagDef)
 	for i := range Flags {
 		f := &Flags[i]
-		if f.Short != "" {
-			flagMap[f.Short] = f
-		}
-		if f.Long != "" {
-			flagMap[f.Long] = f
-		}
 		if f.ConfigKey != "" {
 			configMap[f.ConfigKey] = f
 		}
@@ -651,8 +668,16 @@ const flagHelpColumn = 25
 // FlagUsage returns formatted help text for all CLI flags, auto-generated
 // from the Flags registry.
 func FlagUsage() string {
+	return FlagUsageFor(Flags)
+}
+
+// FlagUsageFor returns formatted help text for the given flag definitions,
+// using the same layout as FlagUsage. Subcommands with their own scoped
+// registry (e.g. MergeFlags) call this directly instead of hand-rolling help
+// text, so every subcommand's help derives from the same formatting path.
+func FlagUsageFor(defs []FlagDef) string {
 	var b strings.Builder
-	for _, f := range Flags {
+	for _, f := range defs {
 		if f.Long == "" && f.Short == "" {
 			continue
 		}
@@ -686,6 +711,62 @@ func FlagUsage() string {
 		fmt.Fprintf(&b, "%s%s%s\n", left, strings.Repeat(" ", padding), right)
 	}
 	return b.String()
+}
+
+// ParseFlags parses args against defs, applying recognized flags onto cfg.
+// It returns any positional (non-flag) arguments in encounter order, and an
+// error for unrecognized flags or missing values. Unlike Parse, it does not
+// require defs to be the full Flags registry and does not reject positional
+// arguments itself — callers with subcommand-specific positional arguments
+// (e.g. ralph merge's PR number) pull them from the returned slice.
+func ParseFlags(defs []FlagDef, cfg *Config, args []string) ([]string, error) {
+	m := make(map[string]*FlagDef, len(defs)*2)
+	for i := range defs {
+		f := &defs[i]
+		if f.Short != "" {
+			m[f.Short] = f
+		}
+		if f.Long != "" {
+			m[f.Long] = f
+		}
+	}
+
+	var positional []string
+	i := 0
+	for i < len(args) {
+		f, ok := m[args[i]]
+		if !ok {
+			if len(args[i]) > 0 && args[i][0] == '-' {
+				return nil, fmt.Errorf("unknown flag: %s", args[i])
+			}
+			positional = append(positional, args[i])
+			i++
+			continue
+		}
+
+		if f.Kind == KindBool {
+			if err := f.Apply(cfg, ""); err != nil {
+				return nil, err
+			}
+			if f.ConfigKey != "" && cfg.cliSet != nil {
+				cfg.cliSet[f.ConfigKey] = true
+			}
+			i++
+		} else {
+			v, err := requireArg(args, i)
+			if err != nil {
+				return nil, err
+			}
+			if err := f.Apply(cfg, v); err != nil {
+				return nil, fmt.Errorf("invalid value for %s: %q", args[i], v)
+			}
+			if f.ConfigKey != "" && cfg.cliSet != nil {
+				cfg.cliSet[f.ConfigKey] = true
+			}
+			i += 2
+		}
+	}
+	return positional, nil
 }
 
 // ConfigToState returns a map of config key → value for all CLI flags that

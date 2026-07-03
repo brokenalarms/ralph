@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/brokenalarms/ralph/internal/config"
@@ -14,53 +13,23 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
-type mergeFlag struct {
-	name string
-	help string
-}
-
-var noCIWaitFlag = mergeFlag{
-	name: "--no-ci-wait",
-	help: "Skip AwaitCI and rely on infrastructure-failure classification. " +
-		"Use when GitHub Actions is known to be down and required checks will never run.",
-}
-
-var adminMergeOnCIInfraFailureFlag = mergeFlag{
-	name: "--admin-merge-on-ci-infra-failure",
-	help: "Admin-bypass branch protection when CI failure is classified as infrastructure " +
-		"(zero job steps). Has no effect on real test failures.",
-}
-
 func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	if hasHelpFlag(sub.Args) || len(sub.Args) == 0 {
 		printMergeUsage()
 		return 0
 	}
 
-	var prNumber string
-	skipCIWait := false
-	adminMergeOnCIInfraFailure := false
-	for _, arg := range sub.Args {
-		if arg == noCIWaitFlag.name {
-			skipCIWait = true
-			continue
-		}
-		if arg == adminMergeOnCIInfraFailureFlag.name {
-			adminMergeOnCIInfraFailure = true
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
-			log.Emit(logging.Opts{Level: logging.Error}, "unknown flag: %s", arg)
-			return 1
-		}
-		if prNumber == "" {
-			prNumber = arg
-		}
+	var cfg config.Config
+	positional, err := config.ParseFlags(config.MergeFlags, &cfg, sub.Args)
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
+		return 1
 	}
-	if prNumber == "" {
+	if len(positional) == 0 {
 		log.Emit(logging.Opts{Level: logging.Error}, "Usage: ralph merge <top-pr-number>")
 		return 1
 	}
+	prNumber := positional[0]
 
 	projectDir, _ := filepath.Abs(sub.Dir)
 	if !git.IsGitRepo(projectDir) {
@@ -88,7 +57,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		cancel()
 	}()
 
-	if _, err := gm.MergeStack(ctx, git.MergeStackOpts{TopPR: prNumber, SkipCIWait: skipCIWait, AdminMergeOnCIInfraFailure: adminMergeOnCIInfraFailure}); err != nil {
+	if _, err := gm.MergeStack(ctx, git.MergeStackOpts{TopPR: prNumber, SkipCIWait: cfg.SkipCIWait, AdminMergeOnCIInfraFailure: cfg.AdminMergeOnCIInfraFailure}); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
 	}
@@ -109,18 +78,11 @@ proceeds automatically — no flag required. This is the infra-failure
 fallthrough: checks that never started are not treated as real failures.
 
 FLAGS:
-  %s
-    %s
-
-  %s
-    %s
-
+%s
 Examples:
   ralph merge 321                                    Merge the stack from bottom to PR #321
   ralph merge 314                                    Merge just PR #314 if it's the only open one
-  ralph merge 321 %s          Skip CI wait (use when Actions is down)
-  ralph merge 321 %s  Bypass branch protection on infra-only CI failure
-`, noCIWaitFlag.name, noCIWaitFlag.help,
-		adminMergeOnCIInfraFailureFlag.name, adminMergeOnCIInfraFailureFlag.help,
-		noCIWaitFlag.name, adminMergeOnCIInfraFailureFlag.name)
+  ralph merge 321 --no-ci-wait                       Skip CI wait (use when Actions is down)
+  ralph merge 321 --admin-merge-on-ci-infra-failure   Bypass branch protection on infra-only CI failure
+`, config.FlagUsageFor(config.MergeFlags))
 }
