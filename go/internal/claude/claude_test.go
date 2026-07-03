@@ -1897,6 +1897,92 @@ func TestPoll_RateLimitNowUsingOverage_LogsOnce(t *testing.T) {
 	}
 }
 
+// --- rateLimitScan / rateLimitLogger extraction tests ---
+
+// Verifies rateLimitScan.absorb groups the rl-prefixed fields into a single
+// sub-struct and keeps first-occurrence-wins semantics for each transition
+// kind, matching scanNewLines' original inline behavior.
+func TestRateLimitScan_AbsorbKeepsFirstOccurrencePerTransition(t *testing.T) {
+	var scan rateLimitScan
+
+	firstReset := time.Unix(1000, 0)
+	secondReset := time.Unix(2000, 0)
+
+	scan.absorb(rateLimitEvent{resetAt: firstReset, warning: true, rateLimitType: "five_hour", utilization: 0.9})
+	scan.absorb(rateLimitEvent{resetAt: secondReset, warning: true, rateLimitType: "seven_day", utilization: 0.5})
+
+	if !scan.warning {
+		t.Fatal("expected warning=true")
+	}
+	if !scan.resetAt.Equal(firstReset) {
+		t.Errorf("expected first warning's resetAt %v to win, got %v", firstReset, scan.resetAt)
+	}
+	if scan.rateLimitType != "five_hour" {
+		t.Errorf("expected first warning's rateLimitType to win, got %q", scan.rateLimitType)
+	}
+
+	// A later throttled event still wins over an earlier warning — throttled
+	// takes priority over warning within the same scan.
+	scan.absorb(rateLimitEvent{resetAt: secondReset, throttled: true, rateLimitType: "daily", utilization: 1.0})
+	if !scan.throttled {
+		t.Fatal("expected throttled=true")
+	}
+	if !scan.resetAt.Equal(secondReset) {
+		t.Errorf("expected throttled event's resetAt to overwrite, got %v", scan.resetAt)
+	}
+}
+
+// Verifies rateLimitLogger.observe reports a throttle as a kill signal and
+// logs it, encapsulating the transition state formerly held in five loose
+// local bools inside poll.
+func TestRateLimitLogger_ObserveReportsThrottle(t *testing.T) {
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+	var rl rateLimitLogger
+
+	resetAt := time.Unix(5000, 0)
+	got, throttled := rl.observe(&runner, RunConfig{}, rateLimitScan{throttled: true, resetAt: resetAt, rateLimitType: "daily", utilization: 1.0})
+
+	if !throttled {
+		t.Fatal("expected throttled=true")
+	}
+	if !got.Equal(resetAt) {
+		t.Errorf("expected resetAt %v, got %v", resetAt, got)
+	}
+	found := false
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "rate limit throttled") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a throttled log line, got %v", log.logs)
+	}
+}
+
+// Verifies rateLimitLogger.observe emits the warning log exactly once across
+// repeated ticks that keep reporting the same warning, encapsulating the
+// warningLogged bool that used to live in poll's local scope.
+func TestRateLimitLogger_ObserveLogsWarningOnce(t *testing.T) {
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+	var rl rateLimitLogger
+
+	scan := rateLimitScan{warning: true, resetAt: time.Unix(6000, 0), rateLimitType: "five_hour", utilization: 0.95}
+	rl.observe(&runner, RunConfig{}, scan)
+	rl.observe(&runner, RunConfig{}, scan)
+
+	var warningCount int
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "rate limit warning") {
+			warningCount++
+		}
+	}
+	if warningCount != 1 {
+		t.Errorf("expected exactly 1 warning log, got %d: %v", warningCount, log.logs)
+	}
+}
+
 // --- Process group cleanup tests ---
 
 // Verifies that stopProcessGroup kills child processes spawned by a bash
