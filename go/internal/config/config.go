@@ -119,6 +119,10 @@ type Config struct {
 	// effect on real test failures.
 	AdminMergeOnCIInfraFailure bool
 
+	// SkipCIWait is set by the `ralph merge` subcommand (MergeFlags, not the
+	// loop's own Flags registry) to skip AwaitCI polling in MergeStack.
+	SkipCIWait bool
+
 	// LogRetentionDays is the number of days to keep loop logs in the stable
 	// log directory. Zero disables pruning.
 	LogRetentionDays int
@@ -197,42 +201,19 @@ func parseFilterStream(args []string) Subcommand {
 }
 
 // Parse processes CLI arguments into a Config using the Flags registry.
-// Returns an error for unknown flags or missing values.
+// Returns an error for unknown flags or missing values. ralph loop takes no
+// positional arguments, so any leftover positional (e.g. a stray directory
+// argument) is also rejected.
 func Parse(args []string) (Config, error) {
 	cfg := Defaults()
 	cfg.cliSet = make(map[string]bool)
-	i := 0
 
-	for i < len(args) {
-		f, ok := flagMap[args[i]]
-		if !ok {
-			if len(args[i]) > 0 && args[i][0] == '-' {
-				return cfg, fmt.Errorf("unknown option: %s", args[i])
-			}
-			return cfg, fmt.Errorf("unknown argument: %s", args[i])
-		}
-
-		if f.Kind == KindBool {
-			if err := f.Apply(&cfg, ""); err != nil {
-				return cfg, err
-			}
-			if f.ConfigKey != "" {
-				cfg.cliSet[f.ConfigKey] = true
-			}
-			i++
-		} else {
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			if err := f.Apply(&cfg, v); err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			if f.ConfigKey != "" {
-				cfg.cliSet[f.ConfigKey] = true
-			}
-			i += 2
-		}
+	positional, err := ParseFlags(Flags, &cfg, args)
+	if err != nil {
+		return cfg, err
+	}
+	if len(positional) > 0 {
+		return cfg, fmt.Errorf("unknown argument: %s", positional[0])
 	}
 
 	return cfg, nil
