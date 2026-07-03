@@ -37,12 +37,7 @@ const (
 // "claude-sonnet-4-5-20241022" → "sonnet", "claude-haiku-4-5-20251001" → "haiku".
 // Returns the full ID if no known family is found.
 func ModelShortName(model string) string {
-	for _, family := range []string{"opus", "sonnet", "haiku"} {
-		if strings.Contains(model, family) {
-			return family
-		}
-	}
-	return model
+	return config.ModelShortName(model)
 }
 
 // Result describes the outcome of a post-signal verification.

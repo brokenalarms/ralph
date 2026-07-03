@@ -24,6 +24,22 @@ const (
 	ModelFable  = "fable"
 )
 
+// ModelFamilies lists every recognized model family, in the order checked
+// by ModelShortName.
+var ModelFamilies = []string{ModelOpus, ModelSonnet, ModelHaiku, ModelFable}
+
+// ModelShortName extracts a friendly family name from a model ID string.
+// "claude-sonnet-4-5-20241022" → "sonnet", "claude-haiku-4-5-20251001" → "haiku".
+// Returns the full ID if no known family is found.
+func ModelShortName(model string) string {
+	for _, family := range ModelFamilies {
+		if strings.Contains(model, family) {
+			return family
+		}
+	}
+	return model
+}
+
 // Bead assignee identities — the single source of truth for bead ownership.
 // The autonomous loop works ONLY beads assigned to LoopAssignee (its inbox) and
 // claims them explicitly as such. The task manager creates beads owned by

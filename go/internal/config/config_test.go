@@ -1252,4 +1252,25 @@ func TestLogRetentionDays(t *testing.T) {
 	}
 }
 
+// ModelShortName is the single canonical family-shortening helper shared by
+// internal/verify and internal/logging, so a model ID shortens the same way
+// everywhere it is displayed or compared.
+func TestModelShortName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"claude-opus-4-6-20260101", ModelOpus},
+		{"claude-sonnet-4-5-20241022", ModelSonnet},
+		{"claude-haiku-4-5-20251001", ModelHaiku},
+		{"claude-fable-5", ModelFable},
+		{"unknown-model-v1", "unknown-model-v1"},
+	}
+	for _, tt := range tests {
+		got := ModelShortName(tt.input)
+		if got != tt.want {
+			t.Errorf("ModelShortName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
 
