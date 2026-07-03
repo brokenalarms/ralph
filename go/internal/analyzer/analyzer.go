@@ -141,25 +141,6 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 	return Result{Action: Continue}
 }
 
-// maxToolCallRepeats counts the most-repeated tool call signature,
-// matching ralph.sh's grep + sort + uniq -c approach.
-func maxToolCallRepeats(toolCalls []string) int {
-	if len(toolCalls) == 0 {
-		return 0
-	}
-	counts := make(map[string]int)
-	for _, key := range toolCalls {
-		counts[key]++
-	}
-	max := 0
-	for _, c := range counts {
-		if c > max {
-			max = c
-		}
-	}
-	return max
-}
-
 var testFileBaseRe = regexp.MustCompile(`(?i)(test|spec|_test\.|test_)`)
 var testDirRe = regexp.MustCompile(`(?i)(tests?|specs?|__tests__)$`)
 
@@ -188,16 +169,14 @@ func isTestFile(path string) bool {
 // parsedLog holds the extracted content from a JSON-lines iteration log,
 // split by source so detectors can target the right signal.
 type parsedLog struct {
-	AssistantText string   // text and thinking blocks from assistant messages
-	ToolCalls     []string // "toolName:target" signatures from tool_use blocks
+	AssistantText string // text and thinking blocks from assistant messages
 }
 
-// parseLog walks the JSON-lines log once, extracting assistant text/thinking
-// and tool call signatures. All text-based detectors should run against
+// parseLog walks the JSON-lines log once, extracting assistant text and
+// thinking blocks. All text-based detectors should run against
 // AssistantText to avoid false positives from file contents in tool results.
 func parseLog(log string) parsedLog {
 	var text strings.Builder
-	var calls []string
 
 	for _, line := range strings.Split(log, "\n") {
 		line = strings.TrimSpace(line)
@@ -215,11 +194,9 @@ func parseLog(log string) parsedLog {
 		}
 
 		var blocks []struct {
-			Type     string          `json:"type"`
-			Text     string          `json:"text"`
-			Thinking string          `json:"thinking"`
-			Name     string          `json:"name"`
-			Input    json.RawMessage `json:"input"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
 		}
 		if json.Unmarshal(msg.Message.Content, &blocks) != nil {
 			continue
@@ -239,43 +216,13 @@ func parseLog(log string) parsedLog {
 						text.WriteString(b.Thinking)
 						text.WriteByte('\n')
 					}
-				case "tool_use":
-					target := extractToolTarget(b.Input)
-					calls = append(calls, b.Name+":"+target)
 				}
 			}
 		}
 	}
 	return parsedLog{
 		AssistantText: text.String(),
-		ToolCalls:     calls,
 	}
-}
-
-// extractToolTarget pulls the most identifying field from a tool_use input.
-func extractToolTarget(raw json.RawMessage) string {
-	var input struct {
-		Command  string `json:"command"`
-		FilePath string `json:"file_path"`
-		Pattern  string `json:"pattern"`
-	}
-	if json.Unmarshal(raw, &input) != nil {
-		return ""
-	}
-	if input.Command != "" {
-		return input.Command
-	}
-	if input.FilePath != "" {
-		return input.FilePath
-	}
-	return input.Pattern
-}
-
-func firstN(s []string, n int) []string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 // --- Error fingerprinting ---
