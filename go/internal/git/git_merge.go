@@ -60,7 +60,7 @@ func (r *repo) assertMergedAncestor(mergedSHA string) error {
 	dir := r.projectDir
 	_ = r.gitCmdErr(dir, "fetch", "origin", r.baseBranch)
 	ref := "origin/" + r.baseBranch
-	if r.gitCmdErr(dir, "merge-base", "--is-ancestor", mergedSHA, ref) != nil {
+	if !r.isAncestor(dir, mergedSHA, ref) {
 		return fmt.Errorf("post-merge ancestor check FAILED: merged SHA %s is NOT an ancestor of %s — commits may have landed in a dead lineage; bead left open for manual recovery", mergedSHA, ref)
 	}
 	return nil
@@ -102,7 +102,7 @@ func (r *repo) Push(ctx context.Context) error {
 		// Verify parent tip is an ancestor of HEAD. If not, the branch
 		// diverged from its parent (e.g. parent was squash-pushed since
 		// this branch was created) and needs rebasing first.
-		if r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") != nil {
+		if !r.isAncestor(r.workDir, baseSHA, "HEAD") {
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch diverged from %s — rebasing before push", baseBranch)
 			if err := r.EnsureUpToDate(ctx); err != nil {
 				r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase before push failed: %v", err)
@@ -111,7 +111,7 @@ func (r *repo) Push(ctx context.Context) error {
 			_ = r.gitCmdErr(r.workDir, "fetch", "origin", baseBranch)
 			baseSHA = r.gitOutput(r.workDir, "rev-parse", baseRef)
 		}
-		if baseSHA != "" && r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") == nil {
+		if baseSHA != "" && r.isAncestor(r.workDir, baseSHA, "HEAD") {
 			headSHA := r.gitOutput(r.workDir, "rev-parse", "HEAD")
 			if headSHA != baseSHA {
 				commitMsg := r.gitOutput(r.workDir, "log", "-1", "--format=%s")
@@ -811,7 +811,7 @@ func (r *repo) branchNeedsUpdate() bool {
 	if !r.refExists(r.workDir, "origin/"+baseBranch) {
 		return false
 	}
-	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil
+	return !r.isAncestor(r.workDir, "origin/"+baseBranch, "HEAD")
 }
 
 // ExecuteMergeOpts holds all parameters for the executeMerge package function.
@@ -1046,7 +1046,7 @@ func (r *repo) ResolveConflict(ctx context.Context) error {
 	// is still not an ancestor of HEAD, auto-resolve failed and force-pushing
 	// would just repeat the same conflict on GitHub.
 	if r.refExists(r.workDir, "origin/"+baseBranch) {
-		if r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil {
+		if !r.isAncestor(r.workDir, "origin/"+baseBranch, "HEAD") {
 			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase did not resolve conflicts with origin/%s — skipping force-push", baseBranch)
 			return &UnresolvedConflictError{}
 		}
@@ -1143,8 +1143,7 @@ func (r *repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, a
 		if r.refExists(r.workDir, remoteRef) {
 			// origin/<branch> exists — bail if HEAD is already there to avoid
 			// a spurious API call that would produce a "Problems parsing JSON" 400.
-			count := strings.TrimSpace(r.gitOutput(r.workDir, "rev-list", remoteRef+"..HEAD", "--count"))
-			if count == "0" {
+			if !r.hasCommitsAhead(remoteRef, "HEAD") {
 				return false, nil
 			}
 		} else {
@@ -1152,8 +1151,7 @@ func (r *repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, a
 			// HEAD has no commits ahead of origin/main — nothing left to flush.
 			defaultBranch := r.baseBranch
 			mainRef := "origin/" + defaultBranch
-			count := strings.TrimSpace(r.gitOutput(r.workDir, "rev-list", mainRef+"..HEAD", "--count"))
-			if count == "0" {
+			if !r.hasCommitsAhead(mainRef, "HEAD") {
 				return false, nil
 			}
 		}

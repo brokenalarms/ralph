@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -101,6 +102,31 @@ func (r *repo) refExists(dir, ref string) bool {
 	return r.gitCmdErr(dir, "rev-parse", "--verify", ref) == nil
 }
 
+// isAncestor reports whether ancestor is an ancestor of (or equal to)
+// descendant — the boolean form of `git merge-base --is-ancestor`.
+func (r *repo) isAncestor(dir, ancestor, descendant string) bool {
+	return r.gitCmdErr(dir, "merge-base", "--is-ancestor", ancestor, descendant) == nil
+}
+
+// isAncestorCtx is the context-aware variant of isAncestor.
+func (r *repo) isAncestorCtx(ctx context.Context, dir, ancestor, descendant string) bool {
+	return r.gitCmdErrCtx(ctx, dir, "merge-base", "--is-ancestor", ancestor, descendant) == nil
+}
+
+// revCount returns the number of commits in from..to, parsing the output of
+// `git rev-list --count` once. Empty or unparseable output maps to zero.
+func (r *repo) revCount(dir, from, to string) int {
+	out := strings.TrimSpace(r.gitOutput(dir, "rev-list", "--count", from+".."+to))
+	count, _ := strconv.Atoi(out)
+	return count
+}
+
+// hasCommitsAhead reports whether ref has any commits not on base, i.e.
+// whether `git rev-list --count base..ref` is greater than zero.
+func (r *repo) hasCommitsAhead(base, ref string) bool {
+	return r.revCount(r.workDir, base, ref) > 0
+}
+
 // DetectDefaultBranch returns the configured base branch. The base is the
 // single source of truth: resolved once at startup into cfg.BaseBranch,
 // threaded into git.New as r.baseBranch, and never re-derived from git.
@@ -156,8 +182,7 @@ func (r *repo) LocalBranchHasCommits(branch string) bool {
 		return false
 	}
 	defaultBranch := r.baseBranch
-	count := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+defaultBranch+".."+branch)
-	return count != "" && count != "0"
+	return r.hasCommitsAhead("origin/"+defaultBranch, branch)
 }
 
 // CheckoutLocalBranch checks out an existing local branch in the worktree
@@ -201,8 +226,7 @@ func (r *repo) RemoteBranchHasCommits(branch string) bool {
 		return false
 	}
 	defaultBranch := r.baseBranch
-	count := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+defaultBranch+".."+remote)
-	return count != "" && count != "0"
+	return r.hasCommitsAhead("origin/"+defaultBranch, remote)
 }
 
 // RemoteBranchIsOnMain returns true if a remote branch is a descendant of
@@ -213,12 +237,12 @@ func (r *repo) RemoteBranchIsOnMain(branch string) bool {
 	remote := "origin/" + branch
 
 	// Main is ancestor of branch — branch is cleanly ahead.
-	if r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, remote) == nil {
+	if r.isAncestor(r.workDir, "origin/"+defaultBranch, remote) {
 		return true
 	}
 
 	// Branch is ancestor of main — work already landed.
-	if r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil {
+	if r.isAncestor(r.workDir, remote, "origin/"+defaultBranch) {
 		return true
 	}
 
@@ -231,12 +255,12 @@ func (r *repo) RemoteBranchIsOnMain(branch string) bool {
 func (r *repo) BranchIsAncestorOfMain(branch string) bool {
 	defaultBranch := r.baseBranch
 	remote := "origin/" + branch
-	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil
+	return r.isAncestor(r.workDir, remote, "origin/"+defaultBranch)
 }
 
 // IsCommitAncestorOf returns true when sha is an ancestor of (or equal to) ref.
 func (r *repo) IsCommitAncestorOf(sha, ref string) bool {
-	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", sha, ref) == nil
+	return r.isAncestor(r.workDir, sha, ref)
 }
 
 // BranchIsAheadOfMain returns true if origin's default branch is an
@@ -246,7 +270,7 @@ func (r *repo) IsCommitAncestorOf(sha, ref string) bool {
 func (r *repo) BranchIsAheadOfMain(branch string) bool {
 	defaultBranch := r.baseBranch
 	remote := "origin/" + branch
-	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, remote) == nil
+	return r.isAncestor(r.workDir, "origin/"+defaultBranch, remote)
 }
 
 // BranchHasUnmergedWork returns true if the remote branch has any commits
@@ -257,8 +281,7 @@ func (r *repo) BranchIsAheadOfMain(branch string) bool {
 // skipping PR creation for diverged branches with real unmerged work.
 func (r *repo) BranchHasUnmergedWork(branch string) bool {
 	defaultBranch := r.baseBranch
-	out := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+defaultBranch+"..origin/"+branch)
-	return strings.TrimSpace(out) != "0" && strings.TrimSpace(out) != ""
+	return r.hasCommitsAhead("origin/"+defaultBranch, "origin/"+branch)
 }
 
 func (r *repo) mRebaseInProgress() bool {
