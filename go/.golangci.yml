@@ -1,6 +1,5 @@
-# Enforces project test conventions. Currently a single rule: tests must not
-# use a fixed time.Sleep as a synchronization proxy — see AGENTS.md
-# ("Test synchronization"). Synchronize via internal/testutil.WaitFor* instead.
+# Enforces project test conventions and module boundaries — see AGENTS.md
+# ("Test synchronization") and docs/specs/architecture.md ("What NOT to Do").
 run:
   timeout: 5m
 
@@ -8,6 +7,7 @@ linters:
   disable-all: true
   enable:
     - forbidigo
+    - depguard
 
 linters-settings:
   forbidigo:
@@ -16,6 +16,33 @@ linters-settings:
     forbid:
       - p: 'time\.Sleep'
         msg: 'no fixed time.Sleep in tests — synchronize via testutil.WaitFor* (see AGENTS.md "Test synchronization")'
+  depguard:
+    rules:
+      exec-boundary:
+        # docs/specs/architecture.md ("What NOT to Do") confines subprocess
+        # calls to git/gh (internal/git), claude (internal/agent,
+        # internal/claude), and bd (internal/tasks) to their owning module.
+        # internal/tmux, internal/notify, internal/testutil, internal/server,
+        # internal/verify, and cmd/ralph/helpers.go already have vetted
+        # os/exec use for unrelated tools (tmux, terminal-notifier, kill,
+        # pgrep/pkill, bash, test/build runners) — they are not part of the
+        # git/gh/bd/claude boundary this rule guards.
+        files:
+          - "$all"
+          - "!$test"
+          - "!**/internal/git/**"
+          - "!**/internal/agent/**"
+          - "!**/internal/claude/**"
+          - "!**/internal/tasks/**"
+          - "!**/internal/tmux/**"
+          - "!**/internal/notify/**"
+          - "!**/internal/testutil/**"
+          - "!**/internal/server/**"
+          - "!**/internal/verify/**"
+          - "!**/cmd/ralph/helpers.go"
+        deny:
+          - pkg: "os/exec"
+            desc: "os/exec is confined to internal/git, internal/agent, internal/claude, internal/tasks — route git/gh calls through internal/git, claude calls through internal/agent or internal/claude, bd calls through internal/tasks (see docs/specs/architecture.md 'What NOT to Do')"
 
 issues:
   max-issues-per-linter: 0
