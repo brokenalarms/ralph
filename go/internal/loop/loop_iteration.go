@@ -63,6 +63,42 @@ type postSignalParams struct {
 	diffStat   string
 }
 
+// watchFeedbackCancel polls ralphDir for a feedback file and cancels the
+// returned context if one appears, mirroring the polling pattern in
+// claude.Runner.runOnSignalWithFeedbackWatch (which kills the agent process
+// on the same signal). Callers must invoke the returned cancel func — it
+// stops the ticker and waits for the poller goroutine to exit.
+func (l *Loop) watchFeedbackCancel(ctx context.Context, ralphDir string) (context.Context, func()) {
+	if ralphDir == "" {
+		return ctx, func() {}
+	}
+	feedbackFile := filepath.Join(ralphDir, "feedback")
+	ctx, cancel := context.WithCancel(ctx)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := os.Stat(feedbackFile); err == nil {
+					os.Remove(feedbackFile)
+					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Feedback signal detected during post-signal pipeline — cancelling")
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, func() {
+		cancel()
+		ticker.Stop()
+		<-done
+	}
+}
+
 // completeTask runs after the agent signals completion: verifies the work,
 // ships a PR, merges if configured, and closes the bead.
 func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
@@ -76,34 +112,8 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	// (Ctrl-C / feedback file).
 
 	// Watch for feedback file and cancel context when it appears.
-	if p.ralphDir != "" {
-		feedbackFile := filepath.Join(p.ralphDir, "feedback")
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithCancel(ctx)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					if _, err := os.Stat(feedbackFile); err == nil {
-						os.Remove(feedbackFile)
-						l.logger.Emit(logging.Opts{Domain: logging.Git}, "Feedback signal detected during post-signal pipeline — cancelling")
-						cancel()
-						return
-					}
-				}
-			}
-		}()
-		defer func() {
-			cancel()
-			ticker.Stop()
-			<-done
-		}()
-	}
+	ctx, cancelWatch := l.watchFeedbackCancel(ctx, p.ralphDir)
+	defer cancelWatch()
 
 	// Guard: if the task was skipped during verification (e.g. 3 rejected
 	// attempts), do not push or merge the rejected work.
@@ -171,97 +181,89 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	l.state.TouchPlanFlash()
 
 	headAfterSignal := l.git.HeadRev()
-	hasPriorIterationCommits := false
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
 		// No new commits this iteration. Check if prior iterations left
 		// commits ahead of origin/main — if so, fall through to Ship
 		// instead of closing without a PR.
+		hasPriorIterationCommits := false
 		baseBranch := l.git.DetectDefaultBranch()
 		if priorLog := l.git.LogOneline("origin/"+baseBranch, "HEAD"); priorLog != "" {
 			l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits this iteration, but prior-iteration commits ahead of origin/%s — routing through Ship", baseBranch)
 			hasPriorIterationCommits = true
 		}
-	}
-	if p.headBefore != "" && headAfterSignal == p.headBefore && !hasPriorIterationCommits {
-		// No new commits and no prior-iteration commits — verification passed
-		// but there's nothing to push.
-		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
-
-		// Check for an existing PR from a prior attempt that still needs merging.
-		// Try external ref first, then fall back to branch-based PR discovery.
-		if p.taskID != "" {
-			var prNum int
-			if ref, _ := l.taskBackend.GetExternalRef(p.taskID); ref != "" {
-				prNum = parsePRNumber(ref)
-			}
-			if prNum == 0 {
-				if n, _, _, err := l.git.FindPRForBranch(ctx, l.git.GetWorktreeBranch()); err == nil && n != 0 {
-					prNum = n
-				}
-			}
-			if prNum != 0 {
-				prState, _ := l.git.GetPRState(ctx, prNum)
-				if prState == git.PRStateOpen {
-					// Existing open PR with no new commits: route through the
-					// single ship/finalize path rather than re-implementing a
-					// doShip + close here. The old inline version discarded
-					// doShip's ciFailure return and closed as "merge pending"
-					// even when required CI was red (the third instance of the
-					// close-on-failing-CI bug). shipAndFinalize → doShip handles
-					// CI failure (fix agent + retry), merge, and close correctly.
-					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through shipAndFinalize", prNum)
-					return l.shipAndFinalize(ctx, p)
-				}
-				if prState == git.PRStateMerged {
-					l.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged — closing bead", prNum)
-					prRef := fmt.Sprintf("PR #%d", prNum)
-					closeReason := fmt.Sprintf("Fixed in %s (already merged)", prRef)
-					_ = l.taskBackend.CloseTask(p.taskID, closeReason)
-					l.persistCompleted(p.taskID, true)
-					l.state.ClearCurrentTask()
-					l.git.TagTaskEnd(p.taskID)
-					if p.notify {
-						notify.TaskMerged(p.taskID, p.nextTask, time.Now())
-					}
-					return completeTaskOut{action: signalSkipped, merged: true, prNumber: prNum}
-				}
-			}
+		if !hasPriorIterationCommits {
+			return l.finalizeNoNewCommits(ctx, p)
 		}
-
-		// No existing PR to merge — close the bead directly.
-		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Closing bead (no PR to merge)")
-		if p.taskID != "" {
-			if ctx.Err() != nil {
-				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-				l.setPhaseInterrupted(p.taskID)
-				return completeTaskOut{action: signalComplete}
-			}
-			closeReason := "verified complete (no new commits)"
-			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
-				skipReason := tasks.SkipCloseFailed
-				detail := ""
-				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
-					skipReason = tasks.SkipDependencyBlocked
-					detail = strings.Join(blockers, ",")
-				} else {
-					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
-				}
-				l.skipTask(p.taskID, skipReason, detail)
-			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
-				l.persistCompleted(p.taskID, false)
-				l.state.ClearCurrentTask()
-			}
-		}
-		l.git.TagTaskEnd(p.taskID)
-		if p.notify {
-			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary, time.Now())
-		}
-		return completeTaskOut{action: signalSkipped}
 	}
 
 	return l.shipAndFinalize(ctx, p)
+}
+
+// finalizeNoNewCommits handles the case where verification passed but the
+// agent produced no new commits this iteration and no prior-iteration
+// commits are ahead of origin — there is nothing to push. It looks for an
+// existing PR from a prior attempt (routing through shipAndFinalize if still
+// open, closing directly if already merged) and otherwise closes the bead
+// outright since the work is verified complete with nothing to ship.
+func (l *Loop) finalizeNoNewCommits(ctx context.Context, p completeTaskParams) completeTaskOut {
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
+
+	// Check for an existing PR from a prior attempt that still needs merging.
+	// Try external ref first, then fall back to branch-based PR discovery.
+	if p.taskID != "" {
+		var prNum int
+		if ref, _ := l.taskBackend.GetExternalRef(p.taskID); ref != "" {
+			prNum = parsePRNumber(ref)
+		}
+		if prNum == 0 {
+			if n, _, _, err := l.git.FindPRForBranch(ctx, l.git.GetWorktreeBranch()); err == nil && n != 0 {
+				prNum = n
+			}
+		}
+		if prNum != 0 {
+			prState, _ := l.git.GetPRState(ctx, prNum)
+			if prState == git.PRStateOpen {
+				// Existing open PR with no new commits: route through the
+				// single ship/finalize path rather than re-implementing a
+				// doShip + close here. The old inline version discarded
+				// doShip's ciFailure return and closed as "merge pending"
+				// even when required CI was red (the third instance of the
+				// close-on-failing-CI bug). shipAndFinalize → doShip handles
+				// CI failure (fix agent + retry), merge, and close correctly.
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through shipAndFinalize", prNum)
+				return l.shipAndFinalize(ctx, p)
+			}
+			if prState == git.PRStateMerged {
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged — closing bead", prNum)
+				prRef := fmt.Sprintf("PR #%d", prNum)
+				closeReason := fmt.Sprintf("Fixed in %s (already merged)", prRef)
+				_ = l.taskBackend.CloseTask(p.taskID, closeReason)
+				l.persistCompleted(p.taskID, true)
+				l.state.ClearCurrentTask()
+				l.git.TagTaskEnd(p.taskID)
+				if p.notify {
+					notify.TaskMerged(p.taskID, p.nextTask, time.Now())
+				}
+				return completeTaskOut{action: signalSkipped, merged: true, prNumber: prNum}
+			}
+		}
+	}
+
+	// No existing PR to merge — close the bead directly.
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Closing bead (no PR to merge)")
+	if p.taskID != "" {
+		if ctx.Err() != nil {
+			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+			l.setPhaseInterrupted(p.taskID)
+			return completeTaskOut{action: signalComplete}
+		}
+		l.closeOrSkip(p.taskID, "verified complete (no new commits)", false)
+	}
+	l.git.TagTaskEnd(p.taskID)
+	if p.notify {
+		notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary, time.Now())
+	}
+	return completeTaskOut{action: signalSkipped}
 }
 
 // shipAndFinalize is the single source of truth for shipping a task's PR and
@@ -317,78 +319,20 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 		prNumber = ct.PRNum
 	}
 
+	// Single hoisted ctx-error guard for every close/skip path below. It sits
+	// after doShip (the long-running push/create/merge/CI stage) and before all
+	// of handleNoPR, the CI-infra close, and the merge-outcome close — the sites
+	// that each carried their own "Ctrl-C received — leaving bead open" guard
+	// before extraction. Releasing the claim (setPhaseInterrupted) matches those
+	// per-site guards so an interrupt during doShip still leaves the bead open.
 	if ctx.Err() != nil {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before merge")
+		l.setPhaseInterrupted(p.taskID)
 		return completeTaskOut{action: signalComplete}
 	}
 
 	if prNumber == 0 {
-		// Three distinct sub-cases when no PR number is available:
-		//
-		//   (a) shipErr != nil && pushedBranch == "": push was attempted but
-		//       failed (e.g. exit 128, network error). The agent's commits are
-		//       in the local worktree only — origin was never reached. Skip so
-		//       the next iteration can retry; closing would silently discard
-		//       work that was never shipped.
-		//
-		//   (b) pushedBranch != "" && shipErr != nil: the Phase 1 push succeeded
-		//       but CreatePR failed (rate limit, 422, network). Commits are on the
-		//       remote branch but no PR tracks them. Skip instead of closing so
-		//       triage can rediscover the orphaned branch via the skip reason.
-		//
-		//   (c) shipErr == nil && pushedBranch == "": nothing was pushed. The
-		//       agent signalled with no new commits and no prior-iteration commits
-		//       to ship. Closing the bead is correct — work is verified complete.
-		if shipErr != nil && pushedBranch == "" {
-			branch := l.git.GetWorktreeBranch()
-			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
-				"Push failed (%v) — skipping bead %s (work remains in local worktree)",
-				shipErr, p.taskID)
-			if p.taskID != "" {
-				if ctx.Err() != nil {
-					l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-					l.setPhaseInterrupted(p.taskID)
-					return completeTaskOut{action: signalComplete}
-				}
-				l.skipTask(p.taskID, tasks.SkipPushFailed, branch)
-			}
-			return completeTaskOut{action: signalSkipped}
-		}
-
-		if pushedBranch != "" {
-			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
-				"No PR created but branch %s was pushed — skipping bead %s (CreatePR failed; work lives on remote)",
-				pushedBranch, p.taskID)
-			if p.taskID != "" {
-				if ctx.Err() != nil {
-					l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-					l.setPhaseInterrupted(p.taskID)
-					return completeTaskOut{action: signalComplete}
-				}
-				// Downstream triage (and the task-manager prompt) parses this
-				// to locate orphaned remote branches whose PRs failed to create.
-				l.skipTask(p.taskID, tasks.SkipPRCreationFailed, pushedBranch)
-			}
-			return completeTaskOut{action: signalSkipped}
-		}
-
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
-		if p.taskID != "" {
-			if ctx.Err() != nil {
-				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-				l.setPhaseInterrupted(p.taskID)
-				return completeTaskOut{action: signalComplete}
-			}
-			branch := l.git.GetWorktreeBranch()
-			closeReason := "Verified — no PR created"
-			if branch != "" {
-				closeReason = fmt.Sprintf("Verified — branch %s, no PR", branch)
-			}
-			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
-			}
-		}
-		return completeTaskOut{action: signalComplete, ct: &ct}
+		return l.handleNoPR(p, ct, shipErr, pushedBranch)
 	}
 
 	// CI is failing — decide whether to close or leave open based on failure type.
@@ -397,32 +341,12 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 			// Infrastructure failure (zero job steps): work is verified locally,
 			// CI never ran due to billing/runner issues. Close the bead and leave
 			// the PR open — it will merge when CI infrastructure recovers.
-			if ctx.Err() != nil {
-				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-				l.setPhaseInterrupted(p.taskID)
-				return completeTaskOut{action: signalComplete}
-			}
 			prRef := ct.PRURL
 			if prRef == "" {
 				prRef = fmt.Sprintf("PR #%d", prNumber)
 			}
 			closeReason := fmt.Sprintf("Verified — %s open, merge pending CI recovery", prRef)
-			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
-				skipReason := tasks.SkipCloseFailed
-				detail := ""
-				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
-					skipReason = tasks.SkipDependencyBlocked
-					detail = strings.Join(blockers, ",")
-				} else {
-					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
-				}
-				l.skipTask(p.taskID, skipReason, detail)
-			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
-				l.persistCompleted(p.taskID, false)
-				l.state.ClearCurrentTask()
-			}
+			l.closeOrSkip(p.taskID, closeReason, false)
 			l.git.TagTaskEnd(p.taskID)
 			return completeTaskOut{action: signalComplete, ct: &ct, prNumber: prNumber}
 		}
@@ -434,11 +358,6 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 
 	// Close the task based on merge outcome.
 	if p.taskID != "" {
-		if ctx.Err() != nil {
-			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-			l.setPhaseInterrupted(p.taskID)
-			return completeTaskOut{action: signalComplete}
-		}
 		prRef := ct.PRURL
 		if prRef == "" {
 			prRef = fmt.Sprintf("PR #%d", prNumber)
@@ -451,22 +370,7 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 		} else {
 			closeReason = fmt.Sprintf("Fixed in %s", prRef)
 		}
-		if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
-			skipReason := tasks.SkipCloseFailed
-			detail := ""
-			if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
-				skipReason = tasks.SkipDependencyBlocked
-				detail = strings.Join(blockers, ",")
-			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
-			}
-			l.skipTask(p.taskID, skipReason, detail)
-		} else {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
-			l.persistCompleted(p.taskID, merged)
-			l.state.ClearCurrentTask()
-		}
+		l.closeOrSkip(p.taskID, closeReason, merged)
 	}
 
 	if p.notify {
@@ -478,6 +382,83 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 	}
 
 	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged, prNumber: prNumber}
+}
+
+// handleNoPR handles the three documented sub-cases when ship produced no PR
+// number:
+//
+//   - shipErr != nil && pushedBranch == "": push was attempted but failed
+//     (e.g. exit 128, network error). The agent's commits are in the local
+//     worktree only — origin was never reached. Skip so the next iteration
+//     can retry; closing would silently discard work that was never shipped.
+//
+//   - pushedBranch != "" && shipErr != nil: the Phase 1 push succeeded but
+//     CreatePR failed (rate limit, 422, network). Commits are on the remote
+//     branch but no PR tracks them. Skip instead of closing so triage can
+//     rediscover the orphaned branch via the skip reason.
+//
+//   - shipErr == nil && pushedBranch == "": nothing was pushed. The agent
+//     signalled with no new commits and no prior-iteration commits to ship.
+//     Closing the bead is correct — work is verified complete.
+func (l *Loop) handleNoPR(p completeTaskParams, ct CompletedTask, shipErr error, pushedBranch string) completeTaskOut {
+	if shipErr != nil && pushedBranch == "" {
+		branch := l.git.GetWorktreeBranch()
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+			"Push failed (%v) — skipping bead %s (work remains in local worktree)",
+			shipErr, p.taskID)
+		if p.taskID != "" {
+			l.skipTask(p.taskID, tasks.SkipPushFailed, branch)
+		}
+		return completeTaskOut{action: signalSkipped}
+	}
+
+	if pushedBranch != "" {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+			"No PR created but branch %s was pushed — skipping bead %s (CreatePR failed; work lives on remote)",
+			pushedBranch, p.taskID)
+		if p.taskID != "" {
+			// Downstream triage (and the task-manager prompt) parses this
+			// to locate orphaned remote branches whose PRs failed to create.
+			l.skipTask(p.taskID, tasks.SkipPRCreationFailed, pushedBranch)
+		}
+		return completeTaskOut{action: signalSkipped}
+	}
+
+	l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
+	if p.taskID != "" {
+		branch := l.git.GetWorktreeBranch()
+		closeReason := "Verified — no PR created"
+		if branch != "" {
+			closeReason = fmt.Sprintf("Verified — branch %s, no PR", branch)
+		}
+		l.closeOrSkip(p.taskID, closeReason, false)
+	}
+	return completeTaskOut{action: signalComplete, ct: &ct}
+}
+
+// closeOrSkip closes taskID with closeReason. If CloseTask fails (e.g. the
+// bead is blocked by an open dependency), it skips the task instead so the
+// failure doesn't leave the claim stranded; on success it persists the
+// completion and clears the current task. Returns whether the close
+// succeeded.
+func (l *Loop) closeOrSkip(taskID, closeReason string, merged bool) bool {
+	if err := l.taskBackend.CloseTask(taskID, closeReason); err != nil {
+		skipReason := tasks.SkipCloseFailed
+		detail := ""
+		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", taskID, blockers)
+			skipReason = tasks.SkipDependencyBlocked
+			detail = strings.Join(blockers, ",")
+		} else {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
+		}
+		l.skipTask(taskID, skipReason, detail)
+		return false
+	}
+	l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", taskID, closeReason)
+	l.persistCompleted(taskID, merged)
+	l.state.ClearCurrentTask()
+	return true
 }
 
 // verifyCompletion delegates to the VerifyHook when set, otherwise runs
