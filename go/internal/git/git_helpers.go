@@ -231,15 +231,7 @@ func (r *repo) EnsureGitignored(entry string) {
 		existing = string(data)
 	}
 
-	found := false
-	for _, line := range strings.Split(existing, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == entry || trimmed == entry+"/" || trimmed == entry+"/*" {
-			found = true
-			break
-		}
-	}
-	if found {
+	if gitignoreContains(existing, entry) {
 		return
 	}
 
@@ -250,6 +242,53 @@ func (r *repo) EnsureGitignored(entry string) {
 		r.gitCmd(r.projectDir, "add", ".gitignore")
 		r.gitCmd(r.projectDir, "commit", "-m", "Add "+entry+" to .gitignore")
 	}
+}
+
+// gitignoreContains reports whether entry already appears as its own line in
+// content, tolerating an optional trailing / or /* suffix.
+func gitignoreContains(content, entry string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == entry || trimmed == entry+"/" || trimmed == entry+"/*" {
+			return true
+		}
+	}
+	return false
+}
+
+// EnsureIgnored appends any of entries missing from dir's .gitignore, writes
+// the file, and — when dir is inside a git repository — stages and commits
+// the change with message. Unlike EnsureGitignored (a repo method scoped to
+// the worktree instance), this is a standalone helper for callers that only
+// have a directory path, such as the tasks package bootstrapping its own
+// .gitignore entries.
+func EnsureIgnored(dir, message string, entries ...string) error {
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	existing := ""
+	if data, err := os.ReadFile(gitignorePath); err == nil {
+		existing = string(data)
+	}
+
+	changed := false
+	for _, entry := range entries {
+		if !gitignoreContains(existing, entry) {
+			existing += entry + "\n"
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+
+	if err := os.WriteFile(gitignorePath, []byte(existing), 0o644); err != nil {
+		return err
+	}
+
+	if IsGitRepo(dir) {
+		gitCmd(dir, "add", ".gitignore")
+		gitCmd(dir, "commit", "-m", message)
+	}
+	return nil
 }
 
 // hasPathPrefix reports whether path is under prefix, resolving symlinks on

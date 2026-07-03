@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,82 @@ type fnRunner struct {
 
 func (f *fnRunner) Run(ctx context.Context, dir string, args ...string) (string, error) {
 	return f.RunFn(ctx, dir, args...)
+}
+
+// Proves: EnsureIgnored appends missing entries to .gitignore and commits
+// the change in a real git repo — the behavior tasks.BD's gitignore
+// bootstrap relies on now that it calls into the git module instead of
+// shelling out to git directly.
+func TestEnsureIgnored_AppendsEntriesAndCommits(t *testing.T) {
+	dir := t.TempDir()
+	run(t, "git", "init", "-q", "-b", "main", dir)
+	run(t, "git", "-C", dir, "commit", "-q", "--allow-empty", "-m", "init")
+
+	if err := EnsureIgnored(dir, "Add beads/dolt to .gitignore", ".beads", ".dolt"); err != nil {
+		t.Fatalf("EnsureIgnored: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), ".beads") || !strings.Contains(string(data), ".dolt") {
+		t.Errorf(".gitignore missing expected entries, got: %s", data)
+	}
+
+	subject := strings.TrimSpace(cmdOutput(t, "git", "-C", dir, "log", "-1", "--pretty=%s"))
+	if subject != "Add beads/dolt to .gitignore" {
+		t.Errorf("expected commit subject %q, got %q", "Add beads/dolt to .gitignore", subject)
+	}
+}
+
+// Proves: EnsureIgnored is idempotent — a second call with entries already
+// present neither duplicates the .gitignore lines nor creates an empty commit.
+func TestEnsureIgnored_IdempotentNoDuplicateCommit(t *testing.T) {
+	dir := t.TempDir()
+	run(t, "git", "init", "-q", "-b", "main", dir)
+	run(t, "git", "-C", dir, "commit", "-q", "--allow-empty", "-m", "init")
+
+	if err := EnsureIgnored(dir, "Add beads/dolt to .gitignore", ".beads", ".dolt"); err != nil {
+		t.Fatalf("EnsureIgnored (first): %v", err)
+	}
+	firstLog := cmdOutput(t, "git", "-C", dir, "log", "--oneline")
+
+	if err := EnsureIgnored(dir, "Add beads/dolt to .gitignore", ".beads", ".dolt"); err != nil {
+		t.Fatalf("EnsureIgnored (second): %v", err)
+	}
+	secondLog := cmdOutput(t, "git", "-C", dir, "log", "--oneline")
+
+	if firstLog != secondLog {
+		t.Errorf("expected no new commit on idempotent call, got before=%q after=%q", firstLog, secondLog)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if strings.Count(string(data), ".beads") != 1 {
+		t.Errorf("expected exactly one .beads entry, got: %s", data)
+	}
+}
+
+// Proves: EnsureIgnored writes .gitignore even outside a git repo, without
+// erroring on the missing git operations (mirrors the original tasks/bd.go
+// ensureGitignore behavior, which never required a repo to be present).
+func TestEnsureIgnored_NonRepoWritesFileWithoutError(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := EnsureIgnored(dir, "Add beads/dolt to .gitignore", ".beads", ".dolt"); err != nil {
+		t.Fatalf("EnsureIgnored: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), ".beads") || !strings.Contains(string(data), ".dolt") {
+		t.Errorf(".gitignore missing expected entries, got: %s", data)
+	}
 }
 
 // initPruneTestRepo creates a plain (non-bare) local repo with one commit,
