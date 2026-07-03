@@ -3,11 +3,9 @@ package loop
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/agent"
@@ -610,29 +608,23 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 	}
 
-	var runIteration int
-	var lastAction analyzer.Action
-	var lastTaskMerged bool
-	var sessionTasks []CompletedTask
-	var currentTaskID string
-	var consecutiveSkipCount int
-	var worktreeNeedsSetup bool
-	st, _ := l.state.Load()
-	iteration := st.Iteration
+	st := &loopState{}
+	loaded, _ := l.state.Load()
+	iteration := loaded.Iteration
 
 iterLoop:
 	for {
 		// ── Task selection ──
-		completedIDs := make(map[string]bool, len(sessionTasks))
-		for _, ct := range sessionTasks {
+		completedIDs := make(map[string]bool, len(st.sessionTasks))
+		for _, ct := range st.sessionTasks {
 			completedIDs[ct.ID] = true
 		}
 		task, action, waited := l.selectNextTask(ctx, selectNextTaskParams{
-			runIteration:   runIteration,
+			runIteration:   st.runIteration,
 			maxIterations:  l.cfg.MaxIterations,
 			wait:           l.cfg.Wait,
 			completedIDs:   completedIDs,
-			lastTaskMerged: lastTaskMerged,
+			lastTaskMerged: st.lastTaskMerged,
 		})
 		if action == actionDone {
 			break
@@ -647,16 +639,16 @@ iterLoop:
 			}
 		}
 
-		runIteration++
+		st.runIteration++
 		iteration++
-		lastTaskMerged = false
-		currentTaskID = task.id
+		st.lastTaskMerged = false
+		st.currentTaskID = task.id
 
 		// Retry counters are local variables inside runVerifyPipeline, so
 		// they are naturally scoped per-iteration — no reset needed.
 
 		// ── Worktree setup: recreate after task teardown ──
-		if worktreeNeedsSetup {
+		if st.worktreeNeedsSetup {
 			if err := l.git.SetupWorktree(ctx); err != nil {
 				if ctx.Err() != nil {
 					l.state.Write("status", "stopped")
@@ -666,40 +658,15 @@ iterLoop:
 				l.state.Write("status", "error")
 				break
 			}
-			worktreeNeedsSetup = false
+			st.worktreeNeedsSetup = false
 		}
 
 		// ── Branch setup ──
-		if task.changed || !l.git.IsBranchRenamed() {
-			storedBranch, _ := l.taskBackend.GetMetadata(task.id, "branch")
-			storedExternalRef, _ := l.taskBackend.GetExternalRef(task.id)
-			completedBranches := l.completedBranches()
-			branch, err := l.git.BranchForTask(ctx, task.id, task.title, git.BranchTaskMeta{
-				Branch:            storedBranch,
-				ExternalRef:       storedExternalRef,
-				CompletedBranches: completedBranches,
-			})
-			if err != nil {
-				if ctx.Err() != nil {
-					l.state.Write("status", "stopped")
-					l.setPhaseInterrupted(task.id)
-					break
-				}
-				var transportErr *git.TransportError
-				if errors.As(err, &transportErr) {
-					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
-						"Branch setup failed (transient transport error) — skipping task %s: %v", task.id, err)
-					l.skipTask(task.id, tasks.SkipTransportError, transportErr.Op)
-					l.consecutiveNoAgentIters++
-					continue iterLoop
-				}
-				l.state.Write("status", "error")
-				break
-			}
-			l.state.WriteRunBranch(branch)
-			if task.id != "" && branch != "" && strings.Contains(branch, task.id) {
-				_ = l.taskBackend.SetMetadata(task.id, "branch", branch)
-			}
+		switch l.setupBranchForTask(ctx, task) {
+		case branchHalt:
+			break iterLoop
+		case branchContinue:
+			continue iterLoop
 		}
 
 		if l.iterationHook != nil {
@@ -708,60 +675,15 @@ iterLoop:
 
 		l.logIterationBanner(logIterationBannerParams{
 			version: l.cfg.Version,
-		}, runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), task, lastAction)
+		}, st.runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), task, st.lastAction)
 		l.beginIteration(task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──
-		branch, _ := l.taskBackend.GetMetadata(task.id, "branch")
-		if branch != "" && !strings.Contains(branch, task.id) {
-			branch = ""
-		}
-		externalRef, _ := l.taskBackend.GetExternalRef(task.id)
-		if externalRef != "" {
-			l.ensureActiveReviewers(ctx)
-		}
-		resumeResult, resumeErr := l.git.ResumeTask(ctx, git.ResumeTaskMeta{
-			TaskID:      task.id,
-			TaskTitle:   task.title,
-			Branch:      branch,
-			ExternalRef: externalRef,
-		}, git.ResumeTaskOpts{
-			AutoMerge:       l.cfg.AutoMerge,
-			Reviewers:       l.activeReviewers,
-			ReviewAddressed: l.reviewAddressedForTask(task.id, l.activeReviewers),
-		})
-		if resumeErr != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ResumeTask: %v", resumeErr)
-		}
-		if resumeResult.PRURLToStore != "" && task.id != "" {
-			_ = l.taskBackend.SetExternalRef(task.id, resumeResult.PRURLToStore)
-		}
-		if resumeResult.ClearMetadata && task.id != "" {
-			_ = l.taskBackend.SetExternalRef(task.id, "")
-			if resumeResult.NewBranch != "" {
-				_ = l.taskBackend.SetMetadata(task.id, "branch", resumeResult.NewBranch)
-			} else {
-				_ = l.taskBackend.SetMetadata(task.id, "branch", "")
-			}
-		}
-		if resumeResult.ShipFailedAfterPush {
-			shipErrStr := "unknown Ship error"
-			if resumeResult.ShipErr != nil {
-				shipErrStr = resumeResult.ShipErr.Error()
-			}
-			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
-				"Task %s: Ship failed after pushed commits on branch %s: %s — Manual recovery: retry Ship manually after the gh issue resolves, or close the branch's PR if one was created",
-				task.id, branch, shipErrStr)
-			l.state.Write("status", "halted_ship_failed_with_pushed_work")
+		decision := l.resumeCheck(ctx, task)
+		switch decision {
+		case resumeHalt:
 			break iterLoop
-		}
-		if resumeResult.Handled {
-			// Only the already-merged case reaches Handled now (ResumeTask is
-			// discovery only). Close the bead and move on.
-			l.onResumeDone(ctx, task.id, task.title, resumeResult)
-			l.git.TagTaskEnd(task.id)
-			l.state.WriteRunBranch("")
-			l.consecutiveNoAgentIters++
+		case resumeHandled:
 			continue
 		}
 
@@ -776,7 +698,7 @@ iterLoop:
 		var out completeTaskOut
 		haveOut := false
 
-		if resumeResult.ShipExisting {
+		if decision == resumeShipExisting {
 			_ = l.taskBackend.ClaimTask(task.id)
 			out = l.shipAndFinalize(ctx, completeTaskParams{
 				taskID:     task.id,
@@ -789,8 +711,8 @@ iterLoop:
 			haveOut = true
 		} else {
 			// ── Run agent ──
-			agentRun := l.RunIteration(ctx, task, runIteration)
-			lastAction = agentRun.iterAction
+			agentRun := l.RunIteration(ctx, task, st.runIteration)
+			st.lastAction = agentRun.iterAction
 			if agentRun.agentInvoked {
 				l.consecutiveNoAgentIters = 0
 			} else {
@@ -798,56 +720,18 @@ iterLoop:
 			}
 			skipSignalCheck := false
 			if agentRun.action != actionProceed {
-				if agentRun.action == actionRetry {
-					continue
-				}
-				if agentRun.action == actionCompactionShip {
-					// Compaction fired after the agent committed verified work.
-					// Route through completeTask so the work ships normally.
-					// skipSignalCheck prevents the else-branch from reopening
-					// a task that completeTask just closed.
-					out = l.completeTask(ctx, completeTaskParams{
-						result:     agentRun.result,
-						headBefore: agentRun.prep.headBefore,
-						workDir:    agentRun.prep.workDir,
-						rawLogPath: agentRun.prep.rawLogPath,
-						diffStat:   l.git.DiffStatRange(agentRun.prep.headBefore, l.git.HeadRev()),
-						taskID:     task.id,
-						nextTask:   task.title,
-						notify:     l.cfg.Notify,
-						ralphDir:   l.cfg.Dirs.RalphDir,
-					})
-					haveOut = true
-					skipSignalCheck = true
-				} else if agentRun.action == actionSkip {
-					// A skipped task's partial commits must be abandoned, not left
-					// on the worktree branch. The flush safety-net (selectNextTask →
-					// FlushUnpushedWork) pushes and auto-merges any branch ahead of
-					// origin/main when no ready tasks remain, with no verification
-					// gate — so a surviving skipped branch ships unverified work.
-					// Tear down here (mirroring the signalSkipped path) so the next
-					// iteration starts from a clean worktree.
-					l.teardownWorktree()
-					worktreeNeedsSetup = true
-					// Task skipped. Same-reason recurrences already halted at the
-					// skip site (haltAppWide) before reaching here — this numeric
-					// cascade is the fallback for runs of skips with differing
-					// reasons, which the reason-aware check does not catch.
-					consecutiveSkipCount++
-					if consecutiveSkipCount >= l.cascadeSkipLimit() {
-						haltReason := fmt.Sprintf("cascade_skipped:%d", consecutiveSkipCount)
-						l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", haltReason)
-						l.state.Write("status", "halted_"+haltReason)
-						break iterLoop
-					}
-					l.state.WriteRunBranch("")
-					currentTaskID = ""
+				dr := l.dispatchAgentAction(ctx, task, agentRun, st)
+				switch dr.action {
+				case dispatchContinue:
 					continue iterLoop
-				} else {
-					break
+				case dispatchBreak:
+					break iterLoop
 				}
+				haveOut = dr.haveOut
+				out = dr.out
+				skipSignalCheck = dr.skipSignalCheck
 			}
-			consecutiveSkipCount = 0
+			st.consecutiveSkipCount = 0
 
 			if skipSignalCheck {
 				// completeTask already ran for actionCompactionShip — skip the
@@ -876,51 +760,21 @@ iterLoop:
 		}
 
 		// ── Shared aftermath: process the completeTaskOut from either path ──
-		if haveOut {
-			if out.ct != nil {
-				sessionTasks = append(sessionTasks, *out.ct)
-				emitTaskSummary(*out.ct, l.logger)
-			}
-			if out.merged {
-				lastTaskMerged = true
-				// A task actually shipped — real progress breaks the skip streak,
-				// since whatever reason caused prior skips is not app-wide.
-				l.resetSkipStreak()
-			}
-			if out.action == signalRetry {
-				continue
-			}
-			// signalSkipped or signalComplete: fire post-task hook and check for
-			// binary rebuild. On signalRetry the task is not yet done — skipped above.
-			if ctx.Err() == nil {
-				if res := l.postTaskAndMaybeEvolve(ctx, task.id, out.prNumber, out.merged); res == signalEvolve {
-					break iterLoop
-				}
-			}
-			if out.action == signalSkipped {
-				l.teardownWorktree()
-				worktreeNeedsSetup = true
-				l.state.WriteRunBranch("")
-				continue
-			}
-			// signalComplete: fall through to tagTaskEnd
+		switch l.runAftermath(ctx, task, haveOut, out, st) {
+		case aftermathContinue:
+			continue
+		case aftermathBreak:
+			break iterLoop
 		}
-		l.git.TagTaskEnd(task.id)
-		if out.merged || out.prNumber > 0 {
-			l.teardownWorktree()
-			worktreeNeedsSetup = true
-		}
-		l.state.WriteRunBranch("")
-		currentTaskID = ""
 	}
 
 	// Catch-all: if the loop exited due to Ctrl-C and a task was in-flight,
 	// set phase=interrupted so the task manager sees it as safe to update.
-	if ctx.Err() != nil && currentTaskID != "" {
-		l.setPhaseInterrupted(currentTaskID)
+	if ctx.Err() != nil && st.currentTaskID != "" {
+		l.setPhaseInterrupted(st.currentTaskID)
 	}
 
-	l.completedTasks = sessionTasks
+	l.completedTasks = st.sessionTasks
 	return nil
 }
 
