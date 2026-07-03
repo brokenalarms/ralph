@@ -1,6 +1,6 @@
 {
   "name": "ralph",
-  "version": "0.1.706",
+  "version": "0.1.707",
   "description": "Autonomous Claude Code task iteration loop with HTTP control plane",
   "scripts": {
     "ralph:verify": "cd go && go test -count=1 ./...",
