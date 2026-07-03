@@ -781,7 +781,7 @@ func (g *ghCLI) FindPR(ctx context.Context, branch, repoURL string) (int, string
 		"--repo", nwo,
 		"--state", "all",
 		"--json", "number,title,url",
-		"--jq", `.[0] // empty | "\(.number)\t\(.title)\t\(.url)"`}
+		"--jq", ".[0] // empty"}
 	out, err := g.runGHCmd(ctx, args)
 	if err != nil {
 		return 0, "", "", fmt.Errorf("gh pr list failed: %w", err)
@@ -790,20 +790,15 @@ func (g *ghCLI) FindPR(ctx context.Context, branch, repoURL string) (int, string
 	if raw == "" {
 		return 0, "", "", nil
 	}
-	parts := strings.SplitN(raw, "\t", 3)
-	num, parseErr := ParsePRNumber(parts[0])
-	if parseErr != nil {
-		return 0, "", "", parseErr
+	var resp struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		URL    string `json:"url"`
 	}
-	title := ""
-	url := ""
-	if len(parts) >= 2 {
-		title = parts[1]
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		return 0, "", "", fmt.Errorf("parsing PR list response %q: %w", raw, err)
 	}
-	if len(parts) >= 3 {
-		url = parts[2]
-	}
-	return num, title, url, nil
+	return resp.Number, resp.Title, resp.URL, nil
 }
 
 func (g *ghCLI) PRDiff(ctx context.Context, repoURL string, prNumber int) (string, error) {
@@ -908,20 +903,25 @@ func (g *ghCLI) GetJobStepCount(ctx context.Context, nwo string, prNumber int) (
 func (g *ghCLI) GetPR(ctx context.Context, nwo string, prNumber int) (*PRDetail, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
 	args := []string{"api", endpoint,
-		"--jq", `(if .merged_at != null then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end)+"\t"+.base.ref+"\t"+.head.ref+"\t"+.head.sha`}
+		"--jq", `{state: (if .merged_at != null then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end), base_ref: .base.ref, head_ref: .head.ref, head_sha: .head.sha}`}
 	out, err := g.runGHCmd(ctx, args)
 	if err != nil {
 		return nil, fmt.Errorf("gh api PR failed: %w", err)
 	}
-	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 4)
-	if len(parts) != 4 {
-		return nil, fmt.Errorf("unexpected PR response: %q", strings.TrimSpace(string(out)))
+	var resp struct {
+		State   string `json:"state"`
+		BaseRef string `json:"base_ref"`
+		HeadRef string `json:"head_ref"`
+		HeadSHA string `json:"head_sha"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parsing PR response %q: %w", strings.TrimSpace(string(out)), err)
 	}
 	return &PRDetail{
-		State:   PRState(parts[0]),
-		BaseRef: parts[1],
-		HeadRef: parts[2],
-		HeadSHA: parts[3],
+		State:   PRState(resp.State),
+		BaseRef: resp.BaseRef,
+		HeadRef: resp.HeadRef,
+		HeadSHA: resp.HeadSHA,
 	}, nil
 }
 

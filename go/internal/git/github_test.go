@@ -396,7 +396,7 @@ func TestListChecks_UsesGhAPICheckRuns(t *testing.T) {
 		"if echo \"$@\" | grep -q 'check-runs'; then\n" +
 		"  echo '" + checksJSON + "'\n" +
 		"elif echo \"$@\" | grep -q 'pulls/42'; then\n" +
-		"  printf 'OPEN\\tmain\\tfeature\\tabc123def\\n'\n" +
+		"  printf '{\"state\":\"OPEN\",\"base_ref\":\"main\",\"head_ref\":\"feature\",\"head_sha\":\"abc123def\"}\\n'\n" +
 		"fi\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
@@ -1089,7 +1089,7 @@ func TestFindOpenPR_UsesPRListNotAPIFilter(t *testing.T) {
 func TestFindPR_UsesPRListNotAPIFilter(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
-	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nprintf '77\\tFix auth\\thttps://github.com/owner/repo/pull/77\\n'\n"
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nprintf '{\"number\":77,\"title\":\"Fix auth\",\"url\":\"https://github.com/owner/repo/pull/77\"}\\n'\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -1122,6 +1122,44 @@ func TestFindPR_UsesPRListNotAPIFilter(t *testing.T) {
 	}
 	if !strings.Contains(invocation, "--state") || !strings.Contains(invocation, "all") {
 		t.Errorf("expected --state all, got: %q", invocation)
+	}
+}
+
+// A PR title containing a tab or newline must not corrupt the parsed number
+// or url — JSON encodes the title's control characters (\t, \n) as escape
+// sequences within the string, so field boundaries can't shift the way a
+// tab-delimited reparse would.
+func TestFindPR_TitleWithTabAndNewlineDoesNotCorruptFields(t *testing.T) {
+	bin := t.TempDir()
+	ghPath := filepath.Join(bin, "gh")
+	titleWithControlChars := "Fix auth\tand\nlogin"
+	respJSON, err := json.Marshal(struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		URL    string `json:"url"`
+	}{Number: 77, Title: titleWithControlChars, URL: "https://github.com/owner/repo/pull/77"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncat <<'EOF'\n" + string(respJSON) + "\nEOF\n"
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	num, title, url, err := g.FindPR(context.Background(), "ralph/my-task-branch", "https://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("FindPR returned error: %v", err)
+	}
+	if num != 77 {
+		t.Errorf("expected PR number 77, got %d", num)
+	}
+	if title != titleWithControlChars {
+		t.Errorf("expected title %q, got %q", titleWithControlChars, title)
+	}
+	if url != "https://github.com/owner/repo/pull/77" {
+		t.Errorf("unexpected url: %q", url)
 	}
 }
 
