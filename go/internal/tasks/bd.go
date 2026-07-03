@@ -231,12 +231,64 @@ func (b *BD) ensureGitignore() error {
 	return git.EnsureIgnored(b.ProjectDir, "Add beads/dolt to .gitignore", ".beads", ".dolt")
 }
 
+// bdConfigEntry is one row of `bd config show --json`'s unified
+// effective-configuration view: a key, its resolved value, and the source it
+// was resolved from (env, config.yaml, default, metadata, database, git).
+type bdConfigEntry struct {
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Source string `json:"source"`
+}
+
+// configEntries decodes `bd config show --json`, optionally narrowed to a
+// single source (e.g. "config.yaml"), into typed entries. This is bd's
+// machine-readable config view — callers must not substring-match its
+// human-readable prose (`bd config get`) to infer configuration state.
+func (b *BD) configEntries(source string) ([]bdConfigEntry, error) {
+	args := []string{"config", "show", "--json"}
+	if source != "" {
+		args = append(args, "--source", source)
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, args...)
+	if err != nil {
+		return nil, err
+	}
+	var entries []bdConfigEntry
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// configEntryValue returns the value of key within entries, and whether it
+// was present at all.
+func configEntryValue(entries []bdConfigEntry, key string) (string, bool) {
+	for _, e := range entries {
+		if e.Key == key {
+			return e.Value, true
+		}
+	}
+	return "", false
+}
+
+// configSetInProjectFile reports whether key has been explicitly written to
+// config.yaml, by checking for its presence among entries sourced from
+// config.yaml specifically (as opposed to defaults, env vars, etc).
+func (b *BD) configSetInProjectFile(key string) (bool, error) {
+	entries, err := b.configEntries("config.yaml")
+	if err != nil {
+		return false, err
+	}
+	_, ok := configEntryValue(entries, key)
+	return ok, nil
+}
+
 func (b *BD) ensureDoltPort() error {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "config", "get", "dolt.port")
+	set, err := b.configSetInProjectFile("dolt.port")
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(out, "not set in config.yaml") {
+	if set {
 		return nil
 	}
 	absDir, err := filepath.Abs(b.ProjectDir)
@@ -251,11 +303,11 @@ func (b *BD) ensureDoltPort() error {
 }
 
 func (b *BD) ensureTasksExport() error {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "config", "get", "export.path")
+	set, err := b.configSetInProjectFile("export.path")
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(out, "not set in config.yaml") {
+	if set {
 		return nil
 	}
 	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "export.path", "../beads-tasks.jsonl")
@@ -263,11 +315,11 @@ func (b *BD) ensureTasksExport() error {
 }
 
 func (b *BD) ensureBackupGitPushDisabled() error {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "config", "get", "backup.git-push")
+	set, err := b.configSetInProjectFile("backup.git-push")
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(out, "not set in config.yaml") {
+	if set {
 		return nil
 	}
 	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "backup.git-push", "false")
@@ -275,11 +327,11 @@ func (b *BD) ensureBackupGitPushDisabled() error {
 }
 
 func (b *BD) ensureExportGitAddDisabled() error {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "config", "get", "export.git-add")
+	entries, err := b.configEntries("")
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(out) == "false" {
+	if value, ok := configEntryValue(entries, "export.git-add"); ok && value == "false" {
 		return nil
 	}
 	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "export.git-add", "false")
