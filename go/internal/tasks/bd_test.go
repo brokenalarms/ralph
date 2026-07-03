@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -205,6 +207,64 @@ func TestBD_Init_IdempotentGitignore(t *testing.T) {
 	if strings.Count(string(data), ".dolt") != 1 {
 		t.Error("expected exactly one .dolt entry in .gitignore")
 	}
+}
+
+// Proves: bd.go contains no direct git exec.Command invocations — per
+// docs/specs/architecture.md, git commands may only run inside internal/git.
+// The gitignore bootstrap now delegates to git.EnsureIgnored instead of
+// shelling out to git itself.
+func TestBD_SourceContainsNoDirectGitExecCommands(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not determine test file location")
+	}
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "bd.go"))
+	if err != nil {
+		t.Fatalf("read bd.go: %v", err)
+	}
+	if strings.Contains(string(src), `exec.Command("git"`) || strings.Contains(string(src), "exec.Command(\"git\"") {
+		t.Error("bd.go must not shell out to git directly — use internal/git instead")
+	}
+}
+
+// Proves: the gitignore bootstrap commits through the git module in a real
+// repo — end-to-end proof that ensureGitignore's move to git.EnsureIgnored
+// preserves the original auto-commit behavior, not just the file write.
+func TestBD_Init_CommitsGitignoreViaGitModule(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	dir := b.ProjectDir
+	runGit(t, dir, "init", "-q", "-b", "main")
+	runGit(t, dir, "commit", "-q", "--allow-empty", "-m", "init")
+	os.MkdirAll(filepath.Join(dir, ".beads"), 0755)
+
+	if err := b.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	subject := strings.TrimSpace(gitOutput(t, dir, "log", "-1", "--pretty=%s"))
+	if subject != "Add beads/dolt to .gitignore" {
+		t.Errorf("expected latest commit %q, got %q", "Add beads/dolt to .gitignore", subject)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v failed: %v", args, err)
+	}
+	return string(out)
 }
 
 // Proves: Init returns ErrNeedsFallback when .beads is missing.

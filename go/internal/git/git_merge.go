@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/component"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/verify"
 )
 
@@ -583,7 +583,7 @@ func (r *repo) PushAndCreatePR(ctx context.Context, taskID, taskDesc, summary st
 }
 
 func prTitle(taskID, taskDesc, fallback string) string {
-	title := tasks.StripComponentPrefix(taskDesc)
+	title := component.StripComponentPrefix(taskDesc)
 	if taskID != "" {
 		title = "[" + taskID + "] " + title
 	}

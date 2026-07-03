@@ -16,7 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/component"
 	"github.com/brokenalarms/ralph/internal/config"
+	"github.com/brokenalarms/ralph/internal/git"
 )
 
 // ErrNeedsFallback signals that the bd backend is unavailable.
@@ -221,39 +223,7 @@ func (b *BD) isHealthy() bool {
 }
 
 func (b *BD) ensureGitignore() error {
-	gitignore := filepath.Join(b.ProjectDir, ".gitignore")
-
-	var existing string
-	if data, err := os.ReadFile(gitignore); err == nil {
-		existing = string(data)
-	}
-
-	changed := false
-	for _, entry := range []string{".beads", ".dolt"} {
-		if !gitignoreContains(existing, entry) {
-			existing += entry + "\n"
-			changed = true
-		}
-	}
-
-	if !changed {
-		return nil
-	}
-
-	if err := os.WriteFile(gitignore, []byte(existing), 0644); err != nil {
-		return err
-	}
-
-	// Auto-commit if inside a git repo.
-	gitDir := exec.Command("git", "-C", b.ProjectDir, "rev-parse", "--git-dir")
-	if gitDir.Run() == nil {
-		add := exec.Command("git", "-C", b.ProjectDir, "add", ".gitignore")
-		_ = add.Run()
-		commit := exec.Command("git", "-C", b.ProjectDir, "commit", "-m", "Add beads/dolt to .gitignore")
-		_ = commit.Run()
-	}
-
-	return nil
+	return git.EnsureIgnored(b.ProjectDir, "Add beads/dolt to .gitignore", ".beads", ".dolt")
 }
 
 func (b *BD) ensureDoltPort() error {
@@ -309,18 +279,6 @@ func (b *BD) ensureExportGitAddDisabled() error {
 	}
 	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "export.git-add", "false")
 	return err
-}
-
-// gitignoreContains checks whether an entry already appears as its own
-// line (with optional trailing / or /*).
-func gitignoreContains(content, entry string) bool {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == entry || trimmed == entry+"/" || trimmed == entry+"/*" {
-			return true
-		}
-	}
-	return false
 }
 
 func (b *BD) HasRemaining() (bool, error) {
@@ -541,7 +499,7 @@ func (b *BD) GetNextTaskInfo() (TaskInfo, error) {
 	}
 	return TaskInfo{
 		ID:       issue.ID,
-		Title:    EnsureComponentPrefix(issue.Title, ""),
+		Title:    component.EnsureComponentPrefix(issue.Title, ""),
 		Priority: issue.Priority,
 	}, nil
 }
@@ -573,8 +531,6 @@ func (b *BD) SetState(id, dimension, value, reason string) error {
 		args = append(args, "--reason", reason)
 	}
 	_, err := b.runner()(b.ctx(), b.ProjectDir, args...)
-	if err == nil {
-		}
 	return err
 }
 
