@@ -18,10 +18,10 @@ import (
 	"github.com/brokenalarms/ralph/internal/config"
 )
 
-// mockBD builds a CommandRunner that dispatches on bd subcommands.
+// mockBD builds a commandRunnerFunc that dispatches on bd subcommands.
 // counts maps status -> count string; total is the bare "count" result.
 // inProgress and ready are JSON arrays for list/ready commands.
-func mockBD(total string, counts map[string]string, inProgress, ready string) CommandRunner {
+func mockBD(total string, counts map[string]string, inProgress, ready string) commandRunnerFunc {
 	return func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
 			return "", errors.New("no args")
@@ -60,7 +60,7 @@ func mockBD(total string, counts map[string]string, inProgress, ready string) Co
 	}
 }
 
-func defaultMock() CommandRunner {
+func defaultMock() commandRunnerFunc {
 	return mockBD(
 		"5",
 		map[string]string{"open": "3", "closed": "2", "in_progress": "0"},
@@ -69,13 +69,15 @@ func defaultMock() CommandRunner {
 	)
 }
 
-func setupBD(t *testing.T, runner CommandRunner) *BD {
+// setupBD accepts a plain closure matching commandRunnerFunc's signature so
+// existing test call sites (`runner := func(...) {...}`) need no conversion.
+func setupBD(t *testing.T, runner commandRunnerFunc) *BD {
 	t.Helper()
 	dir := t.TempDir()
 	return &BD{
 		ProjectDir: dir,
 		PromptsDir: dir,
-		RunBD:      runner,
+		Runner:     runner,
 	}
 }
 
@@ -2177,9 +2179,9 @@ func TestBD_EnsureDoltPort_Deterministic(t *testing.T) {
 		}
 		return "", nil
 	}
-	b1 := &BD{ProjectDir: "/fixed/project/path", PromptsDir: t.TempDir(), RunBD: runner}
+	b1 := &BD{ProjectDir: "/fixed/project/path", PromptsDir: t.TempDir(), Runner: commandRunnerFunc(runner)}
 	b1.ensureDoltPort()
-	b2 := &BD{ProjectDir: "/fixed/project/path", PromptsDir: t.TempDir(), RunBD: runner}
+	b2 := &BD{ProjectDir: "/fixed/project/path", PromptsDir: t.TempDir(), Runner: commandRunnerFunc(runner)}
 	b2.ensureDoltPort()
 	if len(ports) != 2 {
 		t.Fatalf("expected 2 port writes, got %d", len(ports))

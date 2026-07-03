@@ -69,8 +69,19 @@ type Config struct {
 
 // RunnerFactory produces a fresh fix-agent runner on each call. Verifier
 // owns one of these as a submodule — the fix-agent runner is intrinsic to
-// what verifier does (same relationship git has to github).
-type RunnerFactory func() Runner
+// what verifier does (same relationship git has to github). Defined as an
+// interface, consistent with its sibling submodule Querier, rather than a
+// func-typed field.
+type RunnerFactory interface {
+	New() Runner
+}
+
+// RunnerFactoryFunc adapts a plain function to the RunnerFactory interface,
+// the same way http.HandlerFunc adapts a function to http.Handler. Tests
+// build a RunnerFactory this way without a dedicated named type per stub.
+type RunnerFactoryFunc func() Runner
+
+func (f RunnerFactoryFunc) New() Runner { return f() }
 
 // Querier is verifier's local interface for one-shot LLM queries. Defined
 // here (not imported from elsewhere) so verifier holds no peer-module
@@ -103,7 +114,7 @@ type Verifier struct {
 // so every spawned agent enforces the workDir != projectDir invariant.
 func New(cfg Config, logger *logging.Logger, newRunner RunnerFactory, querier Querier) *Verifier {
 	if newRunner == nil {
-		newRunner = func() Runner { return agent.New(logger, cfg.ProjectDir) }
+		newRunner = RunnerFactoryFunc(func() Runner { return agent.New(logger, cfg.ProjectDir) })
 	}
 	if querier == nil {
 		querier = agent.New(logger, cfg.ProjectDir)
@@ -454,7 +465,7 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 	model := v.FixModel(attempt)
 	v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Spawning fix agent: %s", description)
 
-	runner := v.newRunner()
+	runner := v.newRunner.New()
 	result, _ := runner.Run(claude.RunConfig{
 		Ctx:          ctx,
 		WorkDir:      workDir,

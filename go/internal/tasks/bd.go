@@ -24,10 +24,31 @@ import (
 // ErrNeedsFallback signals that the bd backend is unavailable.
 var ErrNeedsFallback = errors.New("bd unavailable")
 
-// CommandRunner executes a bd subcommand in a directory and returns
+// commandRunner executes a bd subcommand in a directory and returns
 // combined stdout. Stderr is captured separately so callers can
 // inspect it on failure.
-type CommandRunner func(ctx context.Context, dir string, args ...string) (stdout string, err error)
+type commandRunner interface {
+	Run(ctx context.Context, dir string, args ...string) (stdout string, err error)
+}
+
+// commandRunnerFunc adapts a plain function to the commandRunner interface,
+// the same way http.HandlerFunc adapts a function to http.Handler. Test
+// doubles use this to build a commandRunner from a closure without a
+// dedicated named type per stub.
+type commandRunnerFunc func(ctx context.Context, dir string, args ...string) (string, error)
+
+func (f commandRunnerFunc) Run(ctx context.Context, dir string, args ...string) (string, error) {
+	return f(ctx, dir, args...)
+}
+
+// bdExecRunner is the concrete commandRunner that shells out to the bd CLI
+// via BD.defaultRunBD, sharing BD's resolved bdPath cache and invocation
+// logging. It is BD's default runner whenever no test double is injected.
+type bdExecRunner struct{ b *BD }
+
+func (r bdExecRunner) Run(ctx context.Context, dir string, args ...string) (string, error) {
+	return r.b.defaultRunBD(ctx, dir, args...)
+}
 
 // BD implements Backend by shelling out to the bd CLI.
 type BD struct {
@@ -35,7 +56,7 @@ type BD struct {
 	ProjectDir   string
 	PromptsDir   string
 	RalphDir     string        // .ralph state directory for invocation logging; empty disables logging
-	RunBD        CommandRunner // injectable for testing; nil uses defaultRunBD
+	Runner       commandRunner // injectable for testing; nil uses bdExecRunner
 	bdPath       string        // resolved absolute path to the bd binary
 	resumeTaskID string
 }
@@ -64,11 +85,11 @@ func (b *BD) ctx() context.Context {
 	return context.Background()
 }
 
-func (b *BD) runner() CommandRunner {
-	if b.RunBD != nil {
-		return b.RunBD
+func (b *BD) runner() commandRunner {
+	if b.Runner != nil {
+		return b.Runner
 	}
-	return b.defaultRunBD
+	return bdExecRunner{b}
 }
 
 // resolveBD finds the bd binary on PATH, falling back to common install
@@ -176,7 +197,7 @@ func (b *BD) logBDCall(ctx context.Context, dir string, args []string, start tim
 // existing one.
 func (b *BD) Init() error {
 	// Resolve the bd binary path before any commands run.
-	if b.RunBD == nil {
+	if b.Runner == nil {
 		if err := b.resolveBD(); err != nil {
 			return fmt.Errorf("%w: %w", err, ErrNeedsFallback)
 		}
@@ -223,7 +244,7 @@ func (b *BD) Init() error {
 }
 
 func (b *BD) isHealthy() bool {
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "count")
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, "count")
 	return err == nil
 }
 
@@ -249,7 +270,7 @@ func (b *BD) configEntries(source string) ([]bdConfigEntry, error) {
 	if source != "" {
 		args = append(args, "--source", source)
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, args...)
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +319,7 @@ func (b *BD) ensureDoltPort() error {
 	h := fnv.New32a()
 	h.Write([]byte(absDir))
 	port := 49152 + int(h.Sum32()%16384)
-	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "dolt.port", strconv.Itoa(port))
+	_, err = b.runner().Run(b.ctx(), b.ProjectDir, "config", "set", "dolt.port", strconv.Itoa(port))
 	return err
 }
 
@@ -310,7 +331,7 @@ func (b *BD) ensureTasksExport() error {
 	if set {
 		return nil
 	}
-	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "export.path", "../beads-tasks.jsonl")
+	_, err = b.runner().Run(b.ctx(), b.ProjectDir, "config", "set", "export.path", "../beads-tasks.jsonl")
 	return err
 }
 
@@ -322,7 +343,7 @@ func (b *BD) ensureBackupGitPushDisabled() error {
 	if set {
 		return nil
 	}
-	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "backup.git-push", "false")
+	_, err = b.runner().Run(b.ctx(), b.ProjectDir, "config", "set", "backup.git-push", "false")
 	return err
 }
 
@@ -334,7 +355,7 @@ func (b *BD) ensureExportGitAddDisabled() error {
 	if value, ok := configEntryValue(entries, "export.git-add"); ok && value == "false" {
 		return nil
 	}
-	_, err = b.runner()(b.ctx(), b.ProjectDir, "config", "set", "export.git-add", "false")
+	_, err = b.runner().Run(b.ctx(), b.ProjectDir, "config", "set", "export.git-add", "false")
 	return err
 }
 
@@ -375,7 +396,7 @@ func (b *BD) CountTotal() (int, error) {
 }
 
 func (b *BD) countByStatus(status string) (int, error) {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "count", "--status", status)
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "count", "--status", status)
 	if err != nil {
 		return 0, nil
 	}
@@ -458,7 +479,7 @@ func (b *BD) resumeCandidate() (bdIssue, bool) {
 // this keeps the preemption decision from depending on hybrid's age-aware
 // ordering, and performs no Go-side re-sort of its own.
 func (b *BD) higherPriorityReadyExists(resume bdIssue) bool {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--sort=priority", "--limit=1", "--assignee="+config.LoopAssignee)
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--sort=priority", "--limit=1", "--assignee="+config.LoopAssignee)
 	if err != nil {
 		return false
 	}
@@ -475,7 +496,7 @@ func (b *BD) higherPriorityReadyExists(resume bdIssue) bool {
 // issues younger than its cutoff, strictly oldest-first beyond it) picks the
 // candidate — no re-ranking happens in Go.
 func (b *BD) nextReadyIssue() (bdIssue, error) {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--sort=hybrid", "--assignee="+config.LoopAssignee)
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "ready", "--json", bdReadyExcludeTypeArg, "--sort=hybrid", "--assignee="+config.LoopAssignee)
 	if err != nil {
 		return bdIssue{}, nil
 	}
@@ -494,7 +515,7 @@ func (b *BD) resumeTask() (bdIssue, bool) {
 	if b.resumeTaskID == "" {
 		return bdIssue{}, false
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", b.resumeTaskID, "--json")
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "show", b.resumeTaskID, "--json")
 	if err != nil {
 		return bdIssue{}, false
 	}
@@ -587,7 +608,7 @@ func (b *BD) SetState(id, dimension, value, reason string) error {
 	if reason != "" {
 		args = append(args, "--reason", reason)
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, args...)
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, args...)
 	return err
 }
 
@@ -595,7 +616,7 @@ func (b *BD) GetState(id, dimension string) (string, error) {
 	if id == "" {
 		return "", nil
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "state", id, dimension)
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "state", id, dimension)
 	if err != nil {
 		return "", err
 	}
@@ -611,7 +632,7 @@ func (b *BD) CloseTask(id string, reason string) error {
 	if reason == "" {
 		reason = "completed by ralph"
 	}
-	_, err := run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
+	_, err := run.Run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
 	return err
 }
 
@@ -641,7 +662,7 @@ func (b *BD) ClaimTask(id string) error {
 	// reliance on BEADS_ACTOR or `--claim`'s implicit "assign to you". Setting
 	// --assignee=ralph-loop keeps the bead in the loop's own inbox so a later
 	// skip→reopen stays selectable by `bd ready --assignee=ralph-loop`.
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--assignee="+config.LoopAssignee, "--status=in_progress")
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, "update", id, "--assignee="+config.LoopAssignee, "--status=in_progress")
 	return err
 }
 
@@ -649,7 +670,7 @@ func (b *BD) ReopenTask(id string) error {
 	if id == "" {
 		return nil
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open")
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, "update", id, "--status=open")
 	return err
 }
 
@@ -657,7 +678,7 @@ func (b *BD) SkipTask(id string, reason SkipReason, detail string) error {
 	if id == "" {
 		return nil
 	}
-	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open", "--assignee="+config.TaskAssignee, "--add-label=skipped"); err != nil {
+	if _, err := b.runner().Run(b.ctx(), b.ProjectDir, "update", id, "--status=open", "--assignee="+config.TaskAssignee, "--add-label=skipped"); err != nil {
 		return err
 	}
 	if err := b.SetMetadata(id, "skip_reason", string(reason)); err != nil {
@@ -672,7 +693,7 @@ func (b *BD) SkipTask(id string, reason SkipReason, detail string) error {
 	if detail != "" {
 		comment += ": " + detail
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "comments", "add", id, "skipped: "+comment)
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, "comments", "add", id, "skipped: "+comment)
 	return err
 }
 
@@ -690,7 +711,7 @@ func (b *BD) GetDescription(id string) (string, error) {
 		return "", nil
 	}
 	run := b.runner()
-	out, err := run(b.ctx(), b.ProjectDir, "show", id, "--json")
+	out, err := run.Run(b.ctx(), b.ProjectDir, "show", id, "--json")
 	if err != nil {
 		return "", err
 	}
@@ -708,7 +729,7 @@ func (b *BD) GetAcceptance(id string) (string, error) {
 		return "", nil
 	}
 	run := b.runner()
-	out, err := run(b.ctx(), b.ProjectDir, "show", id, "--json")
+	out, err := run.Run(b.ctx(), b.ProjectDir, "show", id, "--json")
 	if err != nil {
 		return "", err
 	}
@@ -725,7 +746,7 @@ func (b *BD) GetFullContext(id string) (string, error) {
 	if id == "" {
 		return "", nil
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "show", id, "--json")
 	if err != nil {
 		return "", err
 	}
@@ -778,11 +799,11 @@ func (b *BD) ProjectContext() (string, error) {
 		sections = append(sections, "## Ralph config (config.toml)\n```\n"+strings.TrimSpace(string(configData))+"\n```")
 	}
 
-	if out, err := run(ctx, b.ProjectDir, "list", "--flat"); err == nil && out != "" {
+	if out, err := run.Run(ctx, b.ProjectDir, "list", "--flat"); err == nil && out != "" {
 		sections = append(sections, "## Open beads\n```\n"+out+"\n```")
 	}
 
-	if out, err := run(ctx, b.ProjectDir, "list", "--status", "closed", "--limit", "20"); err == nil && out != "" {
+	if out, err := run.Run(ctx, b.ProjectDir, "list", "--status", "closed", "--limit", "20"); err == nil && out != "" {
 		sections = append(sections, "## Recently closed beads\n```\n"+out+"\n```")
 	}
 
@@ -793,7 +814,7 @@ func (b *BD) GetExternalRef(id string) (string, error) {
 	if id == "" {
 		return "", nil
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "show", id, "--json")
 	if err != nil {
 		return "", err
 	}
@@ -810,27 +831,27 @@ func (b *BD) SetExternalRef(id, ref string) error {
 	if id == "" {
 		return nil
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--external-ref", ref)
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, "update", id, "--external-ref", ref)
 	return err
 }
 
 // ListOpen returns the raw output of `bd list` (open, non-closed issues) as
 // human-readable text, for startup prompt preload.
 func (b *BD) ListOpen() (string, error) {
-	return b.runner()(b.ctx(), b.ProjectDir, "list")
+	return b.runner().Run(b.ctx(), b.ProjectDir, "list")
 }
 
 // ListReady returns the raw output of `bd ready` (issues unblocked and ready
 // to work on) as human-readable text, for startup prompt preload.
 func (b *BD) ListReady() (string, error) {
-	return b.runner()(b.ctx(), b.ProjectDir, "ready")
+	return b.runner().Run(b.ctx(), b.ProjectDir, "ready")
 }
 
 func (b *BD) AppendNotes(id, msg string) error {
 	if id == "" || msg == "" {
 		return nil
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--append-notes", msg)
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, "update", id, "--append-notes", msg)
 	return err
 }
 
@@ -838,7 +859,7 @@ func (b *BD) SetMetadata(id, key, value string) error {
 	if id == "" || key == "" {
 		return nil
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--set-metadata", key+"="+value)
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, "update", id, "--set-metadata", key+"="+value)
 	return err
 }
 
@@ -846,7 +867,7 @@ func (b *BD) GetMetadata(id, key string) (string, error) {
 	if id == "" || key == "" {
 		return "", nil
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "show", id, "--json")
 	if err != nil {
 		return "", err
 	}
@@ -869,7 +890,7 @@ func (b *BD) GetOpenDependents(id string) ([]string, error) {
 	if id == "" {
 		return nil, nil
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "show", id, "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -896,7 +917,7 @@ func (b *BD) GetOpenDependents(id string) ([]string, error) {
 // Returns nil (not an error) when the bd call fails or the output is unparseable,
 // since this is used for opportunistic stall detection.
 func (b *BD) ListInProgressByAssignee(assignee string) ([]TaskInfo, error) {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "list", "--status=in_progress", "--assignee="+assignee, "--json")
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "list", "--status=in_progress", "--assignee="+assignee, "--json")
 	if err != nil {
 		return nil, nil
 	}
@@ -907,7 +928,7 @@ func (b *BD) ListInProgressByAssignee(assignee string) ([]TaskInfo, error) {
 // in_progress tasks across all assignees. Returns nil (not an error) on bd
 // call failure, since this is used for opportunistic stall detection.
 func (b *BD) ListAllInProgress() ([]TaskInfo, error) {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "list", "--status=in_progress", "--json")
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "list", "--status=in_progress", "--json")
 	if err != nil {
 		return nil, nil
 	}
@@ -938,7 +959,7 @@ func (b *BD) IsReady(id string) (bool, error) {
 	if id == "" {
 		return true, nil
 	}
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "blocked", "--json")
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "blocked", "--json")
 	if err != nil {
 		return false, err
 	}

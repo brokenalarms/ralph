@@ -826,14 +826,14 @@ func TestFixModelSameAcrossAttempts(t *testing.T) {
 		FixModel:   fixModel,
 		RalphDir:   ralphDir,
 		PromptsDir: promptsDir,
-	}, logging.New(nil), func() verifier.Runner {
+	}, logging.New(nil), verifier.RunnerFactoryFunc(func() verifier.Runner {
 		return &stubRunner{
 			result: claude.Result{SignalDetected: true},
 			onRunCfg: func(cfg claude.RunConfig) {
 				capturedModels = append(capturedModels, cfg.Model)
 			},
 		}
-	}, nil)
+	}), nil)
 
 	base := verifier.FixAgentInput{
 		Ctx:         context.Background(),
@@ -870,14 +870,14 @@ func TestFixModelDefaultOpusFromFirstAttempt(t *testing.T) {
 	var capturedModels []string
 	vrf := verifier.New(verifier.Config{
 		RalphDir: ralphDir,
-	}, logging.New(nil), func() verifier.Runner {
+	}, logging.New(nil), verifier.RunnerFactoryFunc(func() verifier.Runner {
 		return &stubRunner{
 			result: claude.Result{SignalDetected: true},
 			onRunCfg: func(cfg claude.RunConfig) {
 				capturedModels = append(capturedModels, cfg.Model)
 			},
 		}
-	}, nil)
+	}), nil)
 
 	base := verifier.FixAgentInput{
 		Ctx:         context.Background(),

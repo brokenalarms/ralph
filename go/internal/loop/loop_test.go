@@ -39,6 +39,14 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 			return resp, nil
 		}}
 	}
+	// s.newRunner is a plain func value (verifier.RunnerFactoryFunc); only
+	// wrap it into the verifier.RunnerFactory interface when non-nil, since
+	// a nil RunnerFactoryFunc wrapped in a non-nil interface would defeat
+	// verifier.New's nil-check and skip its production default.
+	var rf verifier.RunnerFactory
+	if s.newRunner != nil {
+		rf = s.newRunner
+	}
 	return verifier.New(verifier.Config{
 		ProjectDir:            cfg.Dirs.ProjectDir,
 		ConfigVerify:          cfg.Verify,
@@ -51,15 +59,18 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 		TestTimeout:           cfg.TestTimeout,
 		CompileCheckTimeout:   cfg.CompileCheckTimeout,
 		Signals:               claude.DefaultSignalPaths(cfg.Dirs.RalphDir),
-	}, logger, s.newRunner, q)
+	}, logger, rf, q)
 }
 
 // verifierTestStubs bundles optional verifier sub-module stubs. Zero
 // values fall back to production defaults. queryResponse is a convenience
 // shorthand: when set, it creates a stub querier that always returns that
-// response (overridden if querier is also set).
+// response (overridden if querier is also set). newRunner is typed as the
+// concrete RunnerFactoryFunc (not the RunnerFactory interface) so existing
+// call sites can assign a plain `func() verifier.Runner {...}` literal
+// without a conversion.
 type verifierTestStubs struct {
-	newRunner     verifier.RunnerFactory
+	newRunner     verifier.RunnerFactoryFunc
 	querier       verifier.Querier
 	queryResponse string
 }
