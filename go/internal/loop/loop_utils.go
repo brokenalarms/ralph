@@ -7,6 +7,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/retry"
 )
 
 // isNewTask returns true when the next task differs from the last one stored
@@ -67,21 +68,15 @@ func waitForInternet(ctx context.Context, logger *logging.Logger, interval, chec
 	start := time.Now()
 	logger.Emit(logging.Opts{Level: logging.Warn}, "Internet unreachable — waiting for connectivity...")
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-ticker.C:
-			if git.IsOnline(checkTimeout) {
-				elapsed := time.Since(start).Truncate(time.Second)
-				logger.Emit(logging.Opts{Level: logging.Success}, "Internet restored after %s", elapsed)
-				return true
-			}
+	err := retry.Retry(ctx, retry.BackoffOpts{Initial: interval, Max: interval}, nil, func() (bool, error) {
+		if git.IsOnline(checkTimeout) {
 			elapsed := time.Since(start).Truncate(time.Second)
-			logger.Emit(logging.Opts{}, "Internet still unreachable (%s elapsed)", elapsed)
+			logger.Emit(logging.Opts{Level: logging.Success}, "Internet restored after %s", elapsed)
+			return true, nil
 		}
-	}
+		elapsed := time.Since(start).Truncate(time.Second)
+		logger.Emit(logging.Opts{}, "Internet still unreachable (%s elapsed)", elapsed)
+		return false, nil
+	})
+	return err == nil
 }

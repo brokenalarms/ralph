@@ -9,6 +9,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/component"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/retry"
 	"github.com/brokenalarms/ralph/internal/verify"
 )
 
@@ -1065,14 +1066,19 @@ func (r *repo) ResolveConflict(ctx context.Context) error {
 // repo.MergeWithRetry delegates here after filling in infrastructure from
 // repo fields.
 func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, error), opts MergeRetryOpts) (bool, error) {
-	for attempt := 0; attempt < MaxMergeAttempts; attempt++ {
-		merged, err := mergeFunc(ctx)
+	var merged bool
+	calls := 0
+
+	attempt := func() (bool, error) {
+		m, err := mergeFunc(ctx)
+		calls++
 		if err == nil {
-			return merged, nil
+			merged = m
+			return true, nil
 		}
 
-		if attempt > 0 && opts.Logger != nil {
-			opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Merge attempt %d failed: %v", attempt+1, err)
+		if calls > 1 && opts.Logger != nil {
+			opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Merge attempt %d failed: %v", calls, err)
 		}
 
 		var conflictErr *MergeConflictError
@@ -1082,7 +1088,7 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 			}
 			resolveErr := opts.Resolver.ResolveConflict(ctx)
 			if resolveErr == nil {
-				continue
+				return false, nil
 			}
 			var unresolved *UnresolvedConflictError
 			if errors.As(resolveErr, &unresolved) {
@@ -1094,7 +1100,18 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 
 		return false, err
 	}
-	return false, fmt.Errorf("merge failed after %d attempts", MaxMergeAttempts)
+
+	// A resolved conflict is reported to Retry as (false, nil) so it keeps
+	// retrying; every other outcome is fatal — classify never treats a
+	// returned error as transient itself.
+	err := retry.Retry(ctx, retry.BackoffOpts{Schedule: make([]time.Duration, MaxMergeAttempts-1)}, func(error) bool { return false }, attempt)
+	if err != nil {
+		if errors.Is(err, retry.ErrTimedOut) {
+			return false, fmt.Errorf("merge failed after %d attempts", MaxMergeAttempts)
+		}
+		return false, err
+	}
+	return merged, nil
 }
 
 // repo.MergeWithRetry delegates to the package-level MergeWithRetry function

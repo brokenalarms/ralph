@@ -986,6 +986,59 @@ func TestPollReview_TerminalStateNoComments(t *testing.T) {
 	}
 }
 
+// PollReview aborts promptly when ctx is cancelled mid-poll instead of
+// blocking for the full 10s poll interval or the timeout — the loop's
+// Ctrl-C / task-cancellation path must not hang waiting on a review that
+// will never resolve. Stubbing pollReviewSleep to a channel that never
+// fires proves cancellation itself unblocks the wait, the same way
+// TestWaitForCI_CancelledContext proves it for waitForCI's ciSleep.
+func TestPollReview_CancelledContextAbortsPromptly(t *testing.T) {
+	origSleep := pollReviewSleep
+	pollReviewSleep = func(time.Duration) <-chan time.Time { return make(chan time.Time) }
+	t.Cleanup(func() { pollReviewSleep = origSleep })
+
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"if echo \"$@\" | grep -q 'requested_reviewers'; then\n" +
+		"  echo '{\"users\":[{\"login\":\"copilot-pull-request-reviewer\"}],\"teams\":[]}'\n" +
+		"else\n" +
+		"  echo '[{\"id\":1,\"user\":{\"login\":\"copilot-pull-request-reviewer\"},\"state\":\"PENDING\",\"body\":\"\"}]'\n" +
+		"fi\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	g := &ghCLI{}
+	done := make(chan struct{})
+	var review *AutoReview
+	var err error
+	go func() {
+		// A long timeout that would hang forever if ctx cancellation were
+		// ignored, since pollReviewSleep's stub never fires on its own.
+		review, err = g.PollReview(ctx, "owner/repo", "copilot-pull-request-reviewer", 42, time.Hour)
+		close(done)
+	}()
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("PollReview did not return after ctx cancellation — it kept waiting on a poll interval that never fires")
+	}
+
+	if err == nil {
+		t.Fatal("expected an error from ctx cancellation")
+	}
+	if review != nil {
+		t.Errorf("expected nil review on cancellation, got %+v", review)
+	}
+}
+
 // CreatePRViaAPI sends a valid JSON body even when title or body contain
 // newlines, tabs, backslashes, backticks, and Unicode — characters where
 // Go's %q formatting diverges from JSON encoding, causing GitHub 400 errors.

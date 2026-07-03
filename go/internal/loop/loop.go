@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
+	"github.com/brokenalarms/ralph/internal/retry"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/verifier"
@@ -956,17 +957,26 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				if backoffs == nil {
 					backoffs = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
 				}
-				for _, delay := range backoffs {
-					if err == nil {
-						break
-					}
-					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
-					select {
-					case <-ctx.Done():
-						return result, err
-					case <-time.After(delay):
+				// attempted gates the first call: the initial Ship failure
+				// that got us into this branch already happened above, so
+				// Retry's first fn() call is a passthrough that hands back
+				// that known error rather than shipping again immediately.
+				attempted := false
+				retryErr := retry.Retry(ctx, retry.BackoffOpts{
+					Schedule: backoffs,
+					OnRetry: func(_ int, delay time.Duration) {
+						l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
+					},
+				}, git.IsTransientGitHubError, func() (bool, error) {
+					if !attempted {
+						attempted = true
+						return false, err
 					}
 					result, err = l.git.Ship(ctx, opts)
+					return err == nil, err
+				})
+				if retryErr != nil && ctx.Err() != nil {
+					return result, err
 				}
 			}
 			if err != nil {
@@ -1087,10 +1097,8 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 						"Push for CI re-trigger failed: %v", pushErr)
 				}
-				select {
-				case <-ctx.Done():
+				if retry.Wait(ctx, delay, nil) != nil {
 					return prResultNum, prResultURL, false, false, false, false, pushedBranch, nil
-				case <-time.After(delay):
 				}
 				continue
 			}
