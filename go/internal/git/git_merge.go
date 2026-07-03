@@ -79,7 +79,7 @@ func (r *repo) Push(ctx context.Context) error {
 		if !result.Passed {
 			return fmt.Errorf("%s\n%s", result.Reason, result.Details)
 		}
-		r.logger.Emit(logging.Opts{Domain: "build"}, "Pre-push compile check passed")
+		r.logger.Emit(logging.Opts{Domain: logging.Build}, "Pre-push compile check passed")
 	}
 
 	// The stack parent may have merged and been deleted between iteration

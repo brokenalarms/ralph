@@ -606,7 +606,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		if h, err := l.binaryHasher.Hash(); err == nil {
 			l.startupBinaryHash = h
 		} else {
-			l.logger.Emit(logging.Opts{Domain: "loop", Level: logging.Warn}, "Evolve: startup binary hash failed: %v — evolve hash guard disabled", err)
+			l.logger.Emit(logging.Opts{Domain: logging.Loop, Level: logging.Warn}, "Evolve: startup binary hash failed: %v — evolve hash guard disabled", err)
 		}
 	}
 

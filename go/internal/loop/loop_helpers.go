@@ -24,7 +24,7 @@ func (l *Loop) binaryHashChanged() bool {
 	}
 	current, err := l.binaryHasher.Hash()
 	if err != nil {
-		l.logger.Emit(logging.Opts{Domain: "loop", Level: logging.Warn}, "Evolve: binary hash check failed: %v — skipping restart", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Loop, Level: logging.Warn}, "Evolve: binary hash check failed: %v — skipping restart", err)
 		return false
 	}
 	return !bytes.Equal(l.startupBinaryHash, current)
@@ -65,7 +65,7 @@ func (l *Loop) maybeEvolve(fallback postSignalAction) postSignalAction {
 		l.state.Write("status", "evolve_restart") //nolint:errcheck
 		return signalEvolve
 	}
-	l.logger.Emit(logging.Opts{Domain: "loop"}, "Evolve: binary unchanged — continuing")
+	l.logger.Emit(logging.Opts{Domain: logging.Loop}, "Evolve: binary unchanged — continuing")
 	return fallback
 }
 

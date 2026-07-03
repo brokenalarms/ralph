@@ -77,6 +77,10 @@ const (
 	LLM      Domain = "llm"
 	Shell    Domain = "bash"
 	Analyzer Domain = "analyzer"
+	Loop     Domain = "loop"
+	PostTask Domain = "post-task"
+	Review   Domain = "review"
+	State    Domain = "state"
 )
 
 // Tag formats [actor][domain] with ANSI color. If domain is empty,

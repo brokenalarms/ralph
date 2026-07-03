@@ -90,7 +90,7 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 	} else {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", taskID, closeReason)
 		if err := l.state.AddCompletedTask(taskID, merged); err != nil {
-			l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+			l.logger.Emit(logging.Opts{Domain: logging.State, Level: logging.Warn}, "AddCompletedTask: %v", err)
 		}
 		l.state.ClearCurrentTask()
 	}
