@@ -11,6 +11,24 @@ import (
 	"time"
 )
 
+// CICheckResult.Failed and Pending expose the normalized verdict as methods,
+// so callers can switch on behavior instead of re-testing the raw bucket value.
+func TestCICheckResult_FailedAndPending(t *testing.T) {
+	pass := CICheckResult{Bucket: CIBucketPass}
+	fail := CICheckResult{Bucket: CIBucketFail}
+	pending := CICheckResult{Bucket: CIBucketPending}
+
+	if pass.Failed() || pass.Pending() {
+		t.Errorf("pass bucket: expected Failed()=false Pending()=false, got Failed()=%v Pending()=%v", pass.Failed(), pass.Pending())
+	}
+	if !fail.Failed() || fail.Pending() {
+		t.Errorf("fail bucket: expected Failed()=true Pending()=false, got Failed()=%v Pending()=%v", fail.Failed(), fail.Pending())
+	}
+	if pending.Failed() || !pending.Pending() {
+		t.Errorf("pending bucket: expected Failed()=false Pending()=true, got Failed()=%v Pending()=%v", pending.Failed(), pending.Pending())
+	}
+}
+
 // evaluateChecks returns CIPassed when all checks have completed successfully,
 // verifying the happy path for CI-gated merges.
 func TestEvaluateChecks_AllPassed(t *testing.T) {

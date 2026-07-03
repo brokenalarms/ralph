@@ -563,7 +563,8 @@ func (g *ghCLI) ListChecks(ctx context.Context, prNumber int, repoURL string) ([
 // GitHub API: status (queued/in_progress/completed) + conclusion (success/failure/neutral/etc).
 // neutral and skipped conclusions are treated as passing; cancelled and related conclusions as failing.
 func mapCheckRun(name, status string, conclusion *string, startedAt *time.Time) CICheckResult {
-	var state, bucket string
+	var state string
+	var bucket CIBucket
 	if status == "completed" {
 		c := ""
 		if conclusion != nil {
@@ -571,14 +572,14 @@ func mapCheckRun(name, status string, conclusion *string, startedAt *time.Time) 
 		}
 		switch c {
 		case "success", "neutral", "skipped":
-			state, bucket = "SUCCESS", "pass"
+			state, bucket = "SUCCESS", CIBucketPass
 		case "failure", "timed_out", "action_required", "cancelled", "startup_failure", "stale":
-			state, bucket = "FAILURE", "fail"
+			state, bucket = "FAILURE", CIBucketFail
 		default:
-			state, bucket = "PENDING", "pending"
+			state, bucket = "PENDING", CIBucketPending
 		}
 	} else {
-		state, bucket = "PENDING", "pending"
+		state, bucket = "PENDING", CIBucketPending
 	}
 	var t time.Time
 	if startedAt != nil {
