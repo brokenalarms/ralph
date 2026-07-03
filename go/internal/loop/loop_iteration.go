@@ -610,6 +610,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 		VerifyBuild: l.cfg.VerifyBuild,
 		WorktreeDir: l.git.GetWorkDir(),
 		ProjectDir:  l.cfg.Dirs.ProjectDir,
+		PromptsDir:  l.cfg.Dirs.PromptsDir,
 		TestTimeout: l.cfg.TestTimeout,
 		Logger:      l.logger,
 	})

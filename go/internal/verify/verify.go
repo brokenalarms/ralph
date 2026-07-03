@@ -203,6 +203,7 @@ type RunVerifyBuildParams struct {
 	VerifyBuild string
 	WorktreeDir string
 	ProjectDir  string
+	PromptsDir  string
 	TestTimeout time.Duration
 	Logger      *logging.Logger
 }
@@ -245,11 +246,23 @@ func RunVerifyBuild(ctx context.Context, p RunVerifyBuildParams) string {
 	}
 	output := strings.TrimSpace(string(out))
 	p.Logger.Emit(logging.Opts{Domain: "build", Level: logging.Warn}, "Build health check failed: %v", err)
-	msg := "\n- BUILD IS BROKEN. Fix the build before working on your task. Do not start the task until the build is healthy."
+	msg := "\n" + readPromptFragment(p.PromptsDir, "status-build-broken.md")
 	if output != "" {
 		msg += "\n  Build failure output:\n  " + strings.ReplaceAll(output, "\n", "\n  ")
 	}
 	return msg
+}
+
+// readPromptFragment reads a short agent-facing status fragment from
+// promptsDir, trimming the trailing newline. Returns empty string when the
+// fragment is missing — a misconfigured promptsDir degrades the message
+// rather than failing the build check itself.
+func readPromptFragment(promptsDir, name string) string {
+	data, err := os.ReadFile(filepath.Join(promptsDir, name))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(string(data), "\n")
 }
 
 // RunPostTaskParams configures RunPostTask.
@@ -373,13 +386,13 @@ type ReviewPromptInput struct {
 }
 
 // BuildReviewPrompt loads prompts/verify-review.md from the configured
-// promptsDir, substitutes task variables into the template, and returns
-// the resulting prompt string. Falls back to an embedded template when the
-// file is missing. Pure function: data in, string out, no I/O beyond the
-// template read, no LLM calls.
+// promptsDir and substitutes task variables into the template. Pure
+// function: data in, string out, no I/O beyond the template read, no LLM
+// calls. Returns an error when the template file cannot be read — callers
+// treat that as an infrastructure fault, not a review verdict.
 //
 // Diffs longer than 100000 characters are truncated with a marker.
-func BuildReviewPrompt(in ReviewPromptInput) string {
+func BuildReviewPrompt(in ReviewPromptInput) (string, error) {
 	diff := in.Diff
 	if len(diff) > 100000 {
 		diff = diff[:100000] + "\n\n[diff truncated at 100000 chars]"
@@ -391,33 +404,17 @@ func BuildReviewPrompt(in ReviewPromptInput) string {
 
 	tmplPath := filepath.Join(in.PromptsDir, "verify-review.md")
 	data, err := os.ReadFile(tmplPath)
-	if err == nil {
-		prompt := string(data)
-		prompt = strings.ReplaceAll(prompt, "{{TASK_TITLE}}", in.Title)
-		prompt = strings.ReplaceAll(prompt, "{{TASK_DESCRIPTION}}", in.Description)
-		prompt = strings.ReplaceAll(prompt, "{{ACCEPTANCE_CRITERIA}}", in.Acceptance)
-		prompt = strings.ReplaceAll(prompt, "{{DIFF_SOURCE}}", source)
-		prompt = strings.ReplaceAll(prompt, "{{DIFF}}", diff)
-		return prompt
+	if err != nil {
+		return "", fmt.Errorf("verify-review template not found: %s", tmplPath)
 	}
 
-	// Fallback if template not found.
-	return fmt.Sprintf(`You are a code reviewer verifying that a diff matches its task description.
-
-TASK: %s
-DESCRIPTION: %s
-
-%s DIFF:
-%s
-
-Answer these questions:
-1. Does this diff implement what the task asks for?
-2. For code changes: do the test changes (if any) actually prove the functionality, or are they superficial?
-3. For code changes: are error paths and edge cases handled, or does the code fail silently?
-
-Some tasks are implemented through prompt or configuration changes (markdown files, .md templates) rather than traditional code. For these changes, only question 1 applies — do not reject for missing tests or error handling.
-
-Reply with exactly one line: YES or NO followed by a one-sentence reason.`, in.Title, in.Description, source, diff)
+	prompt := string(data)
+	prompt = strings.ReplaceAll(prompt, "{{TASK_TITLE}}", in.Title)
+	prompt = strings.ReplaceAll(prompt, "{{TASK_DESCRIPTION}}", in.Description)
+	prompt = strings.ReplaceAll(prompt, "{{ACCEPTANCE_CRITERIA}}", in.Acceptance)
+	prompt = strings.ReplaceAll(prompt, "{{DIFF_SOURCE}}", source)
+	prompt = strings.ReplaceAll(prompt, "{{DIFF}}", diff)
+	return prompt, nil
 }
 
 // ParseReviewResponse interprets a YES/NO LLM response and returns a Result.

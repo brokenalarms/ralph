@@ -192,6 +192,8 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),
 		[]byte("Assumptions\n{{TEST_STATUS}}\n{{TASK_INSTRUCTIONS}}\n{{ATTEMPT_HISTORY}}"), 0o644)
+	os.WriteFile(filepath.Join(promptsDir, "status-tests-pass.md"),
+		[]byte("- Test suite status: all tests passing as of start."), 0o644)
 
 	// Create Makefile with passing tests
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)

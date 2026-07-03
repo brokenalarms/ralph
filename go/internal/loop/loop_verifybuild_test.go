@@ -30,6 +30,10 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),
 		[]byte("Assumptions\n{{TEST_STATUS}}\n{{TASK_INSTRUCTIONS}}\n{{ATTEMPT_HISTORY}}"), 0o644)
+	os.WriteFile(filepath.Join(promptsDir, "status-build-broken.md"),
+		[]byte("- BUILD IS BROKEN. Fix the build before working on your task. Do not start the task until the build is healthy."), 0o644)
+	os.WriteFile(filepath.Join(promptsDir, "status-tests-pass.md"),
+		[]byte("- Test suite status: all tests passing as of start."), 0o644)
 
 	// Create a verify-build script that exits non-zero with a specific message.
 	scriptPath := filepath.Join(dir, "verify-build.sh")
@@ -226,6 +230,10 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),
 		[]byte("Assumptions\n{{TEST_STATUS}}\n{{TASK_INSTRUCTIONS}}\n{{ATTEMPT_HISTORY}}"), 0o644)
+	os.WriteFile(filepath.Join(promptsDir, "status-build-broken.md"),
+		[]byte("- BUILD IS BROKEN. Fix the build before working on your task. Do not start the task until the build is healthy."), 0o644)
+	os.WriteFile(filepath.Join(promptsDir, "status-tests-pass.md"),
+		[]byte("- Test suite status: all tests passing as of start."), 0o644)
 
 	// Script that fails — build is broken.
 	scriptPath := filepath.Join(dir, "verify-build.sh")

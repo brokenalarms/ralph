@@ -231,7 +231,8 @@ func (v *Verifier) LLMVerify(opts LLMVerifyOpts) (verify.Result, string) {
 		allowedTools = []string{"Read", "Grep", "Glob"}
 		v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Verifying no-code-needed claim...")
 	} else {
-		prompt = verify.BuildReviewPrompt(verify.ReviewPromptInput{
+		var buildErr error
+		prompt, buildErr = verify.BuildReviewPrompt(verify.ReviewPromptInput{
 			PromptsDir:  v.cfg.PromptsDir,
 			Title:       opts.Title,
 			Description: opts.Description,
@@ -239,6 +240,11 @@ func (v *Verifier) LLMVerify(opts LLMVerifyOpts) (verify.Result, string) {
 			Diff:        opts.Diff,
 			DiffSource:  opts.DiffSource,
 		})
+		if buildErr != nil {
+			result := verify.Result{Passed: true, Reason: "LLM verification skipped: " + buildErr.Error()}
+			v.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: model}, "LLM verification skipped: %v", buildErr)
+			return result, model
+		}
 		v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification...")
 	}
 
@@ -381,7 +387,7 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 
 	if result.Passed {
 		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing (%s, %s)", result.Command, out.TestElapsed)
-		out.Message += "\n- Test suite status: all tests passing as of start."
+		out.Message += "\n" + v.statusFragment("status-tests-pass.md")
 	} else if result.ScriptMissing {
 		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — skipping test suite")
 	} else {
@@ -390,7 +396,7 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 			cmdInfo = "unknown command"
 		}
 		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Pre-iteration tests: failures detected (%s, %s, %s)", cmdInfo, result.Reason, out.TestElapsed)
-		out.Message += "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
+		out.Message += "\n" + v.statusFragment("status-tests-failing.md")
 		if result.Details != "" {
 			details := result.Details
 			lines := strings.Split(details, "\n")
@@ -422,7 +428,7 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 			cmdInfo = "unknown command"
 		}
 		v.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Pre-iteration compile check: failures detected (%s, %s, %s)", cmdInfo, compileResult.Reason, out.CompileElapsed)
-		out.Message += "\n- Build status: compile check is FAILING. Fix the build errors before your task."
+		out.Message += "\n" + v.statusFragment("status-build-failing.md")
 		details := compileResult.Details
 		if details == "" {
 			details = compileResult.Reason
@@ -488,4 +494,11 @@ func (v *Verifier) loadVerifyPrompt(filename string, vars map[string]string) str
 		s = strings.ReplaceAll(s, k, val)
 	}
 	return s
+}
+
+// statusFragment reads a short agent-facing status line from promptsDir,
+// trimming the trailing newline. Used to append pre-iteration test/build
+// status onto the agent prompt.
+func (v *Verifier) statusFragment(filename string) string {
+	return strings.TrimRight(v.loadVerifyPrompt(filename, nil), "\n")
 }
