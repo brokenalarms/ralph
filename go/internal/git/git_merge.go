@@ -688,7 +688,7 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 				}
 			}
 			r.logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI already passing on %s — merging", prDetail.HeadSHA)
-			return r.executeMerge(ctx, prNumber, repoURL)
+			return r.executeMerge(ctx, prNumber, repoURL, false)
 		}
 	}
 
@@ -715,14 +715,14 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	if r.isInfrastructureFailure(ctx, prNumber) {
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI infrastructure failure detected on PR #%d (zero job steps) — skipping CI wait and proceeding to merge", prNumber)
-		return r.executeMergeWithAdminOverride(ctx, prNumber, repoURL)
+		return r.executeMerge(ctx, prNumber, repoURL, true)
 	}
 
 	checks, status, ciErr := r.AwaitCI(ctx, prNumber, repoURL, awaitPushedAt)
 	if ciErr != nil {
 		if r.isInfrastructureFailure(ctx, prNumber) {
 			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI timed out on PR #%d and job steps are zero — infrastructure failure, proceeding to merge", prNumber)
-			return r.executeMergeWithAdminOverride(ctx, prNumber, repoURL)
+			return r.executeMerge(ctx, prNumber, repoURL, true)
 		}
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI did not complete within timeout — leaving PR open")
 		return false, ciErr
@@ -730,7 +730,7 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	if status == CIFailed {
 		if r.isInfrastructureFailure(ctx, prNumber) {
 			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI failure on PR #%d is infrastructure-only (zero job steps) — proceeding to merge", prNumber)
-			return r.executeMergeWithAdminOverride(ctx, prNumber, repoURL)
+			return r.executeMerge(ctx, prNumber, repoURL, true)
 		}
 		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
@@ -748,7 +748,7 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		return false, &MergeConflictError{PRNumber: prNumber}
 	}
 
-	return r.executeMerge(ctx, prNumber, repoURL)
+	return r.executeMerge(ctx, prNumber, repoURL, false)
 }
 
 // ErrPRAlreadyMerged is returned when the PR for the branch is already merged.
@@ -909,32 +909,12 @@ func postMergeLog(nwo string, prNumber int, defaultBranch string, logger Log) (b
 // repo.executeMerge delegates to the package-level executeMerge function and
 // runs the post-merge ancestor check (Guard 2): if the merged SHA is not an
 // ancestor of origin/<baseBranch>, the iteration fails loudly without closing
-// the bead.
-func (r *repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (bool, error) {
-	mergedSHA, merged, err := executeMerge(ctx, r.github, ExecuteMergeOpts{
-		PRNumber:       prNumber,
-		RepoURL:        repoURL,
-		WorktreeBranch: r.worktreeBranch,
-		WorkDir:        r.workDir,
-		DefaultBranch:  r.baseBranch,
-		MergeOpts:      r.mergeOpts(),
-		CI:             r,
-	}, r.logger)
-	if !merged || err != nil {
-		return merged, err
-	}
-	if ancestorErr := r.assertMergedAncestor(mergedSHA); ancestorErr != nil {
-		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v", ancestorErr)
-		return false, ancestorErr
-	}
-	return merged, nil
-}
-
-// executeMergeWithAdminOverride is like executeMerge but sets Admin:true on MergeOpts
-// when adminMergeOnCIInfraFailure is enabled. Used at isInfrastructureFailure call sites.
-func (r *repo) executeMergeWithAdminOverride(ctx context.Context, prNumber int, repoURL string) (bool, error) {
+// the bead. When admin is true and adminMergeOnCIInfraFailure is enabled,
+// sets Admin:true on MergeOpts to bypass branch protection — used at
+// isInfrastructureFailure call sites.
+func (r *repo) executeMerge(ctx context.Context, prNumber int, repoURL string, admin bool) (bool, error) {
 	opts := r.mergeOpts()
-	if r.adminMergeOnCIInfraFailure {
+	if admin && r.adminMergeOnCIInfraFailure {
 		opts.Admin = true
 	}
 	mergedSHA, merged, err := executeMerge(ctx, r.github, ExecuteMergeOpts{
