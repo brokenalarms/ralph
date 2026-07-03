@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/prompt"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -75,14 +75,9 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 			return 1
 		}
 
-		bdBin, err := findBD()
-		if err != nil {
-			log.Emit(logging.Opts{Level: logging.Error}, "bd not found: %v", err)
-			return 1
-		}
-		bdCmd := appendNotesBD(bdBin, sub.Dir, taskID, msg)
-		if out, err := bdCmd.CombinedOutput(); err != nil {
-			log.Emit(logging.Opts{Level: logging.Error}, "Failed to append notes: %s", strings.TrimSpace(string(out)))
+		backend := &tasks.BD{ProjectDir: sub.Dir}
+		if err := backend.AppendNotes(taskID, msg); err != nil {
+			log.Emit(logging.Opts{Level: logging.Error}, "Failed to append notes: %v", err)
 			return 1
 		}
 
@@ -387,7 +382,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	}
 	workDir := gm.GetWorkDir()
 
-	startupCtx := preloadTaskContext(projectDir, log)
+	startupCtx := preloadTaskContext(&tasks.BD{ProjectDir: projectDir}, log)
 
 	systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupCtx)
 	if err != nil {
@@ -522,25 +517,21 @@ func readTaskIDFromState(statePath string) string {
 // SESSION-CLOSE push mandate (bd dolt push / git push) and a "use bd remember"
 // directive that contradict ralph's own rules, and the task-manager prompt
 // already supplies all of the orchestrator's bd workflow guidance.
-func preloadTaskContext(projectDir string, log *logging.Logger) string {
-	bdBin, err := findBD()
-	if err != nil {
-		log.Emit(logging.Opts{Level: logging.Warn}, "bd not found, skipping startup preload")
-		return ""
+func preloadTaskContext(backend tasks.Backend, log *logging.Logger) string {
+	var parts []string
+
+	openList, openErr := backend.ListOpen()
+	if openErr == nil && strings.TrimSpace(openList) != "" {
+		parts = append(parts, fmt.Sprintf("$ bd list\n%s", strings.TrimSpace(openList)))
 	}
 
-	var parts []string
-	for _, subcmd := range []string{"list", "ready"} {
-		cmd := exec.Command(bdBin, subcmd)
-		cmd.Dir = projectDir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			continue
-		}
-		text := strings.TrimSpace(string(out))
-		if text != "" {
-			parts = append(parts, fmt.Sprintf("$ bd %s\n%s", subcmd, text))
-		}
+	readyList, readyErr := backend.ListReady()
+	if readyErr == nil && strings.TrimSpace(readyList) != "" {
+		parts = append(parts, fmt.Sprintf("$ bd ready\n%s", strings.TrimSpace(readyList)))
+	}
+
+	if openErr != nil && readyErr != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "bd not found, skipping startup preload")
 	}
 
 	if len(parts) == 0 {
@@ -588,23 +579,4 @@ func promptKeepOrCleanupWorktree(w io.Writer, r io.Reader, gm git.Ops) bool {
 	gm.RemoveWorktreeForBranch(gm.GetWorktreeBranch())
 	fmt.Fprintln(w, "Task worktree cleaned up.")
 	return false
-}
-
-func findBD() (string, error) {
-	if p, err := exec.LookPath("bd"); err == nil {
-		return p, nil
-	}
-	if home, _ := os.UserHomeDir(); home != "" {
-		p := filepath.Join(home, ".local", "bin", "bd")
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("bd binary not found")
-}
-
-func appendNotesBD(bdBin, projectDir, taskID, msg string) *exec.Cmd {
-	cmd := exec.Command(bdBin, "update", taskID, "--append-notes", msg)
-	cmd.Dir = projectDir
-	return cmd
 }

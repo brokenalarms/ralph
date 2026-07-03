@@ -2,12 +2,12 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -69,16 +69,8 @@ func tailFile(path string, lines int) *string {
 }
 
 func (s *Server) appendNotesDefault(projectDir, taskID, msg string) error {
-	bdBin, err := findBDBin()
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(bdBin, "update", taskID, "--append-notes", msg)
-	cmd.Dir = projectDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
-	}
-	return nil
+	backend := &tasks.BD{ProjectDir: projectDir}
+	return backend.AppendNotes(taskID, msg)
 }
 
 func readTaskIDFromStateFile(statePath string) string {
@@ -103,17 +95,4 @@ func readTaskIDFromStateFile(statePath string) string {
 		return ""
 	}
 	return id
-}
-
-func findBDBin() (string, error) {
-	if p, err := exec.LookPath("bd"); err == nil {
-		return p, nil
-	}
-	if home, _ := os.UserHomeDir(); home != "" {
-		p := filepath.Join(home, ".local", "bin", "bd")
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("bd binary not found")
 }

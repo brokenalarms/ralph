@@ -101,6 +101,14 @@ type Backend interface {
 	// AppendNotes appends a message to the task's notes field.
 	AppendNotes(id, msg string) error
 
+	// ListOpen returns the raw output of `bd list` (open, non-closed issues)
+	// as human-readable text, for startup prompt preload.
+	ListOpen() (string, error)
+
+	// ListReady returns the raw output of `bd ready` (issues unblocked and
+	// ready to work on) as human-readable text, for startup prompt preload.
+	ListReady() (string, error)
+
 	// SetMetadata sets a custom metadata key-value pair on a task.
 	SetMetadata(id, key, value string) error
 
