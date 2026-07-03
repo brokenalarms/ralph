@@ -28,6 +28,10 @@ type StubBackend struct {
 	OpenDependents     []string         // returned by GetOpenDependents for any task
 	InProgressTasks    []tasks.TaskInfo // returned by ListInProgressByAssignee for any assignee
 	AllInProgressTasks []tasks.TaskInfo // returned by ListAllInProgress
+	OpenList           string           // returned by ListOpen
+	ReadyList          string           // returned by ListReady
+	OpenListErr        error            // when non-nil, ListOpen returns this error
+	ReadyListErr       error            // when non-nil, ListReady returns this error
 }
 
 func (s *StubBackend) Init() error { return nil }
@@ -57,19 +61,19 @@ func (s *StubBackend) SkipTask(id string, reason tasks.SkipReason, detail string
 func (s *StubBackend) SetResumeTaskID(id string) {
 	s.ResumeIDSet = id
 }
-func (s *StubBackend) ReopenTask(id string) error                { s.ReopenedTask = id; return nil }
-func (s *StubBackend) SetState(_, _, _, _ string) error           { return nil }
-func (s *StubBackend) GetState(_, _ string) (string, error)       { return "", nil }
-func (s *StubBackend) ExecutionInstructions() (string, error)     { return "", nil }
-func (s *StubBackend) GetDescription(_ string) (string, error)    { return s.Description, nil }
-func (s *StubBackend) GetAcceptance(_ string) (string, error)     { return s.Acceptance, nil }
-func (s *StubBackend) GetFullContext(_ string) (string, error)    { return s.FullContext, nil }
-func (s *StubBackend) ProjectContext() (string, error)            { return "", nil }
-func (s *StubBackend) GetExternalRef(_ string) (string, error)    { return "", nil }
-func (s *StubBackend) SetExternalRef(_, _ string) error           { return nil }
-func (s *StubBackend) AppendNotes(_, _ string) error              { return nil }
-func (s *StubBackend) SetMetadata(_, _, _ string) error           { return nil }
-func (s *StubBackend) GetMetadata(_, _ string) (string, error)    { return "", nil }
+func (s *StubBackend) ReopenTask(id string) error              { s.ReopenedTask = id; return nil }
+func (s *StubBackend) SetState(_, _, _, _ string) error        { return nil }
+func (s *StubBackend) GetState(_, _ string) (string, error)    { return "", nil }
+func (s *StubBackend) ExecutionInstructions() (string, error)  { return "", nil }
+func (s *StubBackend) GetDescription(_ string) (string, error) { return s.Description, nil }
+func (s *StubBackend) GetAcceptance(_ string) (string, error)  { return s.Acceptance, nil }
+func (s *StubBackend) GetFullContext(_ string) (string, error) { return s.FullContext, nil }
+func (s *StubBackend) ProjectContext() (string, error)         { return "", nil }
+func (s *StubBackend) GetExternalRef(_ string) (string, error) { return "", nil }
+func (s *StubBackend) SetExternalRef(_, _ string) error        { return nil }
+func (s *StubBackend) AppendNotes(_, _ string) error           { return nil }
+func (s *StubBackend) SetMetadata(_, _, _ string) error        { return nil }
+func (s *StubBackend) GetMetadata(_, _ string) (string, error) { return "", nil }
 func (s *StubBackend) GetOpenDependents(_ string) ([]string, error) {
 	return s.OpenDependents, nil
 }
@@ -83,6 +87,9 @@ func (s *StubBackend) ListAllInProgress() ([]tasks.TaskInfo, error) {
 }
 
 func (s *StubBackend) IsReady(_ string) (bool, error) { return true, nil }
+
+func (s *StubBackend) ListOpen() (string, error)  { return s.OpenList, s.OpenListErr }
+func (s *StubBackend) ListReady() (string, error) { return s.ReadyList, s.ReadyListErr }
 
 func (s *StubBackend) Label() string {
 	if s.BackendLabel != "" {

@@ -868,6 +868,106 @@ func TestBD_ProjectContext_AllCommandsFail(t *testing.T) {
 	}
 }
 
+// Proves: ListOpen runs bare `bd list` and returns its raw text output,
+// letting callers (e.g. startup prompt preload) route through the tasks
+// backend instead of shelling out to bd directly.
+func TestBD_ListOpen_RunsBareBDList(t *testing.T) {
+	var gotArgs []string
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		gotArgs = args
+		return "ralph-abc: fix the thing", nil
+	}
+	b := setupBD(t, runner)
+
+	out, err := b.ListOpen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ralph-abc: fix the thing" {
+		t.Errorf("ListOpen() = %q, want %q", out, "ralph-abc: fix the thing")
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != "list" {
+		t.Errorf("expected args [list], got %v", gotArgs)
+	}
+}
+
+// Proves: ListReady runs bare `bd ready` and returns its raw text output.
+func TestBD_ListReady_RunsBareBDReady(t *testing.T) {
+	var gotArgs []string
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		gotArgs = args
+		return "ralph-xyz: ready task", nil
+	}
+	b := setupBD(t, runner)
+
+	out, err := b.ListReady()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ralph-xyz: ready task" {
+		t.Errorf("ListReady() = %q, want %q", out, "ralph-xyz: ready task")
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != "ready" {
+		t.Errorf("expected args [ready], got %v", gotArgs)
+	}
+}
+
+// Proves: AppendNotes issues `update <id> --append-notes <msg>`, the exact
+// invocation the ralph feedback command and the server's feedback endpoint
+// depend on.
+func TestBD_AppendNotes_IssuesUpdateAppendNotes(t *testing.T) {
+	var gotArgs []string
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		gotArgs = args
+		return "", nil
+	}
+	b := setupBD(t, runner)
+
+	if err := b.AppendNotes("ralph-abc", "please fix the tests"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"update", "ralph-abc", "--append-notes", "please fix the tests"}
+	if len(gotArgs) != len(want) {
+		t.Fatalf("args = %v, want %v", gotArgs, want)
+	}
+	for i := range want {
+		if gotArgs[i] != want[i] {
+			t.Errorf("args[%d] = %q, want %q", i, gotArgs[i], want[i])
+		}
+	}
+}
+
+// Proves: BD resolves the bd binary lazily on first use (via defaultRunBD),
+// so callers can invoke AppendNotes/ListOpen/ListReady on a bare
+// &BD{ProjectDir: ...} without first calling the heavier Init() (which
+// requires a .beads directory and performs config side effects) — the
+// same standalone construction used by the ralph feedback command and the
+// server's feedback endpoint.
+func TestBD_DefaultRunBD_ResolvesBDPathLazilyWithoutInit(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "bd"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	b := &BD{ProjectDir: t.TempDir()}
+	if b.bdPath != "" {
+		t.Fatal("expected bdPath to start empty")
+	}
+
+	out, err := b.ListOpen()
+	if err != nil {
+		t.Fatalf("ListOpen without Init() should succeed, got: %v", err)
+	}
+	if strings.TrimSpace(out) != "list" {
+		t.Errorf("expected the fake bd script to echo its args, got %q", out)
+	}
+	if b.bdPath == "" {
+		t.Error("expected bdPath to be resolved lazily after ListOpen")
+	}
+}
+
 // Proves: counts return zero when bd commands fail.
 func TestBD_Counts_OnError(t *testing.T) {
 	failing := func(_ context.Context, dir string, args ...string) (string, error) {
@@ -2346,4 +2446,3 @@ func TestBD_GetFullContext_OpenDepsIncludedClosedExcluded(t *testing.T) {
 		t.Errorf("GetFullContext output must not contain depends_on dependency (not a blocker), got: %q", ctx)
 	}
 }
-

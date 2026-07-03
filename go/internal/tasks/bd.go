@@ -31,12 +31,12 @@ type CommandRunner func(ctx context.Context, dir string, args ...string) (stdout
 
 // BD implements Backend by shelling out to the bd CLI.
 type BD struct {
-	Ctx        context.Context
-	ProjectDir string
-	PromptsDir string
-	RalphDir   string        // .ralph state directory for invocation logging; empty disables logging
-	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
-	bdPath     string        // resolved absolute path to the bd binary
+	Ctx          context.Context
+	ProjectDir   string
+	PromptsDir   string
+	RalphDir     string        // .ralph state directory for invocation logging; empty disables logging
+	RunBD        CommandRunner // injectable for testing; nil uses defaultRunBD
+	bdPath       string        // resolved absolute path to the bd binary
 	resumeTaskID string
 }
 
@@ -98,6 +98,11 @@ func (b *BD) resolveBD() error {
 }
 
 func (b *BD) defaultRunBD(ctx context.Context, dir string, args ...string) (string, error) {
+	if b.bdPath == "" {
+		if err := b.resolveBD(); err != nil {
+			return "", err
+		}
+	}
 	cmd := exec.CommandContext(ctx, b.bdPath, args...)
 	cmd.Dir = dir
 	start := time.Now()
@@ -559,7 +564,8 @@ func (b *BD) CloseTask(id string, reason string) error {
 }
 
 // depBlockRe matches the bd close error format:
-//   "cannot close <id>: blocked by open issues [id1 id2] (use --force to override)"
+//
+//	"cannot close <id>: blocked by open issues [id1 id2] (use --force to override)"
 var depBlockRe = regexp.MustCompile(`blocked by open issues \[([^\]]+)\]`)
 
 // ParseDependencyBlock checks whether an error from CloseTask indicates a
@@ -754,6 +760,18 @@ func (b *BD) SetExternalRef(id, ref string) error {
 	}
 	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--external-ref", ref)
 	return err
+}
+
+// ListOpen returns the raw output of `bd list` (open, non-closed issues) as
+// human-readable text, for startup prompt preload.
+func (b *BD) ListOpen() (string, error) {
+	return b.runner()(b.ctx(), b.ProjectDir, "list")
+}
+
+// ListReady returns the raw output of `bd ready` (issues unblocked and ready
+// to work on) as human-readable text, for startup prompt preload.
+func (b *BD) ListReady() (string, error) {
+	return b.runner()(b.ctx(), b.ProjectDir, "ready")
 }
 
 func (b *BD) AppendNotes(id, msg string) error {
