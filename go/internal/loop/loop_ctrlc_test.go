@@ -3,10 +3,8 @@ package loop
 import (
 	"bytes"
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -52,35 +50,6 @@ func TestRunAgent_CancelledContext_ReturnsImmediately(t *testing.T) {
 	}
 	if runnerCalled {
 		t.Error("runner must not be called when context is cancelled")
-	}
-}
-
-// After Ctrl+C, runVerifyBuild must return "" immediately without running
-// the script or emitting any log lines.
-func TestRunVerifyBuild_CancelledContext_SkipsExecution(t *testing.T) {
-	dir := t.TempDir()
-
-	scriptPath := filepath.Join(dir, "verify-build.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\necho 'ran build check'\nexit 0\n"), 0o755)
-
-	var logBuf bytes.Buffer
-	logger := logging.NewWithWriter(&logBuf)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	result := runVerifyBuild(ctx, runVerifyBuildParams{
-		verifyBuild: scriptPath,
-		projectDir:  dir,
-		testTimeout: 30 * time.Second,
-		logger:      logger,
-	})
-
-	if result != "" {
-		t.Errorf("expected empty string when cancelled, got %q", result)
-	}
-	if logBuf.Len() > 0 {
-		t.Errorf("expected no log output when cancelled, got: %s", logBuf.String())
 	}
 }
 

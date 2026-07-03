@@ -13,6 +13,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/verify"
 )
 
 // completeTaskParams bundles the signal data and config for the post-signal
@@ -506,11 +507,11 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 		l.postTaskHook.OnPostTask(ctx, taskID, prNumber, merged)
 		return
 	}
-	runPostTask(ctx, runPostTaskParams{
-		postTask:    l.cfg.PostTask,
-		worktreeDir: l.git.GetWorkDir(),
-		projectDir:  l.cfg.Dirs.ProjectDir,
-		logger:      l.logger,
+	verify.RunPostTask(ctx, verify.RunPostTaskParams{
+		PostTask:    l.cfg.PostTask,
+		WorktreeDir: l.git.GetWorkDir(),
+		ProjectDir:  l.cfg.Dirs.ProjectDir,
+		Logger:      l.logger,
 	}, taskID, prNumber, merged)
 }
 
@@ -605,12 +606,12 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
-	buildStatus := runVerifyBuild(ctx, runVerifyBuildParams{
-		verifyBuild: l.cfg.VerifyBuild,
-		worktreeDir: l.git.GetWorkDir(),
-		projectDir:  l.cfg.Dirs.ProjectDir,
-		testTimeout: l.cfg.TestTimeout,
-		logger:      l.logger,
+	buildStatus := verify.RunVerifyBuild(ctx, verify.RunVerifyBuildParams{
+		VerifyBuild: l.cfg.VerifyBuild,
+		WorktreeDir: l.git.GetWorkDir(),
+		ProjectDir:  l.cfg.Dirs.ProjectDir,
+		TestTimeout: l.cfg.TestTimeout,
+		Logger:      l.logger,
 	})
 	testStatus := buildStatus + l.runPreIterationTests(ctx)
 
