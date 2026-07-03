@@ -510,35 +510,16 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	nwo := NWOFromRemote(r.RemoteURL())
 	prLink := logging.PRLinkOpt(nwo, result.PRNumber)
 
-	// Reviewer polling.
-	for _, reviewer := range opts.Reviewers {
-		if opts.ReviewAddressed[reviewer.BotUsername] {
-			continue
-		}
-		review, pollErr := r.PollReview(ctx, reviewer.BotUsername, result.PRNumber, reviewer.DefaultTimeout)
-		if pollErr != nil {
-			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "%s review poll: %v", reviewer.BotUsername, pollErr)
-			continue
-		}
-		if review != nil {
-			r.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "%s review received (%d comments)", reviewer.BotUsername, len(review.Comments))
-			result.ReviewFixNeeded = true
-			result.PendingReview = review
-			result.PendingReviewer = reviewer.BotUsername
-			return result, nil
-		}
-		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "No %s review pending — continuing to CI-gated merge (waits for CI, merges only if it passes)", reviewer.BotUsername)
+	var reviewHandled bool
+	result, reviewHandled = r.pollReviewers(ctx, opts, result, prLink)
+	if reviewHandled {
+		return result, nil
 	}
 
 	// Check if stacked (PR targets non-default branch — merge skipped).
-	defaultBranch := r.baseBranch
 	prDetail, _ := gh.GetPR(ctx, nwo, result.PRNumber)
-	prBase := ""
-	if prDetail != nil {
-		prBase = prDetail.BaseRef
-	}
-	if prBase != "" && prBase != defaultBranch {
-		r.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — stacked, closing bead", prBase, defaultBranch)
+	if prBase, stacked := r.checkStacked(prDetail); stacked {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — stacked, closing bead", prBase, r.baseBranch)
 		result.Stacked = true
 		return result, nil
 	}
@@ -553,19 +534,7 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		Logger: r.logger,
 	})
 	if mergeErr != nil {
-		var ciFailure *CIFailureError
-		if errors.As(mergeErr, &ciFailure) {
-			result.CIFailure = true
-			result.CIFailureDetail = ciFailure
-			result.InfrastructureFailure = r.isInfrastructureFailure(ctx, ciFailure.PRNumber)
-			return result, nil
-		}
-		var conflictErr *UnresolvedConflictError
-		if errors.As(mergeErr, &conflictErr) {
-			result.ConflictDetail = conflictErr
-			return result, nil
-		}
-		return result, mergeErr
+		return r.classifyMergeOutcome(ctx, result, mergeErr)
 	}
 
 	result.Merged = merged
@@ -573,6 +542,64 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		r.PostMergeUpdateMain()
 	}
 	return result, nil
+}
+
+// pollReviewers polls each configured reviewer bot for pending review
+// comments. Returns handled=true when a reviewer flagged actionable
+// comments — result is populated with the pending review and Ship should
+// return it immediately.
+func (r *repo) pollReviewers(ctx context.Context, opts ShipOpts, result ShipResult, prLink *logging.Link) (ShipResult, bool) {
+	for _, reviewer := range opts.Reviewers {
+		if opts.ReviewAddressed[reviewer.BotUsername] {
+			continue
+		}
+		review, pollErr := r.PollReview(ctx, reviewer.BotUsername, result.PRNumber, reviewer.DefaultTimeout)
+		if pollErr != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "%s review poll: %v", reviewer.BotUsername, pollErr)
+			continue
+		}
+		if review != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "%s review received (%d comments)", reviewer.BotUsername, len(review.Comments))
+			result.ReviewFixNeeded = true
+			result.PendingReview = review
+			result.PendingReviewer = reviewer.BotUsername
+			return result, true
+		}
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "No %s review pending — continuing to CI-gated merge (waits for CI, merges only if it passes)", reviewer.BotUsername)
+	}
+	return result, false
+}
+
+// checkStacked reports whether prDetail targets a base branch other than
+// the repo's default branch, returning that base for the caller's log
+// message. Shared by AutoMergeCurrentBranch (which retries once the base PR
+// merges) and Ship (which closes the bead) — each attaches its own outcome
+// to the same guard.
+func (r *repo) checkStacked(prDetail *PRDetail) (prBase string, stacked bool) {
+	if prDetail != nil {
+		prBase = prDetail.BaseRef
+	}
+	return prBase, prBase != "" && prBase != r.baseBranch
+}
+
+// classifyMergeOutcome demuxes the error MergeWithRetry returns into the
+// ShipResult fields the loop uses to decide whether to spawn a fix agent.
+// Returns mergeErr unchanged when it is neither a CIFailureError nor an
+// UnresolvedConflictError, so Ship propagates it as a fatal error.
+func (r *repo) classifyMergeOutcome(ctx context.Context, result ShipResult, mergeErr error) (ShipResult, error) {
+	var ciFailure *CIFailureError
+	if errors.As(mergeErr, &ciFailure) {
+		result.CIFailure = true
+		result.CIFailureDetail = ciFailure
+		result.InfrastructureFailure = r.isInfrastructureFailure(ctx, ciFailure.PRNumber)
+		return result, nil
+	}
+	var conflictErr *UnresolvedConflictError
+	if errors.As(mergeErr, &conflictErr) {
+		result.ConflictDetail = conflictErr
+		return result, nil
+	}
+	return result, mergeErr
 }
 
 // PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
@@ -641,40 +668,27 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	nwo := NWOFromRemote(repoURL)
-	prNumber := r.knownPRNumber
+	prNumber, alreadyMerged, err := r.resolvePRForMerge(ctx, gh, repoURL)
+	if alreadyMerged {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
 	if prNumber == 0 {
-		var err error
-		prNumber, err = gh.FindOpenPR(ctx, r.worktreeBranch, repoURL)
-		if err != nil || prNumber == 0 {
-			prNumber, err = r.resolveClosedPR(ctx, gh, repoURL)
-			if errors.Is(err, ErrPRAlreadyMerged) {
-				return true, nil
-			}
-			if err != nil {
-				return false, err
-			}
-			if prNumber == 0 {
-				r.logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", r.worktreeBranch)
-				return false, nil
-			}
-		}
+		return false, nil
 	}
+
+	nwo := NWOFromRemote(repoURL)
 	prLink := logging.PRLinkOpt(nwo, prNumber)
-
-	defaultBranch := r.baseBranch
-
 	prDetail, _ := gh.GetPR(ctx, nwo, prNumber)
-	prBase := ""
-	if prDetail != nil {
-		prBase = prDetail.BaseRef
-	}
-	if prBase != "" && prBase != defaultBranch {
-		r.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — waiting for base PRs to merge first", prBase, defaultBranch)
+
+	if prBase, stacked := r.checkStacked(prDetail); stacked {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — waiting for base PRs to merge first", prBase, r.baseBranch)
 		return false, ErrStackedPRWaiting
 	}
 
-	r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: prLink}, "Waiting for CI — will merge only if it passes")
+	r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: r.baseBranch, Link: prLink}, "Waiting for CI — will merge only if it passes")
 
 	// Fast path: when local HEAD already matches the PR head SHA and CI is already
 	// passing, skip the rebase+push cycle — no new tree to test, no push needed.
@@ -692,8 +706,47 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		}
 	}
 
-	// Rebase onto latest main and push so CI runs on the final tree.
-	// This avoids the updatePRBranch round-trip and double CI wait.
+	awaitPushedAt := r.rebasePushAndComputeAwaitWindow(ctx, prLink)
+
+	return r.gateOnCI(ctx, prNumber, repoURL, prLink, awaitPushedAt)
+}
+
+// resolvePRForMerge resolves the PR number to merge for the current
+// worktree branch: the known PR, an open PR lookup, or a closed PR that
+// gets reopened. alreadyMerged is true when the PR is already merged —
+// the caller reports success without further work. A zero prNumber with a
+// nil error means no PR exists for the branch — the caller skips
+// auto-merge silently (already logged here).
+func (r *repo) resolvePRForMerge(ctx context.Context, gh gitHub, repoURL string) (prNumber int, alreadyMerged bool, err error) {
+	if r.knownPRNumber != 0 {
+		return r.knownPRNumber, false, nil
+	}
+
+	prNumber, err = gh.FindOpenPR(ctx, r.worktreeBranch, repoURL)
+	if err == nil && prNumber != 0 {
+		return prNumber, false, nil
+	}
+
+	prNumber, err = r.resolveClosedPR(ctx, gh, repoURL)
+	if errors.Is(err, ErrPRAlreadyMerged) {
+		return 0, true, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if prNumber == 0 {
+		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", r.worktreeBranch)
+	}
+	return prNumber, false, nil
+}
+
+// rebasePushAndComputeAwaitWindow rebases onto the latest base branch and
+// force-pushes so CI runs on the final tree, then computes the pushedAt
+// window AwaitCI should filter checks against. Returns a zero time when
+// the push succeeded but was a no-op (SHA unchanged before/after) — no new
+// CI run was triggered, so pre-existing checks must not be discarded by
+// the pushedAt filter.
+func (r *repo) rebasePushAndComputeAwaitWindow(ctx context.Context, prLink *logging.Link) time.Time {
 	if err := r.EnsureUpToDate(ctx); err != nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge rebase failed: %v", err)
 	}
@@ -703,34 +756,33 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	if pushErr != nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge push failed: %v", pushErr)
 	}
-	// When the push succeeds but is a no-op (same SHA before and after), no new
-	// CI is triggered. The existing checks are the only relevant results — so
-	// skip the pushedAt filter so they are not discarded. Without this, the loop
-	// evaluates only post-push checks and misses pre-existing failures.
-	awaitPushedAt := pushedAt
 	if pushErr == nil && headBefore != "" && r.HeadRev() == headBefore {
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Push was no-op (SHA unchanged) — evaluating existing checks")
-		awaitPushedAt = time.Time{}
+		return time.Time{}
 	}
+	return pushedAt
+}
 
+// gateOnCI awaits CI on prNumber and merges once it passes. The three
+// CI-infrastructure-failure escape hatches (pre-wait, post-timeout,
+// post-failure) all funnel into mergeAsInfrastructureFailure, so the
+// admin-override merge call exists in exactly one place.
+func (r *repo) gateOnCI(ctx context.Context, prNumber int, repoURL string, prLink *logging.Link, awaitPushedAt time.Time) (bool, error) {
 	if r.isInfrastructureFailure(ctx, prNumber) {
-		r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI infrastructure failure detected on PR #%d (zero job steps) — skipping CI wait and proceeding to merge", prNumber)
-		return r.executeMerge(ctx, prNumber, repoURL, true)
+		return r.mergeAsInfrastructureFailure(ctx, prNumber, repoURL, prLink, "CI infrastructure failure detected on PR #%d (zero job steps) — skipping CI wait and proceeding to merge")
 	}
 
 	checks, status, ciErr := r.AwaitCI(ctx, prNumber, repoURL, awaitPushedAt)
 	if ciErr != nil {
 		if r.isInfrastructureFailure(ctx, prNumber) {
-			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI timed out on PR #%d and job steps are zero — infrastructure failure, proceeding to merge", prNumber)
-			return r.executeMerge(ctx, prNumber, repoURL, true)
+			return r.mergeAsInfrastructureFailure(ctx, prNumber, repoURL, prLink, "CI timed out on PR #%d and job steps are zero — infrastructure failure, proceeding to merge")
 		}
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI did not complete within timeout — leaving PR open")
 		return false, ciErr
 	}
 	if status == CIFailed {
 		if r.isInfrastructureFailure(ctx, prNumber) {
-			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI failure on PR #%d is infrastructure-only (zero job steps) — proceeding to merge", prNumber)
-			return r.executeMerge(ctx, prNumber, repoURL, true)
+			return r.mergeAsInfrastructureFailure(ctx, prNumber, repoURL, prLink, "CI failure on PR #%d is infrastructure-only (zero job steps) — proceeding to merge")
 		}
 		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
@@ -749,6 +801,14 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	}
 
 	return r.executeMerge(ctx, prNumber, repoURL, false)
+}
+
+// mergeAsInfrastructureFailure logs msg (formatted with prNumber) and
+// merges with the admin-override bypass — the single admin-override merge
+// path shared by every CI-infrastructure-failure escape hatch in gateOnCI.
+func (r *repo) mergeAsInfrastructureFailure(ctx context.Context, prNumber int, repoURL string, prLink *logging.Link, msg string) (bool, error) {
+	r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, msg, prNumber)
+	return r.executeMerge(ctx, prNumber, repoURL, true)
 }
 
 // ErrPRAlreadyMerged is returned when the PR for the branch is already merged.
