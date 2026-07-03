@@ -2,11 +2,13 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/retry"
 )
 
 // CICheckResult represents the status of a single CI check.
@@ -286,17 +288,13 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 // gracePeriod controls how long to wait with zero checks before treating the
 // repo as having no CI configured and returning CIPassed. Pass 0 to disable.
 func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, timeout, gracePeriod time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
-	deadline := time.Now().Add(timeout)
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 
-	var done <-chan struct{}
-	if ctx != nil {
-		done = ctx.Done()
-	}
-
-	currentInterval := interval
 	var polled bool
 	var zeroChecksSince time.Time
+	var checks []CICheckResult
+	status := CIPending
+	noCIConfigured := false
 
 	emitPoll := func(duration string) {
 		if !polled {
@@ -307,75 +305,56 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 		polled = true
 	}
 
-	finalize := func() {
-		if polled {
-			log.Emit(logging.Opts{}, "\n")
-		}
-	}
-
-	for {
-		checks, err := fetch(prNumber, repoURL)
+	fetchAttempt := func() (bool, error) {
+		c, err := fetch(prNumber, repoURL)
 		if err != nil {
-			if time.Now().After(deadline) {
-				finalize()
-				return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
-			}
-			emitPoll(formatDuration(currentInterval))
-			select {
-			case <-done:
-				finalize()
-				return nil, CIPending, fmt.Errorf("interrupted")
-			case <-ciSleep(currentInterval):
-			}
-			currentInterval = nextBackoff(currentInterval)
-			continue
+			return false, err
 		}
+		checks = c
 
 		if len(checks) == 0 && gracePeriod > 0 {
 			if zeroChecksSince.IsZero() {
 				zeroChecksSince = time.Now()
 			} else if time.Since(zeroChecksSince) >= gracePeriod {
-				finalize()
-				log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "No CI checks found after %v — no CI configured", gracePeriod)
-				return nil, CIPassed, nil
+				status = CIPassed
+				noCIConfigured = true
+				return true, nil
 			}
 		} else if len(checks) > 0 {
 			zeroChecksSince = time.Time{}
 		}
 
-		status := evaluateChecks(checks)
-		switch status {
-		case CIPassed:
-			finalize()
-			return checks, CIPassed, nil
-		case CIFailed:
-			finalize()
-			return checks, CIFailed, nil
-		}
-
-		if time.Now().After(deadline) {
-			finalize()
-			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
-		}
-
-		emitPoll(formatDuration(currentInterval))
-		select {
-		case <-done:
-			finalize()
-			return nil, CIPending, fmt.Errorf("interrupted")
-		case <-ciSleep(currentInterval):
-		}
-		currentInterval = nextBackoff(currentInterval)
+		status = evaluateChecks(checks)
+		return status == CIPassed || status == CIFailed, nil
 	}
-}
 
-// nextBackoff doubles the interval, capping at MaxCIPollInterval.
-func nextBackoff(current time.Duration) time.Duration {
-	next := current * 2
-	if next > MaxCIPollInterval {
-		return MaxCIPollInterval
+	err := retry.Retry(ctx, retry.BackoffOpts{
+		Initial: interval,
+		Max:     MaxCIPollInterval,
+		Timeout: timeout,
+		Sleep:   ciSleep,
+		OnRetry: func(_ int, delay time.Duration) {
+			emitPoll(formatDuration(delay))
+		},
+	}, nil, fetchAttempt)
+
+	if polled {
+		log.Emit(logging.Opts{}, "\n")
 	}
-	return next
+
+	switch {
+	case err == nil && noCIConfigured:
+		log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "No CI checks found after %v — no CI configured", gracePeriod)
+		return checks, CIPassed, nil
+	case err == nil:
+		return checks, status, nil
+	case errors.Is(err, retry.ErrTimedOut):
+		return checks, status, fmt.Errorf("CI checks did not complete within %v", timeout)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return nil, CIPending, fmt.Errorf("interrupted")
+	default:
+		return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
+	}
 }
 
 // formatDuration returns a compact human-readable duration (e.g. "1s", "2s", "15s").

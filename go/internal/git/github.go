@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/retry"
 )
 
 // ciSkipMarkerRe matches GitHub's documented skip-CI bracket markers,
@@ -986,6 +988,15 @@ func (g *ghCLI) checkCopilotRulesets(ctx context.Context, nwo string) (bool, boo
 	return false, false, nil
 }
 
+// pollReviewInterval is the fixed delay between review polls.
+const pollReviewInterval = 10 * time.Second
+
+// pollReviewSleep is the function used to create timer channels in
+// PollReview's poll wait. Tests override this to avoid real sleeps.
+var pollReviewSleep = func(d time.Duration) <-chan time.Time {
+	return time.After(d)
+}
+
 func (g *ghCLI) PollReview(ctx context.Context, nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
 	// Check if a completed review already exists before doing anything else.
 	existing, err := g.fetchReview(ctx, nwo, botUsername, prNumber)
@@ -1005,27 +1016,27 @@ func (g *ghCLI) PollReview(ctx context.Context, nwo string, botUsername string, 
 		return nil, nil
 	}
 
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		review, err := g.fetchReview(ctx, nwo, botUsername, prNumber)
+	var review *AutoReview
+	pollErr := retry.Retry(ctx, retry.BackoffOpts{
+		Initial: pollReviewInterval,
+		Max:     pollReviewInterval,
+		Timeout: timeout,
+		Sleep:   pollReviewSleep,
+	}, func(error) bool { return false }, func() (bool, error) {
+		r, err := g.fetchReview(ctx, nwo, botUsername, prNumber)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
-		if review != nil {
-			return review, nil
+		if r != nil {
+			review = r
+			return true, nil
 		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			break
-		}
-		sleep := 10 * time.Second
-		if sleep > remaining {
-			sleep = remaining
-		}
-		time.Sleep(sleep)
+		return false, nil
+	})
+	if pollErr != nil && !errors.Is(pollErr, retry.ErrTimedOut) {
+		return nil, pollErr
 	}
-	fmt.Printf("no review within timeout\n")
-	return nil, nil
+	return review, nil
 }
 
 // isRequestedReviewer reports whether botUsername is listed as a requested reviewer on the PR.
