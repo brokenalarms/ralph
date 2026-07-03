@@ -2097,12 +2097,35 @@ func TestBD_GetFullContext_IncludesDescriptionAndAC(t *testing.T) {
 	}
 }
 
-// Proves: ensureDoltPort writes a port in [49152, 65535] when dolt.port is unset.
+// isConfigShowJSON reports whether args is a `bd config show --json` call,
+// optionally narrowed with `--source <source>`.
+func isConfigShowJSON(args []string, source string) bool {
+	if len(args) < 3 || args[0] != "config" || args[1] != "show" || args[2] != "--json" {
+		return false
+	}
+	if source == "" {
+		return len(args) == 3
+	}
+	return len(args) == 5 && args[3] == "--source" && args[4] == source
+}
+
+// configShowJSON marshals entries as the JSON array `bd config show --json` emits.
+func configShowJSON(t *testing.T, entries []bdConfigEntry) string {
+	t.Helper()
+	out, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal config entries: %v", err)
+	}
+	return string(out)
+}
+
+// Proves: ensureDoltPort writes a port in [49152, 65535] when dolt.port is
+// absent from `bd config show --json --source config.yaml`.
 func TestBD_EnsureDoltPort_WritesPortWhenUnset(t *testing.T) {
 	var setCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "dolt.port" {
-			return "dolt.port is not set in config.yaml", nil
+		if isConfigShowJSON(args, "config.yaml") {
+			return configShowJSON(t, nil), nil
 		}
 		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "dolt.port" {
 			setCalled = true
@@ -2121,12 +2144,12 @@ func TestBD_EnsureDoltPort_WritesPortWhenUnset(t *testing.T) {
 	}
 }
 
-// Proves: ensureDoltPort is a no-op when dolt.port is already set.
+// Proves: ensureDoltPort is a no-op when dolt.port is already present in config.yaml.
 func TestBD_EnsureDoltPort_NoOpWhenAlreadySet(t *testing.T) {
 	var setCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "dolt.port" {
-			return "50000", nil
+		if isConfigShowJSON(args, "config.yaml") {
+			return configShowJSON(t, []bdConfigEntry{{Key: "dolt.port", Value: "50000", Source: "config.yaml"}}), nil
 		}
 		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "dolt.port" {
 			setCalled = true
@@ -2145,8 +2168,8 @@ func TestBD_EnsureDoltPort_NoOpWhenAlreadySet(t *testing.T) {
 func TestBD_EnsureDoltPort_Deterministic(t *testing.T) {
 	var ports []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "dolt.port" {
-			return "not set in config.yaml", nil
+		if isConfigShowJSON(args, "config.yaml") {
+			return configShowJSON(t, nil), nil
 		}
 		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "dolt.port" {
 			ports = append(ports, args[3])
@@ -2171,8 +2194,8 @@ func TestBD_EnsureTasksExport_WritesPathWhenUnset(t *testing.T) {
 	var setCalled bool
 	var setPath string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.path" {
-			return "export.path is not set in config.yaml", nil
+		if isConfigShowJSON(args, "config.yaml") {
+			return configShowJSON(t, nil), nil
 		}
 		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "export.path" {
 			setCalled = true
@@ -2195,8 +2218,8 @@ func TestBD_EnsureTasksExport_WritesPathWhenUnset(t *testing.T) {
 func TestBD_EnsureTasksExport_NoOpWhenAlreadySet(t *testing.T) {
 	var setCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.path" {
-			return "custom/path/issues.jsonl", nil
+		if isConfigShowJSON(args, "config.yaml") {
+			return configShowJSON(t, []bdConfigEntry{{Key: "export.path", Value: "custom/path/issues.jsonl", Source: "config.yaml"}}), nil
 		}
 		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "export.path" {
 			setCalled = true
@@ -2215,8 +2238,8 @@ func TestBD_EnsureTasksExport_NoOpWhenAlreadySet(t *testing.T) {
 func TestBD_EnsureBackupGitPushDisabled_SetsWhenUnset(t *testing.T) {
 	var setCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "backup.git-push" {
-			return "backup.git-push is not set in config.yaml", nil
+		if isConfigShowJSON(args, "config.yaml") {
+			return configShowJSON(t, nil), nil
 		}
 		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "backup.git-push" && args[3] == "false" {
 			setCalled = true
@@ -2235,8 +2258,8 @@ func TestBD_EnsureBackupGitPushDisabled_SetsWhenUnset(t *testing.T) {
 func TestBD_EnsureBackupGitPushDisabled_NoOpWhenAlreadySet(t *testing.T) {
 	var setCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "backup.git-push" {
-			return "false", nil
+		if isConfigShowJSON(args, "config.yaml") {
+			return configShowJSON(t, []bdConfigEntry{{Key: "backup.git-push", Value: "false", Source: "config.yaml"}}), nil
 		}
 		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "backup.git-push" {
 			setCalled = true
@@ -2255,8 +2278,8 @@ func TestBD_EnsureBackupGitPushDisabled_NoOpWhenAlreadySet(t *testing.T) {
 func TestBD_EnsureExportGitAddDisabled_SetsWhenUnset(t *testing.T) {
 	var setCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.git-add" {
-			return "export.git-add is not set in config.yaml", nil
+		if isConfigShowJSON(args, "") {
+			return configShowJSON(t, nil), nil
 		}
 		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "export.git-add" && args[3] == "false" {
 			setCalled = true
@@ -2275,8 +2298,8 @@ func TestBD_EnsureExportGitAddDisabled_SetsWhenUnset(t *testing.T) {
 func TestBD_EnsureExportGitAddDisabled_SetsWhenTrue(t *testing.T) {
 	var setCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.git-add" {
-			return "true", nil
+		if isConfigShowJSON(args, "") {
+			return configShowJSON(t, []bdConfigEntry{{Key: "export.git-add", Value: "true", Source: "config.yaml"}}), nil
 		}
 		if len(args) >= 4 && args[0] == "config" && args[1] == "set" && args[2] == "export.git-add" && args[3] == "false" {
 			setCalled = true
@@ -2295,8 +2318,8 @@ func TestBD_EnsureExportGitAddDisabled_SetsWhenTrue(t *testing.T) {
 func TestBD_EnsureExportGitAddDisabled_NoOpWhenFalse(t *testing.T) {
 	var setCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "config" && args[1] == "get" && args[2] == "export.git-add" {
-			return "false", nil
+		if isConfigShowJSON(args, "") {
+			return configShowJSON(t, []bdConfigEntry{{Key: "export.git-add", Value: "false", Source: "config.yaml"}}), nil
 		}
 		if len(args) >= 3 && args[0] == "config" && args[1] == "set" && args[2] == "export.git-add" {
 			setCalled = true
@@ -2312,24 +2335,25 @@ func TestBD_EnsureExportGitAddDisabled_NoOpWhenFalse(t *testing.T) {
 }
 
 // Proves: Init calls ensureExportGitAddDisabled — a fake runner that tracks
-// config get/set for export.git-add confirms the call is issued on Init.
+// the JSON config read/write for export.git-add confirms the call is issued on Init.
 func TestBD_Init_CallsEnsureExportGitAddDisabled(t *testing.T) {
 	var exportGitAddSetCalled bool
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		joined := strings.Join(args, " ")
 		switch args[0] {
 		case "count":
 			return "1", nil
 		case "config":
-			if len(args) >= 3 && args[1] == "get" && args[2] == "export.git-add" {
-				return "export.git-add is not set in config.yaml", nil
+			if isConfigShowJSON(args, "") {
+				return configShowJSON(t, nil), nil
+			}
+			if isConfigShowJSON(args, "config.yaml") {
+				return configShowJSON(t, nil), nil
 			}
 			if len(args) >= 4 && args[1] == "set" && args[2] == "export.git-add" && args[3] == "false" {
 				exportGitAddSetCalled = true
 				return "", nil
 			}
-			_ = joined
-			return "not set in config.yaml", nil
+			return "", nil
 		}
 		return "", nil
 	}
