@@ -721,3 +721,93 @@ func TestFormatReviewContext(t *testing.T) {
 		t.Error("context should contain file:line for second comment")
 	}
 }
+
+// closeOrSkip is the single close-or-skip helper shared by shipAndFinalize's
+// three close sites and the no-PR near-variant. On a successful CloseTask it
+// must persist the completion (with the given merged flag) and clear the
+// current task.
+func TestCloseOrSkip_Success_PersistsCompletionAndClearsCurrentTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+	cfg := Config{Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir}}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir}),
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
+	st.BeginIteration("ralph-close1", "Fix bug", 1)
+
+	if ok := l.closeOrSkip("ralph-close1", "Fixed in PR #9", true); !ok {
+		t.Fatal("expected closeOrSkip to report success")
+	}
+
+	backend.CloseMu.Lock()
+	closed := append([]string(nil), backend.ClosedIDs...)
+	backend.CloseMu.Unlock()
+	if len(closed) != 1 || closed[0] != "ralph-close1" {
+		t.Errorf("expected CloseTask(ralph-close1), got %v", closed)
+	}
+
+	completed, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(completed) != 1 || completed[0].ID != "ralph-close1" || !completed[0].Merged {
+		t.Errorf("expected one persisted completed task with merged=true, got %+v", completed)
+	}
+
+	loaded, err := st.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.CurrentTaskID != "" {
+		t.Errorf("expected CurrentTaskID cleared, got %q", loaded.CurrentTaskID)
+	}
+}
+
+// When CloseTask fails because the bead is blocked by an open dependency,
+// closeOrSkip must skip the task (rather than leaving it stuck in_progress)
+// with the dependency-blocked reason and the blocker IDs as the detail.
+func TestCloseOrSkip_DependencyBlockedFailure_SkipsWithBlockerDetail(t *testing.T) {
+	dir, st := setupTestDir(t)
+	backend := &testutil.TrackingBackend{
+		CloseErr:       fmt.Errorf("exit status 1: cannot close ralph-close2: blocked by open issues [ralph-dep9] (use --force to override)"),
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+	cfg := Config{Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir}}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir}),
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
+
+	if ok := l.closeOrSkip("ralph-close2", "Fixed in PR #9", true); ok {
+		t.Fatal("expected closeOrSkip to report failure")
+	}
+
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	found := false
+	for i, id := range backend.SkippedIDs {
+		if id == "ralph-close2" {
+			found = true
+			if backend.SkipReasons[i] != string(tasks.SkipDependencyBlocked) {
+				t.Errorf("skip reason = %q, want %q", backend.SkipReasons[i], tasks.SkipDependencyBlocked)
+			}
+			if backend.SkipDetails[i] != "ralph-dep9" {
+				t.Errorf("skip detail = %q, want ralph-dep9", backend.SkipDetails[i])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected ralph-close2 to be skipped, skipped=%v", backend.SkippedIDs)
+	}
+}
