@@ -386,11 +386,11 @@ func (b *BD) CountRemaining() (int, error) {
 func (b *BD) CountTotal() (int, error) {
 	remaining, err := b.CountRemaining()
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 	completed, err := b.CountCompleted()
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 	return remaining + completed, nil
 }
@@ -398,11 +398,11 @@ func (b *BD) CountTotal() (int, error) {
 func (b *BD) countByStatus(status string) (int, error) {
 	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "count", "--status", status)
 	if err != nil {
-		return 0, nil
+		return 0, fmt.Errorf("bd count --status %s: %w", status, err)
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil {
-		return 0, nil
+		return 0, fmt.Errorf("parsing bd count --status %s output %q: %w", status, out, err)
 	}
 	return n, nil
 }

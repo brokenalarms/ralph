@@ -970,18 +970,37 @@ func TestBD_DefaultRunBD_ResolvesBDPathLazilyWithoutInit(t *testing.T) {
 	}
 }
 
-// Proves: counts return zero when bd commands fail.
+// Proves: a bd invocation failure surfaces as a non-nil error from
+// CountCompleted, CountRemaining, and CountTotal rather than a silent zero,
+// so a bd outage can't be mistaken for an empty backlog.
 func TestBD_Counts_OnError(t *testing.T) {
 	failing := func(_ context.Context, dir string, args ...string) (string, error) {
 		return "", errors.New("fail")
 	}
 	b := setupBD(t, failing)
-	completed, _ := b.CountCompleted()
-	remaining, _ := b.CountRemaining()
-	total, _ := b.CountTotal()
-	if completed != 0 || remaining != 0 || total != 0 {
-		t.Errorf("expected all zeros on error, got completed=%d remaining=%d total=%d",
-			completed, remaining, total)
+	if completed, err := b.CountCompleted(); err == nil {
+		t.Errorf("CountCompleted = %d, err = nil; want a non-nil error on bd failure", completed)
+	}
+	if remaining, err := b.CountRemaining(); err == nil {
+		t.Errorf("CountRemaining = %d, err = nil; want a non-nil error on bd failure", remaining)
+	}
+	if total, err := b.CountTotal(); err == nil {
+		t.Errorf("CountTotal = %d, err = nil; want a non-nil error on bd failure", total)
+	}
+}
+
+// Proves: a parse failure (non-numeric bd count output) also surfaces as a
+// non-nil error rather than a silent zero.
+func TestBD_Counts_OnParseError(t *testing.T) {
+	garbled := func(_ context.Context, dir string, args ...string) (string, error) {
+		return "not-a-number", nil
+	}
+	b := setupBD(t, garbled)
+	if remaining, err := b.CountRemaining(); err == nil {
+		t.Errorf("CountRemaining = %d, err = nil; want a non-nil error on parse failure", remaining)
+	}
+	if total, err := b.CountTotal(); err == nil {
+		t.Errorf("CountTotal = %d, err = nil; want a non-nil error on parse failure", total)
 	}
 }
 

@@ -78,7 +78,10 @@ type logIterationBannerParams struct {
 // logIterationBanner gathers context and delegates to the logger.
 func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxIter int, task taskContext, lastAction analyzer.Action) {
 	doneThisRun := len(l.completedTasks)
-	remaining, _ := l.taskBackend.CountRemaining()
+	remaining, err := l.taskBackend.CountRemaining()
+	if err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CountRemaining error: %v", err)
+	}
 
 	if runIteration > 1 {
 		l.logger.DashedSeparator(logging.Yellow)
