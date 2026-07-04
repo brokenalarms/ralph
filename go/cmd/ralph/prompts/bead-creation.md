@@ -322,6 +322,19 @@ is the idiomatic signal: only `status=in_progress` (a claim) removes a bead
 from `bd ready`, so it is `status`, not `phase`, that decides whether the
 loop can still pick the bead up.
 
+**A bead's description is a single, current spec — never a changelog.** When
+new information, clarification, or changed scope arrives, **rewrite the whole
+`--description` (and AC)** so the bead reads as one clear, self-contained
+intent. Never append notes, addendums, or "update:" sections, and never use
+`--notes`/`--append-notes` to evolve the *substance* of a bead (attaching a
+reference pointer like a screenshot path is the only acceptable note). Accreted
+history is exactly what leaves a reader unsure what the bead is even about. This
+holds regardless of release state: once released a bead can't meaningfully be
+revised anyway, so the description must be complete and correct at write time.
+Before rewriting, re-verify the premise — if the original bug or behavior no
+longer holds, or was never actually observed, reframe or close the bead rather
+than layering new context onto a shaky premise.
+
 ### Bead ownership: create owned, release to the loop
 
 The autonomous loop works ONLY beads assigned to it (`ralph-loop` — its inbox).
