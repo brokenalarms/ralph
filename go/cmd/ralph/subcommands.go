@@ -560,16 +560,17 @@ func printTaskResumeHint(w io.Writer, workDir, sessionID string) {
 }
 
 // promptKeepOrCleanupWorktree asks the user whether to keep the task worktree
-// for resume or clean it up, defaulting to Keep on empty/EOF input — which
-// also covers the non-TTY case, since a closed or non-interactive stdin reads
-// as EOF. On cleanup it removes the worktree and its ralph/task/YYYYMMDD-NN
-// branch via gm.RemoveWorktreeForBranch (registration-aware, never a raw
-// os.RemoveAll) and returns false so the caller skips the resume hint.
+// for resume, defaulting to Keep on empty/EOF input — which also covers the
+// non-TTY case, since a closed or non-interactive stdin reads as EOF. Only an
+// explicit "n"/"no" answer triggers cleanup: it removes the worktree and its
+// ralph/task/YYYYMMDD-NN branch via gm.RemoveWorktreeForBranch
+// (registration-aware, never a raw os.RemoveAll) and returns false so the
+// caller skips the resume hint.
 func promptKeepOrCleanupWorktree(w io.Writer, r io.Reader, gm git.Ops) bool {
-	fmt.Fprint(w, "Keep this task worktree for resume, or clean it up? [K/c] ")
+	fmt.Fprint(w, "Keep this task worktree for resume? [Y/n] ")
 	line, _ := bufio.NewReader(r).ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))
-	if answer != "c" && answer != "clean" && answer != "cleanup" {
+	if answer != "n" && answer != "no" {
 		return true
 	}
 	gm.RemoveWorktreeForBranch(gm.GetWorktreeBranch())
