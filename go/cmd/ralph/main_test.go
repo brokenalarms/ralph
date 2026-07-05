@@ -969,36 +969,39 @@ func TestPrintTaskResumeHint_ContainsResumeCommand(t *testing.T) {
 	}
 }
 
-// Proves: on `ralph task` exit, answering "c" cleans up the task worktree —
-// removing it via the registration-aware RemoveWorktreeForBranch (never a raw
-// os.RemoveAll) — and signals the caller to skip the resume hint.
+// Proves: on `ralph task` exit, answering "n" (or "no", case-insensitive)
+// cleans up the task worktree — removing it via the registration-aware
+// RemoveWorktreeForBranch (never a raw os.RemoveAll) — and signals the caller
+// to skip the resume hint.
 func TestPromptKeepOrCleanupWorktree_Cleanup(t *testing.T) {
-	gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
-	var out strings.Builder
+	for _, answer := range []string{"n\n", "N\n", "no\n", "NO\n"} {
+		gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
+		var out strings.Builder
 
-	keep := promptKeepOrCleanupWorktree(&out, strings.NewReader("c\n"), gm)
+		keep := promptKeepOrCleanupWorktree(&out, strings.NewReader(answer), gm)
 
-	if keep {
-		t.Error("expected keep=false when answering 'c'")
-	}
-	inspector := gm.(git.StubInspector)
-	if got := inspector.GetRemoveWorktreeForBranchCalls(); got != 1 {
-		t.Errorf("expected RemoveWorktreeForBranch to be called once, got %d", got)
-	}
-	if got := inspector.GetRemovedWorktreeForBranch(); got != "ralph/task/20260701-01" {
-		t.Errorf("expected cleanup of branch 'ralph/task/20260701-01', got %q", got)
-	}
-	if !strings.Contains(out.String(), "cleaned up") {
-		t.Errorf("expected a cleanup confirmation message, got:\n%s", out.String())
+		if keep {
+			t.Errorf("answer %q: expected keep=false", answer)
+		}
+		inspector := gm.(git.StubInspector)
+		if got := inspector.GetRemoveWorktreeForBranchCalls(); got != 1 {
+			t.Errorf("answer %q: expected RemoveWorktreeForBranch to be called once, got %d", answer, got)
+		}
+		if got := inspector.GetRemovedWorktreeForBranch(); got != "ralph/task/20260701-01" {
+			t.Errorf("answer %q: expected cleanup of branch 'ralph/task/20260701-01', got %q", answer, got)
+		}
+		if !strings.Contains(out.String(), "cleaned up") {
+			t.Errorf("answer %q: expected a cleanup confirmation message, got:\n%s", answer, out.String())
+		}
 	}
 }
 
-// Proves: on `ralph task` exit, keeping the worktree (explicit "k", empty
-// input, or EOF from a non-TTY stdin) preserves the worktree and branch —
-// RemoveWorktreeForBranch must never be called — and signals the caller to
-// print the resume hint.
+// Proves: on `ralph task` exit, keeping the worktree (explicit "y"/"yes",
+// empty input, EOF from a non-TTY stdin, or any other non-"n" answer)
+// preserves the worktree and branch — RemoveWorktreeForBranch must never be
+// called — and signals the caller to print the resume hint.
 func TestPromptKeepOrCleanupWorktree_Keep(t *testing.T) {
-	for _, answer := range []string{"k\n", "\n", ""} {
+	for _, answer := range []string{"y\n", "yes\n", "\n", "", "k\n", "c\n"} {
 		gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
 		var out strings.Builder
 
@@ -1010,6 +1013,19 @@ func TestPromptKeepOrCleanupWorktree_Keep(t *testing.T) {
 		if got := gm.(git.StubInspector).GetRemoveWorktreeForBranchCalls(); got != 0 {
 			t.Errorf("answer %q: expected RemoveWorktreeForBranch not called, got %d calls", answer, got)
 		}
+	}
+}
+
+// Proves: the worktree-cleanup prompt uses the conventional Y/n wording, not
+// the previous nonstandard K/c keys.
+func TestPromptKeepOrCleanupWorktree_PromptWording(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
+	var out strings.Builder
+
+	promptKeepOrCleanupWorktree(&out, strings.NewReader("\n"), gm)
+
+	if !strings.Contains(out.String(), "Keep this task worktree for resume? [Y/n] ") {
+		t.Errorf("expected prompt with [Y/n] wording, got:\n%s", out.String())
 	}
 }
 
