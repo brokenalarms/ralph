@@ -1170,6 +1170,58 @@ func TestBeadCreation_PreCreationArchitectureEcho(t *testing.T) {
 	}
 }
 
+// Proves: bead-creation.md's architecture echo gates spec-governed beads on a
+// conform/deviate check against docs/specs/, stops on any deviation before
+// bd create, and requires spec-derived greppable invariants in the AC — so
+// architecture-violating designs can't enter through a well-formed bead.
+func TestBeadCreation_SpecConformanceCheck(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
+	if err != nil {
+		t.Fatalf("reading bead-creation.md: %v", err)
+	}
+	s := string(content)
+	lower := strings.ToLower(s)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"docs/specs/", "must discover governing specs via the project's docs/specs/ directory"},
+		{"governing spec", "echo must name the governing spec file"},
+		{"conform", "echo must state whether the design conforms to the spec"},
+		{"deviate", "echo must state whether the design deviates from the spec"},
+		{"stop", "must require stopping before bd create on any deviation"},
+		{"greppable", "AC for spec-governed beads must carry greppable invariants"},
+		{"invariant", "must require spec-derived end-state invariants in the AC"},
+		{"the bead against the architecture", "must state the rationale: this is the only gate checking the bead against the architecture"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	// Spec-conformance check must live inside the 'Pre-creation architecture echo'
+	// section, before 'Creating beads'.
+	echoIdx := strings.Index(s, "Pre-creation architecture echo")
+	specIdx := strings.Index(s, "Spec-conformance check")
+	creatingIdx := strings.Index(s, "### Creating beads")
+	if echoIdx < 0 || specIdx < 0 || creatingIdx < 0 {
+		t.Fatal("could not locate architecture echo, spec-conformance check, or Creating beads sections")
+	}
+	if !(echoIdx < specIdx && specIdx < creatingIdx) {
+		t.Error("Spec-conformance check must appear inside the Pre-creation architecture echo section, before 'Creating beads'")
+	}
+
+	// Project-agnostic: no tabi-specific identifiers should be baked into the prompt.
+	for _, forbidden := range []string{"tabi", "requestviapush", "sendnativemessage"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("prompt must stay project-agnostic; found forbidden project-specific term %q", forbidden)
+		}
+	}
+}
+
 // Proves: bead-creation.md requires a minimal DOM markup repro in the description
 // for all UI/DOM/visual bug beads, independent of whether the architecture echo fires.
 func TestBeadCreation_DOMToyCase(t *testing.T) {

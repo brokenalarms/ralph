@@ -111,6 +111,23 @@ a release gate — the single gate is the post-create review.
 The architecture echo content gets written into the bead description verbatim
 so the executing agent reads exactly what the user approved.
 
+**Spec-conformance check.** When a bead touches an area governed by a spec
+under the project's `docs/specs/` (grep that directory for the components or
+files the bead names), the echo must also: (a) name the governing spec file,
+(b) state explicitly whether the proposed design **conforms** or **deviates**
+from its rules, and (c) on any deviation, **stop** — surface the conflict to
+the user as a design decision before `bd create`. Never encode a deviation
+into a bead as if it were settled.
+
+For spec-governed beads, the AC must include the greppable end-state
+invariants derived from the spec's enforcement rules — e.g. "no new raw
+`<wire primitive>` subscription outside the allowed owners" or "replies flow
+through the sanctioned dispatch path" — so the verifier mechanically rejects
+a conforming-looking implementation that reopens a side channel.
+
+The loop and verifier check work against the bead; this step is the only
+gate that checks the bead against the architecture.
+
 ### Creating beads
 
 Before creating a bead, search for an existing one (`bd search <keywords>`).
