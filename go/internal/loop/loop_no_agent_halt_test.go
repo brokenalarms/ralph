@@ -141,6 +141,110 @@ func (b *onceNotReadyBackend) markAgentRan() {
 	b.mu.Unlock()
 }
 
+// alreadyMergedBackend serves two tasks, one after another, both of which
+// the resume path discovers are already merged (git stub always returns
+// ResumeTaskResult{Handled: true}). Once both are closed, no tasks remain.
+type alreadyMergedBackend struct {
+	testutil.TrackingBackend
+}
+
+func (b *alreadyMergedBackend) closedCount() int {
+	b.CloseMu.Lock()
+	defer b.CloseMu.Unlock()
+	return len(b.ClosedIDs)
+}
+
+func (b *alreadyMergedBackend) HasRemaining() (bool, error) { return b.closedCount() < 2, nil }
+func (b *alreadyMergedBackend) CountRemaining() (int, error) {
+	return 2 - b.closedCount(), nil
+}
+func (b *alreadyMergedBackend) CountTotal() (int, error) { return 2, nil }
+func (b *alreadyMergedBackend) GetNextTaskInfo() (tasks.TaskInfo, error) {
+	switch b.closedCount() {
+	case 0:
+		return tasks.TaskInfo{ID: "task-merged-1", Title: "Merged task one"}, nil
+	case 1:
+		return tasks.TaskInfo{ID: "task-merged-2", Title: "Merged task two"}, nil
+	default:
+		return tasks.TaskInfo{}, nil
+	}
+}
+func (b *alreadyMergedBackend) IsReady(_ string) (bool, error) { return true, nil }
+
+// Proves: two consecutive iterations resolved via the resume path's
+// already-merged Handled case (bead closed, no agent run) do NOT halt with
+// halted_no_agent_progress — the counter resets on each Handled close just
+// as it does on an agent invocation, so the loop proceeds to close both
+// tasks and then exits normally once the queue is empty.
+func TestLoop_AlreadyMergedResumeDoesNotHaltNoAgentProgress(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &alreadyMergedBackend{}
+	backend.Remaining = 2
+	backend.Total = 2
+
+	runnerCallCount := 0
+	runner := &stubRunner{
+		onRun:  func() { runnerCallCount++ },
+		result: claude.Result{},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		RemoteURL:  "https://github.com/owner/repo.git",
+		ResumeTaskResult: git.ResumeTaskResult{
+			Handled:       true,
+			AlreadyMerged: true,
+		},
+	})
+
+	logger := logging.New(nil)
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+	}
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Runner:       runner,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if runnerCallCount != 0 {
+		t.Errorf("expected agent runner to be called 0 times (both tasks closed via resume), got %d", runnerCallCount)
+	}
+
+	if got := backend.closedCount(); got != 2 {
+		t.Errorf("expected both tasks closed, got %d closed: %v", got, backend.ClosedIDs)
+	}
+
+	status, _ := st.Read("status")
+	if status == "halted_no_agent_progress" {
+		t.Error("expected loop not to halt with halted_no_agent_progress after already-merged closes")
+	}
+	if status != "completed" {
+		t.Errorf("expected status completed, got %q", status)
+	}
+}
+
 // Proves: one no-agent iteration (IsReady=false) followed by a normal agent
 // run resets consecutiveNoAgentIters to 0. The loop continues and exits
 // normally (status=completed), not halted_no_agent_progress.
