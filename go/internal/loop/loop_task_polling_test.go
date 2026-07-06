@@ -228,16 +228,30 @@ func TestProcessRunOutcome_NoTaskCountInIterationLog(t *testing.T) {
 	l.processRunOutcome(result, elapsed, 3, iterationPrompt{}, "ralph-abc", "next-task", analysisResult, "")
 
 	output := logBuf.String()
-	if !strings.Contains(output, "Run iteration 3 complete") {
-		t.Errorf("end-of-iteration line should contain 'Run iteration 3 complete', got:\n%s", output)
+
+	// Assert against the iteration-complete line only, not the whole buffer:
+	// the logger prefixes lines with a wall-clock timestamp, so substring
+	// checks like "42" against the full buffer flake whenever the current
+	// time contains that digit pair (e.g. 20:42:30).
+	var iterLine string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "Run iteration 3 complete") {
+			iterLine = line
+			break
+		}
 	}
-	if !strings.Contains(output, "7m58s") {
-		t.Errorf("end-of-iteration line should contain elapsed time '7m58s', got:\n%s", output)
+	if iterLine == "" {
+		t.Fatalf("end-of-iteration line 'Run iteration 3 complete' not found, got:\n%s", output)
 	}
-	if strings.Contains(output, "tasks done") {
-		t.Errorf("end-of-iteration line must not contain 'tasks done', got:\n%s", output)
+	if !strings.Contains(iterLine, "7m58s") {
+		t.Errorf("end-of-iteration line should contain elapsed time '7m58s', got:\n%s", iterLine)
 	}
-	if strings.Contains(output, "42/100") || strings.Contains(output, "42") {
-		t.Errorf("end-of-iteration line must not contain lifetime task counts, got:\n%s", output)
+	// Drop the timestamp prefix by cutting at the message text.
+	msg := iterLine[strings.Index(iterLine, "Run iteration 3 complete"):]
+	if strings.Contains(msg, "tasks done") {
+		t.Errorf("end-of-iteration line must not contain 'tasks done', got:\n%s", msg)
+	}
+	if strings.Contains(msg, "42/100") || strings.Contains(msg, "42") {
+		t.Errorf("end-of-iteration line must not contain lifetime task counts, got:\n%s", msg)
 	}
 }
