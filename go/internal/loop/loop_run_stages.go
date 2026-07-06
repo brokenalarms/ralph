@@ -134,11 +134,13 @@ func (l *Loop) resumeCheck(ctx context.Context, task taskContext) resumeDecision
 	}
 	if resumeResult.Handled {
 		// Only the already-merged case reaches Handled now (ResumeTask is
-		// discovery only). Close the bead and move on.
+		// discovery only). Close the bead and move on. This is forward
+		// progress — the ready queue strictly shrinks — so reset the counter
+		// the same way an agent invocation does, rather than incrementing it.
 		l.onResumeDone(ctx, task.id, task.title, resumeResult)
 		l.git.TagTaskEnd(task.id)
 		l.state.WriteRunBranch("")
-		l.consecutiveNoAgentIters++
+		l.consecutiveNoAgentIters = 0
 		return resumeHandled
 	}
 	if resumeResult.ShipExisting {
