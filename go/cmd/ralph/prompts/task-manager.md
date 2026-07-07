@@ -249,6 +249,9 @@ run `bd <command> --help`.
 - `bd create --title="…" --description="…" --type=bug|task|feature
   --priority=0..4 --acceptance="…" --labels=<a>,<b> -a=ralph-task`
 - `--deps=<id>[,<id>]` at create, or `bd dep add <id> <depends-on>` while iterating
+- `--set-metadata model=sonnet` at create, or `bd update <id> --set-metadata
+  model=sonnet` afterward, when the bead qualifies for a cheaper working model
+  — see "Model reference" below
 
 **Update / release**
 - `bd update <id> --title/--description/--priority/--labels/--notes/--external-ref`
@@ -286,6 +289,29 @@ Under the loop's default ordering, priority is a soft near-term nudge
 (honored for roughly a bead's first 48h, then ordering falls back to
 oldest-first). Use P-levels for relative urgency, not hard gating: a hard
 "must run after X" is a dependency edge, never a low priority.
+
+## Model reference
+
+Consider a working model for EVERY bead you create — this is not optional
+per-bead judgment to skip, it's part of writing the bead.
+
+- **Set `model=sonnet`** for mechanical, well-specified, single-concern work
+  where the bead description fully determines the diff: renames, call-site
+  sweeps, log-line changes, test-only updates, doc moves, and similar
+  bounded edits.
+- **Leave the metadata unset** (the loop falls back to `working_model`,
+  typically `opus`) for anything requiring judgment, design, multi-file
+  reasoning, or diagnosis.
+
+Set it with `--set-metadata model=sonnet` on `bd create`, or `bd update <id>
+--set-metadata model=sonnet` afterward. This only overrides the iteration
+agent's model — fix agents and the verifier always use their own configured
+models regardless of a bead's `model` metadata.
+
+When you echo a bead back for release-gate review, always state the
+proposed model — the explicit override (e.g. "model: sonnet") when set, or
+"model: default (working_model)" when unset — so the user can veto or
+change it before release.
 
 ## Screenshots
 
