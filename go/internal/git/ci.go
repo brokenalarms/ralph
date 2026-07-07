@@ -312,16 +312,20 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 		gracePeriod = DefaultNoCIGracePeriod
 	}
 
+	stepFetch := func() ([]JobStepStatus, error) {
+		return gh.GetRunningJobSteps(ctx, nwo, prNumber)
+	}
+
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
-		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, r.logger)
+		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, stepFetch, r.logger)
 	}
 	status := evaluateChecks(checks)
 	if status != CIPending {
 		return checks, status, nil
 	}
-	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, r.logger)
+	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, stepFetch, r.logger)
 }
 
 // waitForCI polls PR checks until they complete, the no-progress budget
@@ -338,7 +342,12 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 //
 // gracePeriod controls how long to wait with zero checks before treating the
 // repo as having no CI configured and returning CIPassed. Pass 0 to disable.
-func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, noProgressTimeout, hardCap, gracePeriod time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
+//
+// stepFetch, when non-nil, is called at most once per status-line emission
+// (never per poll) to enrich the line with the currently running GitHub
+// Actions step per in-progress job. A nil stepFetch, or one that errors,
+// falls back to the plain check-name rendering.
+func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, noProgressTimeout, hardCap, gracePeriod time.Duration, stepFetch func() ([]JobStepStatus, error), log Log) ([]CICheckResult, CIStatus, error) {
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 
 	var zeroChecksSince time.Time
@@ -353,8 +362,14 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 
 	emitStatusLine := func(now time.Time) {
 		completed, total, inProgress := summarizeCIChecks(checks)
-		log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI %s: %d/%d checks complete, in progress: %s",
-			formatCIElapsed(now.Sub(start)), completed, total, strings.Join(inProgress, ", "))
+		var steps []JobStepStatus
+		if stepFetch != nil {
+			if s, err := stepFetch(); err == nil {
+				steps = s
+			}
+		}
+		log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI %s: %d/%d checks complete, %s",
+			formatCIElapsed(now.Sub(start)), completed, total, formatInProgressChecks(inProgress, steps))
 		lastStatusAt = now
 	}
 
@@ -473,6 +488,31 @@ func summarizeCIChecks(checks []CICheckResult) (completed, total int, inProgress
 		}
 	}
 	return completed, total, inProgress
+}
+
+// formatInProgressChecks renders the in-progress portion of the
+// minute-cadence status line. When steps is empty (stepFetch was nil, or
+// the fetch errored), it falls back to the plain "in progress: a, b"
+// rendering. Otherwise, each in-progress check is matched by name against
+// a job in steps: a match renders "name → step (step i/n)"; a check with
+// no matching job (external CI has no steps) renders as its bare name.
+func formatInProgressChecks(inProgress []string, steps []JobStepStatus) string {
+	if len(steps) == 0 {
+		return "in progress: " + strings.Join(inProgress, ", ")
+	}
+	byJob := make(map[string]JobStepStatus, len(steps))
+	for _, s := range steps {
+		byJob[s.JobName] = s
+	}
+	parts := make([]string, len(inProgress))
+	for i, name := range inProgress {
+		if s, ok := byJob[name]; ok {
+			parts[i] = fmt.Sprintf("%s → %s (step %d/%d)", name, s.StepName, s.StepIndex, s.StepTotal)
+		} else {
+			parts[i] = name
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // formatCIElapsed renders elapsed wait time for the status log: seconds

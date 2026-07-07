@@ -250,7 +250,7 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	checks, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Second, 0, discardLog{})
+	checks, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Second, 0, nil, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 		}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Second, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Second, 0, nil, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestWaitForCI_TimesOut(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Millisecond, 5*time.Second, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Millisecond, 5*time.Second, 0, nil, discardLog{})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -324,7 +324,7 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, nil, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestWaitForCI_BackoffCapsAt30Seconds(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, nil, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, log)
+	_, _, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, nil, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestWaitForCI_NoLogLineWhenResolvedImmediately(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, status, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, log)
+	_, status, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, nil, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestWaitForCI_ProgressResetsNoProgressBudget(t *testing.T) {
 	// frozen-state implementation would abandon the wait after 5 polls. Because
 	// each poll reports a new check state, the budget resets every time and
 	// all 9 pending polls complete successfully.
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, time.Hour, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, time.Hour, 0, nil, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestWaitForCI_HardCapExpiresDuringContinuousProgress(t *testing.T) {
 
 	// noProgressTimeout is large enough it never fires — checks change on
 	// every poll. Only the tiny hard cap bounds the wait.
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Millisecond, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Millisecond, 0, nil, discardLog{})
 	if err == nil {
 		t.Fatal("expected hard-cap timeout error")
 	}
@@ -525,7 +525,7 @@ func TestWaitForCI_MinuteCadenceStatusLine(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, log)
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, nil, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -544,6 +544,156 @@ func TestWaitForCI_MinuteCadenceStatusLine(t *testing.T) {
 	}
 }
 
+// waitForCI's minute-cadence status line names the currently running GitHub
+// Actions step of an in-progress job, with its 1-based index and the job's
+// total step count, instead of just the bare check name.
+func TestWaitForCI_StatusLineNamesRunningStep(t *testing.T) {
+	stubCISleep(t)
+	stubCINow(t, 40*time.Second)
+
+	var calls atomic.Int32
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		if n < 3 {
+			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+	stepFetch := func() ([]JobStepStatus, error) {
+		return []JobStepStatus{{JobName: "test", StepName: "Run Playwright tests", StepIndex: 5, StepTotal: 9}}, nil
+	}
+
+	log := &testLog{}
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, stepFetch, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if len(log.messages) == 0 {
+		t.Fatal("expected at least one status line")
+	}
+	if !strings.Contains(log.messages[0], "test → Run Playwright tests (step 5/9)") {
+		t.Errorf("expected step detail in status line, got: %s", log.messages[0])
+	}
+	if strings.Contains(log.messages[0], "in progress:") {
+		t.Errorf("expected step rendering to replace the bare 'in progress:' prefix, got: %s", log.messages[0])
+	}
+}
+
+// waitForCI's minute-cadence status line comma-separates multiple
+// in-progress jobs, each with its own running step and index/total.
+func TestWaitForCI_StatusLineMultiJobRendering(t *testing.T) {
+	stubCISleep(t)
+	stubCINow(t, 40*time.Second)
+
+	var calls atomic.Int32
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		if n < 3 {
+			return []CICheckResult{
+				{Name: "test", State: "PENDING", Bucket: "pending"},
+				{Name: "lint", State: "PENDING", Bucket: "pending"},
+			}, nil
+		}
+		return []CICheckResult{
+			{Name: "test", State: "SUCCESS", Bucket: "pass"},
+			{Name: "lint", State: "SUCCESS", Bucket: "pass"},
+		}, nil
+	}
+	stepFetch := func() ([]JobStepStatus, error) {
+		return []JobStepStatus{
+			{JobName: "test", StepName: "Run Playwright tests", StepIndex: 5, StepTotal: 9},
+			{JobName: "lint", StepName: "Run eslint", StepIndex: 2, StepTotal: 3},
+		}, nil
+	}
+
+	log := &testLog{}
+	_, _, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, stepFetch, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(log.messages) == 0 {
+		t.Fatal("expected at least one status line")
+	}
+	want := "test → Run Playwright tests (step 5/9), lint → Run eslint (step 2/3)"
+	if !strings.Contains(log.messages[0], want) {
+		t.Errorf("expected multi-job step rendering %q, got: %s", want, log.messages[0])
+	}
+}
+
+// waitForCI falls back to the plain check-name rendering when the step
+// fetch errors, so a transient GitHub Actions API failure never blanks the
+// status line or crashes the poll.
+func TestWaitForCI_StatusLineFallsBackOnStepFetchError(t *testing.T) {
+	stubCISleep(t)
+	stubCINow(t, 40*time.Second)
+
+	var calls atomic.Int32
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		if n < 3 {
+			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+	stepFetch := func() ([]JobStepStatus, error) {
+		return nil, fmt.Errorf("actions API unavailable")
+	}
+
+	log := &testLog{}
+	_, _, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, stepFetch, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(log.messages) == 0 {
+		t.Fatal("expected at least one status line")
+	}
+	if !strings.Contains(log.messages[0], "in progress: test") {
+		t.Errorf("expected fallback check-name rendering, got: %s", log.messages[0])
+	}
+}
+
+// waitForCI falls back to a check's bare name when the step fetch succeeds
+// but returns no matching job — the case of a non-GitHub-Actions check
+// (e.g. an external CI provider) mixed in among Actions jobs.
+func TestWaitForCI_StatusLineFallsBackForNonActionsCheck(t *testing.T) {
+	stubCISleep(t)
+	stubCINow(t, 40*time.Second)
+
+	var calls atomic.Int32
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		if n < 3 {
+			return []CICheckResult{
+				{Name: "test", State: "PENDING", Bucket: "pending"},
+				{Name: "netlify", State: "PENDING", Bucket: "pending"},
+			}, nil
+		}
+		return []CICheckResult{
+			{Name: "test", State: "SUCCESS", Bucket: "pass"},
+			{Name: "netlify", State: "SUCCESS", Bucket: "pass"},
+		}, nil
+	}
+	stepFetch := func() ([]JobStepStatus, error) {
+		return []JobStepStatus{{JobName: "test", StepName: "Run Playwright tests", StepIndex: 5, StepTotal: 9}}, nil
+	}
+
+	log := &testLog{}
+	_, _, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, stepFetch, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(log.messages) == 0 {
+		t.Fatal("expected at least one status line")
+	}
+	want := "test → Run Playwright tests (step 5/9), netlify"
+	if !strings.Contains(log.messages[0], want) {
+		t.Errorf("expected mixed rendering %q, got: %s", want, log.messages[0])
+	}
+}
+
 // waitForCI returns immediately when the context is cancelled, proving
 // that Ctrl-C interrupts CI polling instead of blocking until timeout.
 func TestWaitForCI_CancelledContext(t *testing.T) {
@@ -554,7 +704,7 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, status, err := waitForCI(ctx, fetch, 1, "", "", 1*time.Second, 10*time.Second, 10*time.Second, 0, discardLog{})
+	_, status, err := waitForCI(ctx, fetch, 1, "", "", 1*time.Second, 10*time.Second, 10*time.Second, 0, nil, discardLog{})
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
@@ -577,7 +727,7 @@ func TestWaitForCI_ZeroChecksAfterGracePeriodReturnsCIPassed(t *testing.T) {
 	checks, status, err := waitForCI(
 		context.Background(), fetch, 1, "", "",
 		1*time.Millisecond, 5*time.Second, 5*time.Second, 5*time.Millisecond,
-		discardLog{},
+		nil, discardLog{},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -600,7 +750,7 @@ func TestWaitForCI_ZeroGracePeriodTimesOutNormally(t *testing.T) {
 	_, status, err := waitForCI(
 		context.Background(), fetch, 1, "", "",
 		1*time.Millisecond, 5*time.Millisecond, 5*time.Second, 0,
-		discardLog{},
+		nil, discardLog{},
 	)
 	if err == nil {
 		t.Fatal("expected timeout error when grace period is 0 and no checks ever appear")
@@ -777,7 +927,7 @@ func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, 77, "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, log)
+	_, _, err := waitForCI(context.Background(), fetch, 77, "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, nil, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
