@@ -61,6 +61,12 @@ type repo struct {
 	prevBranch     string
 	branchRenamed  bool
 
+	// adoptedStackBranch is a leftover PR branch from a prior run that the
+	// user explicitly chose, at loop startup, to continue the stack on top
+	// of. setStackHead treats it as the stack head even when diverged from
+	// main — see SetAdoptedStackBranch.
+	adoptedStackBranch string
+
 	// stackHeadResolved is set by SyncWorktreeBase after calling setStackHead
 	// at startup. BranchForTask clears and skips setStackHead on the first task
 	// so that the two calls don't emit duplicate log lines.
@@ -774,6 +780,15 @@ func (r *repo) SetPrevBranch(branch string) {
 	if r.state != nil {
 		_ = r.state.Write("prev_branch", branch)
 	}
+}
+
+// SetAdoptedStackBranch marks branch as the leftover PR branch the user
+// explicitly chose, at loop startup, to continue the stack on top of. Only
+// this branch bypasses the BranchIsAheadOfMain guard in setStackHead — a
+// diverged-but-open-PR branch adopted this way is the intentional keep-stack
+// case, not the stale squash-merge case that guard exists to reject.
+func (r *repo) SetAdoptedStackBranch(branch string) {
+	r.adoptedStackBranch = branch
 }
 
 // branchSafeToDelete returns true when the branch has no commits beyond the

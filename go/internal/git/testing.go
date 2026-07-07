@@ -445,6 +445,7 @@ type StubInspector interface {
 	GetRemovedWorktreeForBranch() string
 	GetFlushUnpushedWorkCalls() int
 	GetReplyToAndResolveCommentsCalls() int
+	GetAdoptedStackBranch() string
 }
 
 // stubRepo is an unexported fake of Ops. Tests receive it only through the
@@ -472,6 +473,7 @@ type stubRepo struct {
 	removedWorktreeForBranch       string
 	flushUnpushedWorkCalls         int
 	replyToAndResolveCommentsCalls int
+	adoptedStackBranch             string
 }
 
 // GetBranchForTaskCalls returns the number of times BranchForTask has been
@@ -502,6 +504,11 @@ func (s *stubRepo) GetFlushUnpushedWorkCalls() int { return s.flushUnpushedWorkC
 func (s *stubRepo) GetReplyToAndResolveCommentsCalls() int {
 	return s.replyToAndResolveCommentsCalls
 }
+
+// GetAdoptedStackBranch returns the branch passed to the most recent
+// SetAdoptedStackBranch call. Used by tests to assert the leftover-PR
+// startup prompt adopted the correct branch.
+func (s *stubRepo) GetAdoptedStackBranch() string { return s.adoptedStackBranch }
 
 // Compile-time check that *stubRepo satisfies Ops.
 var _ Ops = (*stubRepo)(nil)
@@ -726,6 +733,10 @@ func (s *stubRepo) RenameBranchTo(name string) {
 
 func (s *stubRepo) SetPrevBranch(branch string) {
 	s.prevBranch = branch
+}
+
+func (s *stubRepo) SetAdoptedStackBranch(branch string) {
+	s.adoptedStackBranch = branch
 }
 
 // --- Tag operations (no-ops in the stub; tags have no observable effect

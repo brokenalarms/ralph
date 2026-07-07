@@ -170,6 +170,16 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		TestTimeout:                 cfg.TestTimeout,
 	})
 
+	// Leftover-PR check — must run before any branch setup (gm.Init below)
+	// so the prompt reflects the world as it stood at process start, and so
+	// a "no" or Ctrl-C answer never leaves partial branch/worktree state
+	// behind. Runs exactly once per loop start; nothing later in the
+	// iteration loop calls this again.
+	adoptBranch, ok := checkLeftoverRalphPRs(ctx, gm, cfg.ProjectDir, stdinIsTTY(), os.Stdout, os.Stdin, log)
+	if !ok {
+		return 0
+	}
+
 	// Phase 4 — git pre-flight checks and worktree setup. gm.Init bundles
 	// ValidateRemoteBranch + dirty-tree check + EnsureGitignored +
 	// PruneOrphanedWorktrees + SetupWorktree so callers can't forget the
@@ -206,6 +216,13 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	st.ClearPushedBranches()
 	if err := st.ClearCompletedTasks(); err != nil {
 		log.Emit(logging.Opts{Level: logging.Warn}, "ClearCompletedTasks: %v", err)
+	}
+	if adoptBranch != "" {
+		if err := st.AddPushedBranch(adoptBranch); err != nil {
+			log.Emit(logging.Opts{Level: logging.Warn}, "Failed to seed stack head with leftover branch %s: %v", adoptBranch, err)
+		} else {
+			log.Emit(logging.Opts{}, "Continuing stack on top of leftover branch %s", adoptBranch)
+		}
 	}
 
 	// Construct the verifier module. Verifier holds no module references —
