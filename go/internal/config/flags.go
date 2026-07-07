@@ -319,6 +319,18 @@ var Flags = []FlagDef{
 		},
 	},
 	{
+		ConfigKey: "ci_max_wait", Default: "45m",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.CIMaxWait = d
+			return nil
+		},
+	},
+	{
 		ConfigKey: "no_ci_grace_period", Default: "30s",
 		Kind: KindDuration,
 		Apply: func(cfg *Config, val string) error {

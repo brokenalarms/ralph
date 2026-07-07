@@ -160,6 +160,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Logger:                      log,
 		CompileCheckTimeout:         cfg.CompileCheckTimeout,
 		CIPollTimeout:               cfg.CIPollTimeout,
+		CIMaxWait:                   cfg.CIMaxWait,
 		NoCIGracePeriod:             cfg.NoCIGracePeriod,
 		CopilotGatedTimeout:         cfg.ReviewerGatedTimeout,
 		CopilotOpportunisticTimeout: cfg.ReviewerOpportunisticTimeout,
