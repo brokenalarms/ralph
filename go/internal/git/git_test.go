@@ -835,6 +835,72 @@ func TestSetupTaskWorktree_DoesNotRemoveAllPreservedDirOnSeqGap(t *testing.T) {
 	}
 }
 
+// SetupTaskWorktree must never RemoveAll a slot dir that is a registered
+// worktree by PATH, even when its branch was renamed away and the original
+// slot branch no longer exists. Regression test for the incident where a
+// renamed session's worktree was judged a dead leftover (branch absent,
+// findWorktreeForBranch(candidateBranch)=="" because registration moved to
+// the new branch name) and os.RemoveAll'd — a live, registered worktree.
+func TestSetupTaskWorktree_SkipsPathRegisteredDirAfterBranchRename(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatalf("mkdir worktreeRoot: %v", err)
+	}
+
+	today := time.Now().Format("20060102")
+	seq01Branch := TaskBranchName(today, 1)
+	seq01Dir := filepath.Join(worktreeRoot, fmt.Sprintf("ralph-task-%s-01", today))
+
+	// Register a live worktree at the slot-01 dir on the slot-01 branch, then
+	// rename the branch away (git branch -m renames+deletes the old ref in
+	// one step, matching save-worktree's end state: the worktree stays
+	// registered at seq01Dir, but now under a different branch name — the
+	// slot-01 branch no longer exists at all).
+	run(t, "git", "-C", project, "worktree", "add", "-b", seq01Branch, seq01Dir, "main")
+	renamedBranch := "ralph/save/renamed-topic"
+	run(t, "git", "-C", seq01Dir, "branch", "-m", seq01Branch, renamedBranch)
+
+	sentinel := filepath.Join(seq01Dir, "preserved-work.txt")
+	if err := os.WriteFile(sentinel, []byte("must survive"), 0o644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupTaskWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupTaskWorktree: %v", err)
+	}
+
+	// The path-registered dir must be untouched.
+	if _, err := os.Stat(seq01Dir); err != nil {
+		t.Errorf("path-registered worktree dir was deleted: %v", err)
+	}
+	if data, err := os.ReadFile(sentinel); err != nil {
+		t.Errorf("sentinel deleted (renamed session's work would be lost): %v", err)
+	} else if string(data) != "must survive" {
+		t.Errorf("sentinel modified: got %q", string(data))
+	}
+	if !mgr.refExists(project, renamedBranch) {
+		t.Errorf("renamed branch %q was deleted", renamedBranch)
+	}
+
+	// The new invocation must have claimed the next free slot, not seq-01.
+	seq02Branch := TaskBranchName(today, 2)
+	if mgr.worktreeBranch != seq02Branch {
+		t.Errorf("expected next free slot %q, got %q", seq02Branch, mgr.worktreeBranch)
+	}
+	if mgr.workDir == seq01Dir {
+		t.Errorf("new invocation reused the path-registered dir %q", seq01Dir)
+	}
+
+	// No leftover ralph/task branch should have been created at the
+	// deleted slot-01 branch name.
+	if mgr.refExists(project, seq01Branch) {
+		t.Errorf("leftover branch %q was recreated", seq01Branch)
+	}
+}
+
 // RenameBranchForTask does not set PrevBranch — that's controlled by
 // setStackHead in the loop via SetPrevBranch. Rename only changes the
 // branch name.
