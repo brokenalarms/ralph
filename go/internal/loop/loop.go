@@ -11,6 +11,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
@@ -476,6 +477,30 @@ func (l *Loop) waitForRate(ctx context.Context) bool {
 	return err == nil
 }
 
+// resolveAgentModel returns the working model for the iteration agent and,
+// when it differs from cfg.WorkingModel, a human-readable source label for
+// the log line. A task's "model" metadata overrides the configured working
+// model when it names a recognized model family (config.ModelFamilies); an
+// unrecognized value is logged as a warning and falls back to cfg.WorkingModel.
+// This override applies only to the working agent — fix agents and the
+// verifier always use their own configured models.
+func (l *Loop) resolveAgentModel(taskID string) (model, source string) {
+	if l.taskBackend == nil || taskID == "" {
+		return l.cfg.WorkingModel, ""
+	}
+	override, err := l.taskBackend.GetMetadata(taskID, "model")
+	if err != nil || override == "" {
+		return l.cfg.WorkingModel, ""
+	}
+	for _, family := range config.ModelFamilies {
+		if override == family {
+			return override, "task override"
+		}
+	}
+	l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Task %s has unrecognized model metadata %q, falling back to %s", taskID, override, l.cfg.WorkingModel)
+	return l.cfg.WorkingModel, ""
+}
+
 func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int) agentRunResult {
 	if ctx.Err() != nil {
 		return agentRunResult{action: actionDone}
@@ -498,8 +523,12 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 	}
 
 	taskStart := time.Now()
-	agentModel := l.cfg.WorkingModel
-	l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
+	agentModel, modelSource := l.resolveAgentModel(task.id)
+	if modelSource != "" {
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s (%s)", agentModel, modelSource)
+	} else {
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
+	}
 	result, runErr := l.runner.Run(claude.RunConfig{
 		Ctx:          ctx,
 		WorkDir:      prep.workDir,
