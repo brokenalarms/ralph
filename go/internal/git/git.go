@@ -344,12 +344,14 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 	r.gitCmd(r.projectDir, "worktree", "prune")
 
 	// Find the lowest seq where the slot is fully free: the directory does
-	// not exist, the branch does not exist, and no worktree is registered
-	// for the branch. This loop handles sequence gaps (from cleaned sessions)
-	// and orphaned branches (from preserved sessions) without clobbering
-	// either. A candidate dir with no branch and no registered worktree is a
-	// genuinely dead leftover and may be cleaned; all other occupied slots
-	// are skipped.
+	// not exist, the branch does not exist, no worktree is registered for
+	// the branch, and the directory is not itself a registered worktree
+	// under some OTHER branch (e.g. a session that renamed its branch after
+	// the worktree was created). This loop handles sequence gaps (from
+	// cleaned sessions) and orphaned branches (from preserved sessions)
+	// without clobbering either. A candidate dir with no branch, no
+	// branch-registration, and no path-registration is a genuinely dead
+	// leftover and may be cleaned; all other occupied slots are skipped.
 	runSeq := 1
 	for {
 		candidateBranch := TaskBranchName(today, runSeq)
@@ -359,16 +361,20 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 		registeredWT := r.findWorktreeForBranch(r.projectDir, candidateBranch)
 		_, statErr := os.Stat(candidateDir)
 		dirExists := statErr == nil
+		liveByPath := dirExists && r.isLiveWorktree(candidateDir)
 
-		if !branchExists && registeredWT == "" {
-			// No branch and no registration — slot is logically free.
-			// Clean a dead leftover dir if one sits here, then use the slot.
+		if !branchExists && registeredWT == "" && !liveByPath {
+			// No branch, no branch-registration, no path-registration — slot
+			// is logically free. Clean a dead leftover dir if one sits here,
+			// then use the slot.
 			if dirExists {
 				os.RemoveAll(candidateDir)
 			}
 			break
 		}
-		// Slot is occupied (branch or registered worktree exists) — skip it.
+		// Slot is occupied (branch, branch-registration, or path-registration
+		// exists) — skip it. Never RemoveAll a path-registered dir even if
+		// its branch was renamed away.
 		runSeq++
 	}
 
@@ -384,10 +390,19 @@ func (r *repo) SetupTaskWorktree(ctx context.Context) error {
 		r.gitCmdCtx(ctx, r.projectDir, "push", "-u", "origin", defaultBranch)
 	}
 
-	if err := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", candidateBranch, candidateDir, "origin/"+defaultBranch); err != nil {
-		if err := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", candidateBranch, candidateDir, "HEAD"); err != nil {
+	if err1 := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", candidateBranch, candidateDir, "origin/"+defaultBranch); err1 != nil {
+		// The scan above confirmed candidateBranch did not exist before this
+		// attempt, so if it exists now, attempt 1 created it before failing
+		// (e.g. worktree creation failed after the branch object was made).
+		// Delete it so the HEAD-base fallback's own -b never self-collides.
+		if r.refExists(r.projectDir, candidateBranch) {
+			r.gitCmd(r.projectDir, "branch", "-D", candidateBranch)
+		}
+		if err2 := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", candidateBranch, candidateDir, "HEAD"); err2 != nil {
 			// Leave r.workDir unchanged — caller must treat this as fatal.
-			return fmt.Errorf("failed to create task worktree: %w", err)
+			// Join both attempts' errors so attempt 1's failure is never
+			// hidden behind the fallback's.
+			return fmt.Errorf("failed to create task worktree: %w", errors.Join(err1, err2))
 		}
 	}
 
