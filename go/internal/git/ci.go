@@ -70,22 +70,42 @@ func (e *CIFailureError) Error() string {
 const DefaultCIPollInterval = 1 * time.Second
 
 // MaxCIPollInterval caps the exponential backoff so polls don't grow too far apart.
-const MaxCIPollInterval = 5 * time.Second
+const MaxCIPollInterval = 30 * time.Second
 
-// DefaultCIPollTimeout is the maximum time to wait for CI checks to complete.
-// Matches the ci_poll_timeout config-file default.
+// DefaultCIPollTimeout is the no-progress budget: how long waitForCI waits
+// with the fetched check set observably frozen (no new check, no status
+// transition, no completion) before abandoning the wait. Matches the
+// ci_poll_timeout config-file default. Reset any time the check state changes,
+// so a healthy CI run of any length is waited out — only DefaultCIMaxWait
+// bounds the total wait.
 const DefaultCIPollTimeout = 5 * time.Minute
+
+// DefaultCIMaxWait is the hard cap on total wait time regardless of progress,
+// bounding genuinely hung CI even when checks keep transitioning. Matches the
+// ci_max_wait config-file default.
+const DefaultCIMaxWait = 45 * time.Minute
 
 // DefaultNoCIGracePeriod is how long waitForCI waits for any checks to appear
 // before concluding no CI is configured. Repos with CI register checks within
 // seconds; only repos with no CI configured consistently return zero checks.
 const DefaultNoCIGracePeriod = 30 * time.Second
 
+// errCIFrozen is returned internally by waitForCI's poll function when the
+// fetched check state has not changed for the no-progress budget. It is
+// classified as fatal so retry.Retry returns it immediately instead of
+// continuing to poll.
+var errCIFrozen = errors.New("ci: check state has not changed within the no-progress budget")
+
 // ciSleep is the function used to create timer channels in waitForCI.
 // Tests override this to avoid real sleeps.
 var ciSleep = func(d time.Duration) <-chan time.Time {
 	return time.After(d)
 }
+
+// ciNow is the clock waitForCI uses to track elapsed time for the
+// no-progress budget and the minute-cadence status log. Tests override this
+// to simulate elapsed time deterministically without real sleeps.
+var ciNow = time.Now
 
 // evaluateChecks determines the overall CI status from individual check results.
 // All checks are blocking — any failure returns CIFailed, any pending check
@@ -282,6 +302,11 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 		timeout = DefaultCIPollTimeout
 	}
 
+	hardCap := r.ciMaxWait
+	if hardCap == 0 {
+		hardCap = DefaultCIMaxWait
+	}
+
 	gracePeriod := r.noCIGracePeriod
 	if gracePeriod == 0 {
 		gracePeriod = DefaultNoCIGracePeriod
@@ -290,77 +315,108 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
-		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, gracePeriod, r.logger)
+		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, r.logger)
 	}
 	status := evaluateChecks(checks)
 	if status != CIPending {
 		return checks, status, nil
 	}
-	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, gracePeriod, r.logger)
+	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, r.logger)
 }
 
-// waitForCI polls PR checks until they complete or timeout is reached.
-// Uses exponential backoff starting at interval, doubling each poll up to
-// MaxCIPollInterval. Emits a single in-place log line that grows as polls
-// accumulate (e.g. "CI polled 1s..2s..4s"), finalizing it to the log file
-// on completion. Emits nothing when CI resolves on the first fetch.
+// waitForCI polls PR checks until they complete, the no-progress budget
+// (noProgressTimeout) elapses with the fetched check state frozen, or the
+// hard cap (hardCap) elapses regardless of progress. Uses exponential
+// backoff starting at interval, doubling each poll up to MaxCIPollInterval.
+//
+// The no-progress budget resets any time the fetched check set changes (a
+// check appears, transitions, or completes), so a healthy CI run of any
+// length is waited out — hardCap is the only bound that applies regardless
+// of progress. While waiting, emits at most one status log line per minute
+// (plus one immediately when polling begins) reporting elapsed time and a
+// checks snapshot. Emits nothing when CI resolves on the first fetch.
 //
 // gracePeriod controls how long to wait with zero checks before treating the
 // repo as having no CI configured and returning CIPassed. Pass 0 to disable.
-func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, timeout, gracePeriod time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
+func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, noProgressTimeout, hardCap, gracePeriod time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 
-	var polled bool
 	var zeroChecksSince time.Time
 	var checks []CICheckResult
 	status := CIPending
 	noCIConfigured := false
 
-	emitPoll := func(duration string) {
-		if !polled {
-			log.Emit(logging.Opts{Domain: logging.CI, Link: prLink, Append: true}, "CI polled %s", duration)
-		} else {
-			log.Emit(logging.Opts{Append: true}, "..%s", duration)
-		}
-		polled = true
+	start := ciNow()
+	lastChangeAt := start
+	var lastState map[string]string
+	var lastStatusAt time.Time
+
+	emitStatusLine := func(now time.Time) {
+		completed, total, inProgress := summarizeCIChecks(checks)
+		log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI %s: %d/%d checks complete, in progress: %s",
+			formatCIElapsed(now.Sub(start)), completed, total, strings.Join(inProgress, ", "))
+		lastStatusAt = now
 	}
 
 	fetchAttempt := func() (bool, error) {
-		c, err := fetch(prNumber, repoURL)
-		if err != nil {
-			return false, err
-		}
-		checks = c
+		c, fetchErr := fetch(prNumber, repoURL)
+		now := ciNow()
 
-		if len(checks) == 0 && gracePeriod > 0 {
-			if zeroChecksSince.IsZero() {
-				zeroChecksSince = time.Now()
-			} else if time.Since(zeroChecksSince) >= gracePeriod {
-				status = CIPassed
-				noCIConfigured = true
+		if fetchErr == nil {
+			checks = c
+
+			if len(checks) == 0 && gracePeriod > 0 {
+				if zeroChecksSince.IsZero() {
+					zeroChecksSince = time.Now()
+				} else if time.Since(zeroChecksSince) >= gracePeriod {
+					status = CIPassed
+					noCIConfigured = true
+					return true, nil
+				}
+			} else if len(checks) > 0 {
+				zeroChecksSince = time.Time{}
+			}
+
+			state := checkStateSnapshot(checks)
+			if lastState == nil || !checkStateEqual(state, lastState) {
+				lastChangeAt = now
+				lastState = state
+			}
+
+			status = evaluateChecks(checks)
+			if status == CIPassed || status == CIFailed {
 				return true, nil
 			}
-		} else if len(checks) > 0 {
-			zeroChecksSince = time.Time{}
 		}
 
-		status = evaluateChecks(checks)
-		return status == CIPassed || status == CIFailed, nil
+		// A frozen check state counts as no-progress whether the freeze comes
+		// from an unchanging fetch result or from fetch itself repeatedly
+		// failing — either way nothing observable about CI has changed.
+		if now.Sub(lastChangeAt) >= noProgressTimeout {
+			return false, errCIFrozen
+		}
+
+		if fetchErr != nil {
+			return false, fetchErr
+		}
+
+		if lastStatusAt.IsZero() || now.Sub(lastStatusAt) >= time.Minute {
+			emitStatusLine(now)
+		}
+
+		return false, nil
+	}
+
+	classify := func(err error) bool {
+		return !errors.Is(err, errCIFrozen)
 	}
 
 	err := retry.Retry(ctx, retry.BackoffOpts{
 		Initial: interval,
 		Max:     MaxCIPollInterval,
-		Timeout: timeout,
+		Timeout: hardCap,
 		Sleep:   ciSleep,
-		OnRetry: func(_ int, delay time.Duration) {
-			emitPoll(formatDuration(delay))
-		},
-	}, nil, fetchAttempt)
-
-	if polled {
-		log.Emit(logging.Opts{}, "\n")
-	}
+	}, classify, fetchAttempt)
 
 	switch {
 	case err == nil && noCIConfigured:
@@ -368,16 +424,62 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 		return checks, CIPassed, nil
 	case err == nil:
 		return checks, status, nil
+	case errors.Is(err, errCIFrozen):
+		return checks, status, fmt.Errorf("CI checks did not complete within %v", noProgressTimeout)
 	case errors.Is(err, retry.ErrTimedOut):
-		return checks, status, fmt.Errorf("CI checks did not complete within %v", timeout)
+		return checks, status, fmt.Errorf("CI checks did not complete within %v", hardCap)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return nil, CIPending, fmt.Errorf("interrupted")
 	default:
-		return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
+		return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", noProgressTimeout, err)
 	}
 }
 
-// formatDuration returns a compact human-readable duration (e.g. "1s", "2s", "15s").
-func formatDuration(d time.Duration) string {
-	return fmt.Sprintf("%ds", int(d.Seconds()))
+// checkStateSnapshot builds a per-check name -> state signature so waitForCI
+// can detect whether CI made observable progress between two polls: a new
+// check appearing, an existing check transitioning status, or a check
+// completing all change the signature for that check's name.
+func checkStateSnapshot(checks []CICheckResult) map[string]string {
+	snapshot := make(map[string]string, len(checks))
+	for _, c := range checks {
+		snapshot[c.Name] = c.State
+	}
+	return snapshot
+}
+
+// checkStateEqual reports whether two check-state snapshots are identical.
+func checkStateEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, state := range a {
+		if b[name] != state {
+			return false
+		}
+	}
+	return true
+}
+
+// summarizeCIChecks splits checks into a completed count, the total count,
+// and the names of checks still pending — the snapshot shown in waitForCI's
+// minute-cadence status log.
+func summarizeCIChecks(checks []CICheckResult) (completed, total int, inProgress []string) {
+	total = len(checks)
+	for _, c := range checks {
+		if c.Pending() {
+			inProgress = append(inProgress, c.Name)
+		} else {
+			completed++
+		}
+	}
+	return completed, total, inProgress
+}
+
+// formatCIElapsed renders elapsed wait time for the status log: seconds
+// below a minute, whole minutes at or above a minute (e.g. "45s", "3m").
+func formatCIElapsed(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%dm", int(d.Minutes()))
 }

@@ -39,6 +39,9 @@ func TestDefaultValues(t *testing.T) {
 	if cfg.CIPollTimeout != 5*time.Minute {
 		t.Errorf("CIPollTimeout = %s, want 5m", cfg.CIPollTimeout)
 	}
+	if cfg.CIMaxWait != 45*time.Minute {
+		t.Errorf("CIMaxWait = %s, want 45m", cfg.CIMaxWait)
+	}
 }
 
 // Verifies that RALPH_MAX_ITERATIONS env var overrides the Flags registry default.

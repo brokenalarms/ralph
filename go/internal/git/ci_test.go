@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+// stubCINow replaces ciNow with a fake clock that advances by step on every
+// call, so tests can simulate elapsed time deterministically (no-progress
+// budget resets, minute-cadence status lines) without real sleeps.
+func stubCINow(t *testing.T, step time.Duration) {
+	t.Helper()
+	origNow := ciNow
+	current := time.Now()
+	ciNow = func() time.Time {
+		current = current.Add(step)
+		return current
+	}
+	t.Cleanup(func() { ciNow = origNow })
+}
+
 // CICheckResult.Failed and Pending expose the normalized verdict as methods,
 // so callers can switch on behavior instead of re-testing the raw bucket value.
 func TestCICheckResult_FailedAndPending(t *testing.T) {
@@ -236,7 +250,7 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	checks, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 0, discardLog{})
+	checks, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Second, 0, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -258,7 +272,7 @@ func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 		}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Second, 0, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -267,14 +281,21 @@ func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 	}
 }
 
+// waitForCI abandons the wait once the fetched check state is frozen (no new
+// check, no status transition) for the full no-progress budget, even though
+// the hard cap is far from expiring — proving the timeout is progress-aware,
+// not a flat wall-clock deadline.
 func TestWaitForCI_TimesOut(t *testing.T) {
 	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Millisecond, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Millisecond, 5*time.Second, 0, discardLog{})
 	if err == nil {
 		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "5ms") {
+		t.Errorf("expected error to report the no-progress budget (5ms), got: %v", err)
 	}
 	if status != CIPending {
 		t.Errorf("expected CIPending on timeout, got %v", status)
@@ -303,18 +324,18 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, 0, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if status != CIPassed {
 		t.Errorf("expected CIPassed, got %v", status)
 	}
-	// 5 pending polls → sleeps of 1s, 2s, 4s, 5s, 5s (capped)
+	// 5 pending polls → sleeps of 1s, 2s, 4s, 8s, 16s (below the 30s cap)
 	if len(sleeps) != 5 {
 		t.Fatalf("expected 5 sleeps, got %d: %v", len(sleeps), sleeps)
 	}
-	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 5 * time.Second, 5 * time.Second}
+	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
 	for i, w := range want {
 		if sleeps[i] != w {
 			t.Errorf("sleep[%d] = %v, want %v", i, sleeps[i], w)
@@ -322,8 +343,53 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 	}
 }
 
-// waitForCI emits exactly one log line regardless of poll count — each poll
-// appends ~4 chars rather than rewriting the line, so 10 polls produce one line.
+// waitForCI's exponential backoff caps at MaxCIPollInterval (30s) rather than
+// doubling indefinitely, so a long-hung CI run doesn't end up polling minutes
+// apart.
+func TestWaitForCI_BackoffCapsAt30Seconds(t *testing.T) {
+	var sleeps []time.Duration
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		sleeps = append(sleeps, d)
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	callCount := 0
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		callCount++
+		if callCount < 8 {
+			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, discardLog{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	// 7 pending polls → sleeps of 1s, 2s, 4s, 8s, 16s, then capped at 30s, 30s.
+	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second}
+	if len(sleeps) != len(want) {
+		t.Fatalf("expected %d sleeps, got %d: %v", len(want), len(sleeps), sleeps)
+	}
+	for i, w := range want {
+		if sleeps[i] != w {
+			t.Errorf("sleep[%d] = %v, want %v", i, sleeps[i], w)
+		}
+	}
+}
+
+// waitForCI emits a single minute-cadence status line for a burst of fast
+// polls — the first line is emitted immediately when polling begins, and
+// with a faked instant ciSleep no real wall-clock minute ever elapses to
+// trigger a second one, so 10 polls still produce exactly one status line
+// (replacing the old per-poll "..Ns" counters).
 func TestWaitForCI_SingleLogLine(t *testing.T) {
 	origSleep := ciSleep
 	ciSleep = func(d time.Duration) <-chan time.Time {
@@ -343,17 +409,16 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 0, log)
+	_, _, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 10 pending polls produce exactly one "CI polled" line in the log.
 	if len(log.messages) != 1 {
 		t.Fatalf("expected exactly 1 log message for 10 polls, got %d: %v", len(log.messages), log.messages)
 	}
-	if !strings.Contains(log.messages[0], "polled 1s..2s..4s") {
-		t.Errorf("expected polling summary with backoff schedule, got: %s", log.messages[0])
+	if !strings.Contains(log.messages[0], "0/1 checks complete") || !strings.Contains(log.messages[0], "in progress: test") {
+		t.Errorf("expected checks snapshot in status line, got: %s", log.messages[0])
 	}
 }
 
@@ -365,7 +430,7 @@ func TestWaitForCI_NoLogLineWhenResolvedImmediately(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, status, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 0, log)
+	_, status, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -374,6 +439,108 @@ func TestWaitForCI_NoLogLineWhenResolvedImmediately(t *testing.T) {
 	}
 	if len(log.messages) != 0 {
 		t.Fatalf("expected no log messages when resolved immediately, got %d: %v", len(log.messages), log.messages)
+	}
+}
+
+// waitForCI resets the no-progress budget every time the fetched check state
+// changes, so a CI run whose checks keep transitioning is waited out
+// regardless of total duration — even when each individual gap between polls
+// would have exceeded a frozen-state budget on its own.
+func TestWaitForCI_ProgressResetsNoProgressBudget(t *testing.T) {
+	stubCISleep(t)
+	stubCINow(t, 1*time.Second)
+
+	var calls atomic.Int32
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		if n < 10 {
+			return []CICheckResult{{Name: "test", State: fmt.Sprintf("STEP_%d", n), Bucket: "pending"}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+
+	// noProgressTimeout is 5s — with the fake clock advancing 1s per poll, a
+	// frozen-state implementation would abandon the wait after 5 polls. Because
+	// each poll reports a new check state, the budget resets every time and
+	// all 9 pending polls complete successfully.
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, time.Hour, 0, discardLog{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if calls.Load() < 10 {
+		t.Errorf("expected at least 10 polls, got %d", calls.Load())
+	}
+}
+
+// waitForCI's hard cap (ci_max_wait) bounds the total wait even when checks
+// keep transitioning and the no-progress budget never fires — genuinely hung
+// CI must still be abandoned eventually.
+func TestWaitForCI_HardCapExpiresDuringContinuousProgress(t *testing.T) {
+	var calls atomic.Int32
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		return []CICheckResult{{Name: "test", State: fmt.Sprintf("STEP_%d", n), Bucket: "pending"}}, nil
+	}
+
+	// noProgressTimeout is large enough it never fires — checks change on
+	// every poll. Only the tiny hard cap bounds the wait.
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, 5*time.Millisecond, 0, discardLog{})
+	if err == nil {
+		t.Fatal("expected hard-cap timeout error")
+	}
+	if !strings.Contains(err.Error(), "5ms") {
+		t.Errorf("expected error to report the hard cap (5ms), got: %v", err)
+	}
+	if status != CIPending {
+		t.Errorf("expected CIPending on hard-cap timeout, got %v", status)
+	}
+	if calls.Load() < 2 {
+		t.Errorf("expected multiple polls before the hard cap expired, got %d", calls.Load())
+	}
+}
+
+// waitForCI emits a status line once per elapsed minute (using the fake
+// clock's advancing "now") in addition to the first line at poll start, each
+// reporting elapsed time and a completed/total checks snapshot.
+func TestWaitForCI_MinuteCadenceStatusLine(t *testing.T) {
+	stubCISleep(t)
+	stubCINow(t, 40*time.Second)
+
+	var calls atomic.Int32
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		if n < 5 {
+			return []CICheckResult{
+				{Name: "build", State: "SUCCESS", Bucket: "pass"},
+				{Name: "e2e", State: "PENDING", Bucket: "pending"},
+			}, nil
+		}
+		return []CICheckResult{
+			{Name: "build", State: "SUCCESS", Bucket: "pass"},
+			{Name: "e2e", State: "SUCCESS", Bucket: "pass"},
+		}, nil
+	}
+
+	log := &testLog{}
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+
+	// The fake clock advances 40s per poll, crossing the 1-minute cadence
+	// boundary more than once across 4 pending polls — expect more than the
+	// single first-line status message.
+	if len(log.messages) < 2 {
+		t.Fatalf("expected at least 2 minute-cadence status lines, got %d: %v", len(log.messages), log.messages)
+	}
+	if !strings.Contains(log.messages[0], "1/2 checks complete") || !strings.Contains(log.messages[0], "in progress: e2e") {
+		t.Errorf("expected checks snapshot in status line, got: %s", log.messages[0])
 	}
 }
 
@@ -387,7 +554,7 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, status, err := waitForCI(ctx, fetch, 1, "", "", 1*time.Second, 10*time.Second, 0, discardLog{})
+	_, status, err := waitForCI(ctx, fetch, 1, "", "", 1*time.Second, 10*time.Second, 10*time.Second, 0, discardLog{})
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
@@ -409,7 +576,7 @@ func TestWaitForCI_ZeroChecksAfterGracePeriodReturnsCIPassed(t *testing.T) {
 
 	checks, status, err := waitForCI(
 		context.Background(), fetch, 1, "", "",
-		1*time.Millisecond, 5*time.Second, 5*time.Millisecond,
+		1*time.Millisecond, 5*time.Second, 5*time.Second, 5*time.Millisecond,
 		discardLog{},
 	)
 	if err != nil {
@@ -432,7 +599,7 @@ func TestWaitForCI_ZeroGracePeriodTimesOutNormally(t *testing.T) {
 
 	_, status, err := waitForCI(
 		context.Background(), fetch, 1, "", "",
-		1*time.Millisecond, 5*time.Millisecond, 0,
+		1*time.Millisecond, 5*time.Millisecond, 5*time.Second, 0,
 		discardLog{},
 	)
 	if err == nil {
@@ -590,7 +757,7 @@ func TestAwaitCI_PushedAtLogUsesPRLink(t *testing.T) {
 	}
 }
 
-// waitForCI polling summary log lines use PRLink for clickable links.
+// waitForCI's minute-cadence status log lines use PRLink for clickable links.
 func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 	origSleep := ciSleep
 	ciSleep = func(d time.Duration) <-chan time.Time {
@@ -610,15 +777,22 @@ func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, 77, "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, 0, log)
+	_, _, err := waitForCI(context.Background(), fetch, 77, "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, 5*time.Minute, 0, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	found := false
 	for _, msg := range log.messages {
-		if strings.Contains(msg, "polled") && !strings.Contains(msg, "github.com/owner/repo/pull/77") {
-			t.Errorf("expected PRLink hyperlink in polling log, got: %s", msg)
+		if strings.Contains(msg, "checks complete") {
+			found = true
+			if !strings.Contains(msg, "github.com/owner/repo/pull/77") {
+				t.Errorf("expected PRLink hyperlink in status log, got: %s", msg)
+			}
 		}
+	}
+	if !found {
+		t.Fatalf("expected a status log line, got: %v", log.messages)
 	}
 }
 
