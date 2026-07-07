@@ -57,6 +57,7 @@ type StubGitHubConfig struct {
 	Reviewers        []Reviewer
 	RequiredChecks   []string
 	JobStepCount     int
+	RunningJobSteps  []JobStepStatus
 	PollReviewResult *AutoReview
 	FetchThreadIDs   map[int]string
 	PRDiffOutput     string
@@ -75,6 +76,7 @@ type StubGitHubConfig struct {
 	ListOpenPRBranchesErr error
 	PRDiffErr             error
 	GetJobStepCountErr    error
+	GetRunningJobStepsErr error
 	DetectReviewersErr    error
 	PollReviewErr         error
 	RequiredChecksErr     error
@@ -289,6 +291,10 @@ func (s *stubGitHub) CreatePRViaAPI(_ context.Context, _ string, opts CreatePROp
 
 func (s *stubGitHub) GetJobStepCount(_ context.Context, _ string, _ int) (int, error) {
 	return s.cfg.JobStepCount, s.cfg.GetJobStepCountErr
+}
+
+func (s *stubGitHub) GetRunningJobSteps(_ context.Context, _ string, _ int) ([]JobStepStatus, error) {
+	return s.cfg.RunningJobSteps, s.cfg.GetRunningJobStepsErr
 }
 
 func (s *stubGitHub) ListAllPRs(_ context.Context, _ string) ([]PRInfo, error) {

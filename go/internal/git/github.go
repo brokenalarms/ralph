@@ -172,6 +172,12 @@ type gitHub interface {
 	ReopenPR(ctx context.Context, prNumber int, repoURL string) error
 	CreatePRViaAPI(ctx context.Context, nwo string, opts CreatePROpts) (prNumber int, err error)
 	GetJobStepCount(ctx context.Context, nwo string, prNumber int) (int, error)
+	// GetRunningJobSteps resolves the workflow run for the PR's current head
+	// SHA (not the latest pull_request-event run repo-wide — see the NOTE on
+	// GetJobStepCount for why that is unsafe with parallel PRs in flight) and
+	// returns, for each job with a step currently in_progress, the job name,
+	// that step's name and 1-based index, and the job's total step count.
+	GetRunningJobSteps(ctx context.Context, nwo string, prNumber int) ([]JobStepStatus, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
 	// DetectActiveReviewers queries the repo's installed GitHub Apps and cross-
@@ -899,6 +905,74 @@ func (g *ghCLI) GetJobStepCount(ctx context.Context, nwo string, prNumber int) (
 	count := 0
 	fmt.Sscanf(strings.TrimSpace(string(jobsOut)), "%d", &count)
 	return count, nil
+}
+
+// JobStepStatus describes the currently in_progress step of a single
+// GitHub Actions job, as reported by GetRunningJobSteps.
+type JobStepStatus struct {
+	JobName   string
+	StepName  string
+	StepIndex int
+	StepTotal int
+}
+
+func (g *ghCLI) GetRunningJobSteps(ctx context.Context, nwo string, prNumber int) ([]JobStepStatus, error) {
+	shaOut, err := g.runGHCmd(ctx, []string{"api",
+		fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber),
+		"--jq", ".head.sha"})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get PR head SHA: %w", err)
+	}
+	headSHA := strings.TrimSpace(string(shaOut))
+	if headSHA == "" || headSHA == "null" {
+		return nil, fmt.Errorf("PR #%d has no head SHA", prNumber)
+	}
+
+	runOut, err := g.runGHCmd(ctx, []string{"api",
+		fmt.Sprintf("repos/%s/actions/runs?head_sha=%s&per_page=1", nwo, headSHA),
+		"--jq", ".workflow_runs[0].id"})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get runs for head SHA %s: %w", headSHA, err)
+	}
+	runID := strings.TrimSpace(string(runOut))
+	if runID == "" || runID == "null" {
+		return nil, fmt.Errorf("no workflow run found for head SHA %s", headSHA)
+	}
+
+	jobsOut, err := g.runGHCmd(ctx, []string{"api",
+		fmt.Sprintf("repos/%s/actions/runs/%s/jobs", nwo, runID),
+		"--jq", `[.jobs[] | {name: .name, steps: [.steps[]? | {name: .name, number: .number, status: .status}]}]`})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get jobs: %w", err)
+	}
+
+	var jobs []struct {
+		Name  string `json:"name"`
+		Steps []struct {
+			Name   string `json:"name"`
+			Number int    `json:"number"`
+			Status string `json:"status"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(jobsOut, &jobs); err != nil {
+		return nil, fmt.Errorf("parsing jobs response %q: %w", strings.TrimSpace(string(jobsOut)), err)
+	}
+
+	var result []JobStepStatus
+	for _, job := range jobs {
+		total := len(job.Steps)
+		for _, step := range job.Steps {
+			if step.Status == "in_progress" {
+				result = append(result, JobStepStatus{
+					JobName:   job.Name,
+					StepName:  step.Name,
+					StepIndex: step.Number,
+					StepTotal: total,
+				})
+			}
+		}
+	}
+	return result, nil
 }
 
 func (g *ghCLI) GetPR(ctx context.Context, nwo string, prNumber int) (*PRDetail, error) {
