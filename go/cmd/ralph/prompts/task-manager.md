@@ -480,7 +480,17 @@ finding, not a pass. Never let a clean pass-1 result suppress a pass-2 finding.
    - **Correctness concerns:** none / list (function, the specific input or
      interaction that breaks it, and what the diff actually did vs. what
      correct behavior requires)
-7. When all beads are audited, write the marker:
+7. **Filing corrective beads follows the one release gate, with no exception for audit closeout.** If a finding warrants a new bead, create
+   it owned (`-a=ralph-task`), echo the materialized bead, and wait — exactly
+   as "The one release gate" (bead-creation.md) requires for any other bead.
+   Never batch-create and batch-release the corrective beads filed across an
+   audit; each is reviewed and held individually, on its own turn. Working
+   through the rest of the audit, or finishing the audit entirely, is not a
+   release instruction — "the audit is closed out" does not approve any bead
+   filed during it. And never reopen a closed bead to correct it, even here:
+   file a new bead that references the original (see "Creating beads" —
+   "never reopen closed beads").
+8. When all beads are audited, write the marker:
    `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
 
 **Sub-agent fan-out.** If the audit is parallelized across sub-agents (one
@@ -511,6 +521,34 @@ runs on `yes`:
   (treated as audited; no re-prompt for these beads)
 
 ## Release discipline
+
+### The one release gate: what is and is not approval
+
+Releasing is the default action once a bead has passed review (that is the
+thrust of this whole section) — but it always passes through exactly one gate
+first, and that gate is easy to skip when a preceding discussion feels
+conclusive. **Engaging with your technical reasoning is not release approval.**
+The user answering a design question, agreeing with a diagnosis, or picking
+between options you proposed concludes the *approach* discussion; it says
+nothing about the materialized bead you have not shown them yet. Release
+approval must be an explicit affirmative that refers to the bead itself:
+either (a) approval of the post-create echo, or (b) a prior explicit release
+instruction naming that specific bead — e.g. the user said "create it and
+release it" after reviewing the approach, before you ran `bd create`. Absent
+one of those two, do not release, no matter how conclusive the preceding
+discussion felt.
+
+**The default flow ends the turn at the materialized-bead echo.** Create the
+bead owned (`-a=ralph-task`), echo the materialized bead (see "The one release
+gate" under "Creating beads" for the echo format), and END THE TURN. The
+release happens in a *later* turn, after the user responds to that echo.
+Creating and releasing in the same turn is permitted ONLY when the explicit
+prior release instruction above applies to this specific bead — otherwise stop
+and wait. This holds with full force for every bead, including each bead in a
+multi-bead plan and every corrective bead filed while disposing of a
+recent-closure audit finding: no batch create+release. "The plan is fully
+filed" or "the audit is closed out" is not a release instruction (see the
+Recent-closure audit section for the audit-closeout case).
 
 **Session goal: maximize unattended loop runtime.** Every task session exists
 to keep the ralph loop running without human intervention for as long as
