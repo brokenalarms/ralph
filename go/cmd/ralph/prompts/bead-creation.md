@@ -184,12 +184,15 @@ Always:
 
 1. **Create owned** (`-a=ralph-task`) — never create-then-release in one breath.
 2. **Echo the materialized bead and wait:**
-   > Created **ralph-abc** · P2 task · `orchestrator` `git`
-   > **ralph loop: force-reset worktree after merge**
-   > Resets the worktree to origin/main after each squash-merge so stale
-   > branches don't accumulate.
-   >
-   > Looks good? (enter to release to the loop, or type changes)
+
+   | ID | Priority | Type | Status | Labels | Title | Model |
+   |---|---|---|---|---|---|---|
+   | ralph-abc | P2 | task | open | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | default |
+
+   Resets the worktree to origin/main after each squash-merge so stale
+   branches don't accumulate.
+
+   Looks good? (enter to release to the loop, or type changes)
 3. **On approval** → release with `bd update <id> -a=ralph-loop`. (For a bead you
    will work yourself, leave it owned and start the work instead of releasing.)
 4. **On changes** → apply with `bd update` (title, description, priority, labels,
@@ -295,21 +298,49 @@ referencing the original rather than reopening it.
 
 ### Echo-back rule (EVERY bd operation)
 
-After EVERY `bd` mutation (create, update, close, reopen, skip), echo back:
-- **ID**, **priority**, **status**, **type**, **labels**, **title**
-- **Description** (first 3 lines, truncate with … if longer)
-- For updates: what changed (old → new values)
+After EVERY `bd` mutation (create, update, close, reopen, skip), render the
+bead's structural fields as one markdown table row: **ID**, **priority**,
+**type**, **status**, **labels**, **title**, and **model** (the explicit
+override, e.g. `sonnet`, or `default` when unset — see "Model reference").
+Description (first 3 lines, truncate with … if longer), what changed for
+updates (old → new values), and acceptance criteria stay below the table as
+text — the table carries scannable structure, not long content.
+
+**Multi-bead operations** (splits, multi-bead plans, status summaries) share
+ONE table with one row per bead — never a separate table or blockquote per
+bead.
 
 Examples:
-> Created **ralph-abc** · P2 task · open · `orchestrator` `git`
-> **ralph loop: force-reset worktree after merge**
-> Resets the worktree to origin/main after each squash-merge...
 
-> Updated **ralph-abc**: priority P3 → P1, added label `ci`
-> **ralph loop: force-reset worktree after merge** · P1 task · open · `orchestrator` `ci`
+Create:
 
-> Closed **ralph-abc** · P1 task · closed
-> **ralph loop: force-reset worktree after merge**
+| ID | Priority | Type | Status | Labels | Title | Model |
+|---|---|---|---|---|---|---|
+| ralph-abc | P2 | task | open | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | default |
+
+Resets the worktree to origin/main after each squash-merge so stale
+branches don't accumulate.
+
+Update:
+
+| ID | Priority | Type | Status | Labels | Title | Model |
+|---|---|---|---|---|---|---|
+| ralph-abc | P1 | task | open | `orchestrator`, `git`, `ci` | ralph loop: force-reset worktree after merge | default |
+
+Priority P3 → P1, added label `ci`.
+
+Close:
+
+| ID | Priority | Type | Status | Labels | Title | Model |
+|---|---|---|---|---|---|---|
+| ralph-abc | P1 | task | closed | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | default |
+
+Multi-bead (e.g. a split):
+
+| ID | Priority | Type | Status | Labels | Title | Model |
+|---|---|---|---|---|---|---|
+| ralph-abc | P2 | task | open | `orchestrator` | ralph task: X | default |
+| ralph-def | P2 | task | open | `orchestrator` | ralph task: Y | sonnet |
 
 Never show the raw bd command — only the echo-back.
 
@@ -443,12 +474,20 @@ to inspect the full bead, then propose:
 
 Present the split as a concrete plan the user can approve:
 
-> **ralph-abc** looks unwieldy — it covers X, Y, and Z. Suggested split:
-> 1. **ralph task: X** (P2) — acceptance: …
-> 2. **ralph task: Y** (P2, depends on #1) — acceptance: …
-> 3. **ralph task: Z** (P3) — acceptance: …
->
-> Want me to create these and close the original?
+**ralph-abc** looks unwieldy — it covers X, Y, and Z. Suggested split:
+
+| ID | Priority | Type | Status | Labels | Title | Model |
+|---|---|---|---|---|---|---|
+| (new) | P2 | task | proposed | `orchestrator` | ralph task: X | default |
+| (new) | P2 | task | proposed | `orchestrator` | ralph task: Y (depends on #1) | default |
+| (new) | P3 | task | proposed | `orchestrator` | ralph task: Z | default |
+
+Acceptance criteria — one line per subtask:
+1. X — …
+2. Y — …
+3. Z — …
+
+Want me to create these and close the original?
 
 Do not split automatically — always get user confirmation first. And raise the
 split *before* releasing the bead to the loop: if a bead you are about to release
