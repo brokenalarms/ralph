@@ -424,7 +424,18 @@ beads before doing anything else.
 
 When the user answers `yes` to the audit prompt (the audit never runs without
 that go-ahead — see the startup audit check above), run the audit for every
-loop-completed bead in the unaudited window:
+loop-completed bead in the unaudited window. Each bead gets **two required
+passes** — running only the first is an incomplete audit:
+
+- **Pass 1 — per-AC verification.** For each acceptance criterion, read the
+  implementation and confirm the behavior is genuinely present. This catches
+  dropped ACs, stubs, and deleted/hollow tests.
+- **Pass 2 — adversarial implementation-correctness review.** This pass is
+  explicitly NOT anchored to the ACs.
+
+**The frame distinction (do not blur these):** *AC verification asks: is every claim evidenced? Correctness review asks: is the implementation wrong anywhere the ACs are silent?* A bead can pass every AC and still contain a correctness defect the ACs never named — pass 2 exists to find that defect.
+
+**Pass 1 procedure:**
 
 1. Fetch the bead's acceptance criteria via `bd show <id>`.
 2. Locate the merge commit(s): check the bead's `external-ref` field first; if
@@ -443,10 +454,43 @@ loop-completed bead in the unaudited window:
    - Stub-only changes (real implementation replaced by a no-op or placeholder)
    - Deleted tests (tests that previously exercised the behavior are removed)
    - AC criteria silently dropped — the diff does not address the criterion at all
-6. Present findings with: bead ID, which specific AC criterion failed, what the
-   diff actually did vs. what was required.
+
+**Pass 2 procedure — run for every merged diff, regardless of the pass-1
+result:**
+
+1. Read each changed function **IN FULL** in the merged tree — not just the
+   lines an AC names. Partial reads miss defects at the edges of a change.
+2. Enumerate every call site of each changed or renamed symbol and check that
+   each one still behaves correctly under the new implementation.
+3. Probe boundary and edge conditions of any new or changed predicate, break
+   condition, or early-return condition — what input would make this
+   condition true or false when it shouldn't be?
+4. Check interactions with adjacent logic the diff touches but the AC does not
+   name — dedup passes, caching, ordering, state shared with other code paths.
+5. Throughout, ask **"what input would make this change wrong?"** rather than
+   "is this claim evidenced?" — that second question is pass 1's job, not
+   pass 2's.
+
+A correctness concern found in pass 2 is a **reportable finding regardless of
+the pass-1 result** — an all-ACs-pass bead with an edge-case defect is a
+finding, not a pass. Never let a clean pass-1 result suppress a pass-2 finding.
+
+6. Present findings per bead with **both verdicts stated separately**:
+   - **ACs verified:** yes / no (+ which specific criterion failed, if no)
+   - **Correctness concerns:** none / list (function, the specific input or
+     interaction that breaks it, and what the diff actually did vs. what
+     correct behavior requires)
 7. When all beads are audited, write the marker:
    `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
+
+**Sub-agent fan-out.** If the audit is parallelized across sub-agents (one
+agent per bead, or a batch per agent), every composed sub-agent prompt MUST
+carry both passes — the pass-1 per-AC checklist AND the pass-2 adversarial
+correctness frame, including the frame-distinction sentence above. A sub-agent
+prompt built only from the pass-1 checklist reproduces the exact failure this
+audit design fixes: a report of "all ACs verified" that never looked past the
+lines the ACs name. Require each sub-agent to return both verdicts separately,
+exactly as step 6 above requires.
 
 **Token-cost rationale (do not trim):** Opus on a first pass with no
 verification step still misinterprets work — an audit catches compounding errors
