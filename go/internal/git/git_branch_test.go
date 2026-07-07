@@ -153,6 +153,54 @@ func TestSetStackHead_OpenPRButNotAheadOfMain_PrevBranchEmpty(t *testing.T) {
 	}
 }
 
+// setStackHead selects the adopted branch as stack head even when
+// BranchIsAheadOfMain returns false, when the branch was marked via
+// SetAdoptedStackBranch. Reproduces the ralph-i003 "continue the stack"
+// choice: a leftover PR branch diverged from main (main moved on while the
+// PR sat open) must still be adopted as the stack head, unlike an ordinary
+// squash-merged stale branch which TestSetStackHead_OpenPRButNotAheadOfMain_PrevBranchEmpty
+// correctly rejects.
+func TestSetStackHead_AdoptedBranch_BypassesAheadOfMainGuard(t *testing.T) {
+	log := &testLog{}
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 1241, Branch: "ralph/tabi-uael"}, // open PR, diverged from main
+		},
+	})
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	// BranchIsAheadOfMain: merge-base --is-ancestor returns error → false (diverged).
+	runner.On("merge-base", "", fmt.Errorf("not an ancestor"))
+
+	r := newRepoForTest(Config{Logger: log}, gh, withRunner(runner))
+	r.SetAdoptedStackBranch("ralph/tabi-uael")
+
+	setStackHead(context.Background(), r, []string{"ralph/tabi-uael"})
+
+	if r.prevBranch != "ralph/tabi-uael" {
+		t.Errorf("expected prevBranch=ralph/tabi-uael (adopted despite divergence), got %q", r.prevBranch)
+	}
+	if !log.contains("Stack head: ralph/tabi-uael") {
+		t.Errorf("expected 'Stack head: ralph/tabi-uael' log, got: %v", log.messages)
+	}
+}
+
+// setStackHead still requires an open PR for the adopted branch — adoption
+// alone does not bypass the ListOpenPRBranches membership guard.
+func TestSetStackHead_AdoptedBranch_StillRequiresOpenPR(t *testing.T) {
+	log := &testLog{}
+	// No PRs configured: ListOpenPRBranches returns [].
+	r := newRepoForTest(Config{Logger: log}, nil)
+	r.SetAdoptedStackBranch("ralph/tabi-uael")
+
+	setStackHead(context.Background(), r, []string{"ralph/tabi-uael"})
+
+	if r.prevBranch != "" {
+		t.Errorf("prevBranch should be empty when adopted branch has no open PR, got %q", r.prevBranch)
+	}
+}
+
 // checkoutExistingBranch checks out an existing local branch when the remote has
 // none but the local branch has unpushed commits, instead of renaming/deleting it.
 func TestCheckoutExistingBranch_LocalBranchWithCommits_CheckedOut(t *testing.T) {

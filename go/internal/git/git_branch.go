@@ -108,6 +108,13 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 // does not, but main has the squashed commit the branch lacks). BranchIsAheadOfMain
 // returns false for diverged branches, so the stale branch is rejected and the
 // next task starts from main instead.
+//
+// Exception: when top == r.adoptedStackBranch (set via SetAdoptedStackBranch
+// after the user explicitly chose, at loop startup, to continue the stack on
+// a leftover open PR), the ahead-of-main guard is bypassed — a branch with an
+// open PR that diverged because main moved is the intentional keep-stack
+// case, not the stale squash-merge case the guard exists to reject. The
+// open-PR requirement still applies.
 func setStackHead(ctx context.Context, r *repo, completedBranches []string) {
 	r.prevBranch = ""
 	if len(completedBranches) == 0 {
@@ -143,6 +150,11 @@ func setStackHead(ctx context.Context, r *repo, completedBranches []string) {
 	}
 
 	if !r.BranchIsAheadOfMain(top) {
+		if top == r.adoptedStackBranch {
+			r.prevBranch = top
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s (adopted leftover PR — diverged from main, keeping stack per user choice)", top)
+			return
+		}
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — %s is not ahead of main", top)
 		return
 	}

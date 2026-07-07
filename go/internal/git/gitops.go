@@ -65,6 +65,11 @@ type Ops interface {
 	RenameBranchForTask(taskDesc, taskID string) error
 	RenameBranchTo(name string)
 	SetPrevBranch(branch string)
+	// SetAdoptedStackBranch marks a leftover PR branch (from a prior run) that
+	// the user explicitly chose, at loop startup, to continue the stack on top
+	// of. setStackHead treats this branch as the stack head even when
+	// diverged from main (BranchIsAheadOfMain would otherwise reject it).
+	SetAdoptedStackBranch(branch string)
 
 	// Tag operations.
 	TagTaskStart(taskID string)
