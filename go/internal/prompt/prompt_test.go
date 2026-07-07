@@ -1703,3 +1703,54 @@ func TestStyleGuide_ForbidsSpecPathReferences(t *testing.T) {
 		t.Error("spec-path-reference rule must live inside 'The Bestiary' section as a creature entry")
 	}
 }
+
+// Proves: task-manager.md's Recent-closure audit section requires two named
+// passes per audited bead — per-AC verification AND an AC-independent
+// implementation-correctness review — states the frame distinction between
+// them, requires both verdicts to be reported separately per bead, defines a
+// correctness concern on an all-ACs-pass bead as a reportable finding (not a
+// pass), and requires any fanned-out sub-agent prompts to carry the pass-2
+// frame as well as the pass-1 checklist.
+func TestTaskManagerPrompt_RecentClosureAuditRequiresCorrectnessPass(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	auditIdx := strings.Index(result, "## Recent-closure audit")
+	dismissIdx := strings.Index(result, "### Dismiss semantics")
+	if auditIdx < 0 {
+		t.Fatal("'Recent-closure audit' section not found")
+	}
+	if dismissIdx < 0 {
+		t.Fatal("'Dismiss semantics' section not found")
+	}
+	section := result[auditIdx:dismissIdx]
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Pass 1", "must name the per-AC verification pass"},
+		{"Pass 2", "must name the AC-independent correctness pass"},
+		{"is every claim evidenced", "must state the AC-verification frame"},
+		{"is the implementation wrong anywhere", "must state the correctness-review frame"},
+		{"IN FULL", "correctness pass must require reading changed functions in full"},
+		{"call site", "correctness pass must require enumerating call sites of changed symbols"},
+		{"boundary and edge conditions", "correctness pass must require probing edge/boundary conditions"},
+		{"adjacent logic", "correctness pass must require checking interactions with adjacent logic"},
+		{"what input would make this change wrong", "correctness pass must use the adversarial framing, not the evidence framing"},
+		{"ACs verified:", "report format must state the AC-verification verdict separately"},
+		{"Correctness concerns:", "report format must state the correctness verdict separately"},
+		{"reportable finding regardless of", "an all-ACs-pass bead with a correctness concern must be a finding, not a pass"},
+		{"Sub-agent fan-out", "must instruct that fanned-out sub-agent prompts carry both passes"},
+		{"loop-completed beads", "scope restriction to loop-completed beads must remain unchanged"},
+		{"Token-cost rationale", "token-cost rationale block must remain unchanged"},
+	}
+	for _, tc := range required {
+		if !strings.Contains(section, tc.substr) {
+			t.Errorf("missing %q in Recent-closure audit section: %s", tc.substr, tc.reason)
+		}
+	}
+}
