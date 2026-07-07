@@ -610,6 +610,101 @@ func TestBuildTaskManagerPrompt_UnwieldyBeadDetection(t *testing.T) {
 	}
 }
 
+// Proves: the Echo-back rule renders every bd mutation's structural fields
+// (ID, priority, type, status, labels, title, model) as a markdown table
+// row, with description/what-changed/AC kept as text below the table —
+// not as prose blockquotes — and that multi-bead operations share one
+// table with a row per bead.
+func TestBuildTaskManagerPrompt_EchoBackUsesMarkdownTable(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	echoIdx := strings.Index(result, "### Echo-back rule")
+	nextIdx := strings.Index(result, "### Updating beads")
+	if echoIdx < 0 {
+		t.Fatal("Echo-back rule section not found")
+	}
+	if nextIdx < 0 || nextIdx < echoIdx {
+		t.Fatal("Updating beads section not found after Echo-back rule")
+	}
+	section := result[echoIdx:nextIdx]
+
+	const tableHeader = "| ID | Priority | Type | Status | Labels | Title | Model |"
+	if !strings.Contains(section, tableHeader) {
+		t.Errorf("Echo-back rule section should contain the bead-echo table header %q", tableHeader)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"one table", "multi-bead operations must share one table with a row per bead"},
+		{"model", "the table must carry the proposed model column per ralph-lo6r"},
+		{"Description", "description must remain as text below the table"},
+		{"what changed", "what-changed for updates must remain as text below the table"},
+	}
+	for _, tc := range required {
+		if !strings.Contains(strings.ToLower(section), strings.ToLower(tc.substr)) {
+			t.Errorf("Echo-back rule section missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	staleBlockquotes := []string{
+		"> Created **ralph-abc**",
+		"> Updated **ralph-abc**",
+		"> Closed **ralph-abc**",
+		"> **ralph-abc** looks unwieldy",
+	}
+	for _, stale := range staleBlockquotes {
+		if strings.Contains(result, stale) {
+			t.Errorf("leftover blockquote-style bead echo found: %q", stale)
+		}
+	}
+}
+
+// Proves: the create-review example under "The one release gate" and the
+// split-proposal example under "Detecting unwieldy beads" both render bead
+// fields as the same markdown table format as the Echo-back rule, so an
+// imitating session produces tables without needing to interpret the rule.
+func TestBuildTaskManagerPrompt_ReleaseGateAndSplitExamplesUseTables(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	const tableHeader = "| ID | Priority | Type | Status | Labels | Title | Model |"
+	if got := strings.Count(result, tableHeader); got < 3 {
+		t.Errorf("expected the bead-echo table header to appear at least 3 times (echo-back rule, release gate, split proposal), got %d", got)
+	}
+
+	releaseGateIdx := strings.Index(result, "The one release gate")
+	splitIdx := strings.Index(result, "#### Detecting unwieldy beads")
+	qualityIdx := strings.Index(result, "## Task creation quality guidelines")
+	if releaseGateIdx < 0 {
+		t.Fatal("'The one release gate' section not found")
+	}
+	if splitIdx < 0 || splitIdx < releaseGateIdx {
+		t.Fatal("'Detecting unwieldy beads' section not found after 'The one release gate'")
+	}
+	if qualityIdx < 0 || qualityIdx < splitIdx {
+		t.Fatal("end of 'Detecting unwieldy beads' section not found")
+	}
+
+	releaseSection := result[releaseGateIdx:splitIdx]
+	if !strings.Contains(releaseSection, tableHeader) {
+		t.Error("release-gate echo example should render as the standard bead-echo markdown table")
+	}
+
+	splitSection := result[splitIdx:qualityIdx]
+	if !strings.Contains(splitSection, tableHeader) {
+		t.Error("split-proposal example should render as the standard bead-echo markdown table")
+	}
+}
+
 // Proves: task manager prompt includes detailed screenshot handling instructions:
 // describe the visual issue, save with naming convention, and reference in bead.
 func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {
