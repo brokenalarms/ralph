@@ -40,6 +40,8 @@ type State struct {
 	MaxIterations  int    `json:"max_iterations"`
 	LastTestResult string `json:"last_test_result,omitempty"`
 	LastTestTime   string `json:"last_test_time,omitempty"`
+	LastGreenDir   string `json:"last_green_dir,omitempty"`
+	LastGreenTree  string `json:"last_green_tree,omitempty"`
 	CompletedTasks []CompletedTaskEntry `json:"completed_tasks,omitempty"`
 	PushedBranches []string             `json:"pushed_branches,omitempty"`
 
@@ -97,6 +99,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"last_task": true, "current_task_id": true, "worktree_dir": true, "worktree_branch": true,
 		"task_backend": true, "max_iterations": true,
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
+		"last_green_dir": true, "last_green_tree": true,
 		"completed_tasks": true,
 		"pushed_branches": true,
 		// backwards compat: old state files written with last_task_id are read
@@ -407,6 +410,10 @@ func getField(s State, key string) string {
 		return s.LastTestResult
 	case "last_test_time":
 		return s.LastTestTime
+	case "last_green_dir":
+		return s.LastGreenDir
+	case "last_green_tree":
+		return s.LastGreenTree
 	default:
 		if s.Overflow != nil {
 			if raw, ok := s.Overflow[key]; ok {
@@ -449,6 +456,10 @@ func setField(s *State, key, value string) {
 		s.LastTestResult = value
 	case "last_test_time":
 		s.LastTestTime = value
+	case "last_green_dir":
+		s.LastGreenDir = value
+	case "last_green_tree":
+		s.LastGreenTree = value
 	default:
 		// Unknown key — store in overflow, converting numeric strings to numbers.
 		if s.Overflow == nil {

@@ -252,6 +252,18 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Signals:               claude.DefaultSignalPaths(ralphDir),
 	}, log, nil, nil)
 
+	// Seed the verifier's in-memory green-tree cache from the prior session's
+	// last known green run (persisted by loop.persistGreenCache). This makes
+	// the first pre-iteration test phase of a new process a cache lookup too,
+	// not just a fresh-process miss followed by cache hits from then on — see
+	// docs on Verifier.SeedGreenCache for how a stale/mismatched seed is
+	// safely ignored.
+	if seedDir, _ := st.Read("last_green_dir"); seedDir != "" {
+		if seedTree, _ := st.Read("last_green_tree"); seedTree != "" {
+			vrf.SeedGreenCache(seedDir, seedTree)
+		}
+	}
+
 	// Execution phase.
 	execLoop := loop.New(loop.Config{
 		Dirs:                     dirs,

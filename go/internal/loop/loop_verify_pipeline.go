@@ -146,6 +146,9 @@ func (c testCheck) evaluate(ctx context.Context) checkOutcome {
 		c.l.logger.Emit(logging.Opts{Level: logging.Warn}, "No ralph:verify script — skipping test verification. Add a verify script for stronger guarantees.")
 		return checkOutcome{Passed: true}
 	}
+	if result.Passed {
+		c.l.persistGreenCache()
+	}
 	return checkOutcome{Passed: result.Passed, Failure: result.Details}
 }
 
@@ -406,12 +409,28 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 		now := time.Now().Format(time.RFC3339)
 		if result.TestResult.Passed {
 			l.state.Write("last_test_result", "pass")
+			l.persistGreenCache()
 		} else {
 			l.state.Write("last_test_result", "fail")
 		}
 		l.state.Write("last_test_time", now)
 	}
 	return result.Message
+}
+
+// persistGreenCache writes the verifier's current in-memory green-tree cache
+// (dir, tree hash) to state.json, if one has been recorded. This is what lets
+// a later loop process (a restart, or the next `ralph loop` invocation) seed
+// its own fresh Verifier cache from the last known green run instead of
+// always missing until it records one of its own. A no-op when the cache is
+// empty (e.g. a non-git workDir, or no green run yet this process).
+func (l *Loop) persistGreenCache() {
+	dir, tree := l.verifier.GreenCache()
+	if tree == "" {
+		return
+	}
+	l.state.Write("last_green_dir", dir)
+	l.state.Write("last_green_tree", tree)
 }
 
 // runSimpleVerifyCompletion is the non-fix-loop verification path used by
@@ -451,5 +470,6 @@ func (l *Loop) runSimpleVerifyCompletion(ctx context.Context, headBefore string)
 
 	l.state.Write("last_test_result", "pass")
 	l.state.Write("last_test_time", now)
+	l.persistGreenCache()
 	return true, ""
 }

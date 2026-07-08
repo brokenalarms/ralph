@@ -1,8 +1,10 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -506,12 +508,44 @@ func TestIntegrationReal_PriorIterationCommit_SignalOnRetry_ShipsAndCloses(t *te
 // derive its starting point from that branch — not from origin/main — so
 // the stack is coherent.
 //
+// It also covers ralph-3sie's pre-iteration test cache ordering: no
+// VerifyHook is set, so verification falls through to the real
+// runSimpleVerifyCompletion path (real l.verifier.RunTests against the real
+// worktree), and a counting ralph-verify Makefile target lets the test
+// count real invocations. Task A's post-agent green run (after its commit)
+// primes the tree-hash cache; task B's pre-iteration test phase starts on
+// that same unchanged tree (no push/merge alters worktree content between
+// iterations here) and must be a cache hit — the test command must not run
+// again for it.
+//
 // Observable end-state: both tasks closed via the ship pipeline, both
-// agent commits present in the project repo's log.
+// agent commits present in the project repo's log, and exactly 3 real test
+// invocations across the 4 potential test phases (2 iterations × pre +
+// post-agent) — proving task B's pre-iteration phase was the cache hit.
 func TestIntegrationReal_TwoTasksCompleteSequentially(t *testing.T) {
 	setup := newGitIntegrationSetup(t)
-	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	// Prompts live outside the project repo (unlike other tests in this
+	// file) so they don't show up as untracked files under setup.projectDir
+	// — this test enables the real green-tree test cache (see doc comment
+	// above), which requires a clean worktree to register a cache hit.
+	promptsDir := t.TempDir()
 	createPromptTemplatesIn(t, promptsDir)
+
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	makefile := fmt.Sprintf("ralph-verify:\n\t@echo run >> %s\n", counterFile)
+	if err := os.WriteFile(filepath.Join(setup.projectDir, "Makefile"), []byte(makefile), 0o644); err != nil {
+		t.Fatalf("write Makefile: %v", err)
+	}
+	// This test never calls gm.Init() (which normally runs EnsureGitignored),
+	// and cfg.Dirs.RalphDir points inside setup.projectDir — so without an
+	// explicit .gitignore, raw log/signal files the loop writes under
+	// .ralph/ would show as untracked and permanently fail the green-tree
+	// cache's clean-worktree check.
+	if err := os.WriteFile(filepath.Join(setup.projectDir, ".gitignore"), []byte(".ralph/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	gitCmd(t, setup.projectDir, "git", "add", "Makefile", ".gitignore")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "add ralph-verify Makefile")
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{
@@ -537,7 +571,8 @@ func TestIntegrationReal_TwoTasksCompleteSequentially(t *testing.T) {
 		},
 	}
 
-	logger := logging.New(nil)
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
 	gm := git.NewForTest(git.Config{
 		ProjectDir: setup.projectDir,
 		WorkDir:    setup.projectDir,
@@ -591,7 +626,9 @@ func TestIntegrationReal_TwoTasksCompleteSequentially(t *testing.T) {
 		Logger:       logger,
 		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		// No VerifyHook: verification falls through to the real
+		// runSimpleVerifyCompletion path (real l.verifier.RunTests), so this
+		// test can observe the pre-iteration test cache hit ordering.
 	})
 	l.runner = runner
 
@@ -618,6 +655,54 @@ func TestIntegrationReal_TwoTasksCompleteSequentially(t *testing.T) {
 	if len(backend.ClosedIDs) != 2 {
 		t.Errorf("expected 2 beads closed across the sequence, got %v", backend.ClosedIDs)
 	}
+
+	// ralph-3sie: task A's post-agent green run primes the tree-hash cache;
+	// task B's pre-iteration test phase starts on that same unchanged tree
+	// and must be a cache hit, so the counting Makefile target only runs 3
+	// times (task A pre + task A post-agent + task B post-agent) instead of
+	// 4 (task B's pre-iteration phase is the one skipped).
+	if got := countTestInvocations(t, counterFile); got != 3 {
+		t.Errorf("expected 3 real test invocations (task B's pre-iteration phase should be a cache hit), got %d", got)
+	}
+	if !strings.Contains(logBuf.String(), "Tests cached: tree") {
+		t.Errorf("expected a distinct cache-hit log line for task B's pre-iteration cache hit, got log:\n%s", logBuf.String())
+	}
+
+	// Observable: the green-tree cache persisted to state.json, so a new
+	// loop process could seed from it (last_test_result/last_test_time keep
+	// their existing contract alongside the new fields).
+	s, err := st.Load()
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	if s.LastTestResult != "pass" {
+		t.Errorf("LastTestResult = %q, want pass", s.LastTestResult)
+	}
+	if s.LastTestTime == "" {
+		t.Error("expected last_test_time to be set")
+	}
+	if s.LastGreenTree == "" {
+		t.Error("expected last_green_tree to be persisted to state.json")
+	}
+}
+
+// countTestInvocations returns the number of lines in path, or 0 if it does
+// not exist. Used to count real ralph-verify Makefile invocations recorded
+// by a counting Makefile target.
+func countTestInvocations(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("read counter file: %v", err)
+	}
+	trimmed := strings.TrimRight(string(data), "\n")
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, "\n"))
 }
 
 // TestIntegrationReal_StackedPRSkipsMergeButCloses is the spec's "real
