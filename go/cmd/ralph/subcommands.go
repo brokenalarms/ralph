@@ -378,6 +378,19 @@ func handleAttach(sub config.Subcommand, log *logging.Logger) int {
 	return handleTmuxAttach(cfg, scriptPath, ralphDir, existingPID, log)
 }
 
+// taskStartupPrompt is the initial positional prompt passed to claude for
+// `ralph task` sessions. Interactive mode produces no assistant turn until
+// the first user message, so without this the task-manager system prompt's
+// startup summary never renders until the user types something.
+const taskStartupPrompt = "Present the startup summary."
+
+// taskExtraArgs assembles the extra CLI args for a task session: the
+// session-id flag followed by the positional startup prompt. The prompt
+// must come last — it is a positional argument, not a flag value.
+func taskExtraArgs(sessionID string) []string {
+	return []string{"--session-id", sessionID, taskStartupPrompt}
+}
+
 // handleTask launches an interactive Claude session with the task manager prompt.
 // Runs standalone — no tmux required.
 func handleTask(sub config.Subcommand, log *logging.Logger) int {
@@ -399,7 +412,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 				return nil, fmt.Errorf("failed to generate session ID: %w", err)
 			}
 			sessionID = id
-			return []string{"--session-id", id}, nil
+			return taskExtraArgs(id), nil
 		},
 		onExit: func(gm git.Ops, projectDir, workDir string) {
 			if promptKeepOrCleanupWorktree(os.Stdout, os.Stdin, gm) {
