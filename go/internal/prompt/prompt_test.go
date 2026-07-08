@@ -1352,6 +1352,54 @@ func TestBeadCreation_DOMToyCase(t *testing.T) {
 	}
 }
 
+// Proves: bead-creation.md's release-gate echo asks the user to type an
+// affirmative word (e.g. "release") rather than send a bare enter, since the
+// task manager is an interactive Claude session where an empty message can't
+// be sent.
+func TestBeadCreation_ReleaseGateAsksForTypedAffirmative(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
+	if err != nil {
+		t.Fatalf("reading bead-creation.md: %v", err)
+	}
+	lower := strings.ToLower(string(content))
+
+	if strings.Contains(lower, "enter to release") {
+		t.Error("release-gate echo must not instruct '(enter to release...)' — an empty enter isn't a sendable reply")
+	}
+	if !strings.Contains(lower, "'release' to hand") {
+		t.Error("release-gate echo must ask for a typed affirmative (e.g. 'release')")
+	}
+}
+
+// Proves: no prompt template instructs the user to press "enter to <action>".
+// The task manager is an interactive Claude session where an empty message can't
+// be sent, so any "enter to ..." phrasing describes an impossible action and must
+// be reworded to ask for a typed reply. Scans the whole prompts tree, not just
+// bead-creation.md, so the guard holds if the phrasing reappears anywhere.
+func TestPrompts_NoEnterToEmptySendPhrasing(t *testing.T) {
+	dir := promptsDir(t)
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(string(content)), "enter to ") {
+			rel, _ := filepath.Rel(dir, path)
+			t.Errorf("%s contains 'enter to <action>' phrasing — an empty enter isn't a sendable reply in an interactive session; ask for a typed reply instead", rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking prompts dir: %v", err)
+	}
+}
+
 // Proves: task-manager.md startup protocol instructs querying skipped beads after
 // the startup summary and presenting a triage block, parallel to the closure audit.
 func TestBuildTaskManagerPrompt_SkipTriageStartup(t *testing.T) {
