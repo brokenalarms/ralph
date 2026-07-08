@@ -951,7 +951,7 @@ func TestTryFixCI_OutOfScopeFixPreservedAndPushed(t *testing.T) {
 	}
 }
 
-// Proves the verify gate (post-signal and pre-iteration) uses l.git.GetWorkDir()
+// Proves the verify gate (post-signal and baseline) uses l.git.GetWorkDir()
 // — the live per-task worktree — not cfg.Dirs.ProjectDir. When the worktree has
 // a passing verify script and projectDir has a failing one, the gate must pass.
 func TestVerifyGate_RunsInWorktreeNotProjectDir(t *testing.T) {
@@ -1355,7 +1355,7 @@ func TestRunVerifyPipeline_HappyPath_ExactlyOneTestExecution(t *testing.T) {
 	}
 }
 
-// AC3: no_code_needed path — when the pre-iteration run was green and the
+// AC3: no_code_needed path — when the baseline run was green and the
 // tree is unchanged, every test check in the post-agent verify pipeline
 // (testFixPlan's and llmVerifyFixPlan's) is a cache hit: zero full-suite
 // executions.
@@ -1400,10 +1400,10 @@ func TestRunVerifyPipeline_NoCodeNeeded_TreeUnchanged_ZeroTestExecutions(t *test
 		Connectivity: onlineStubConnectivity(),
 	})
 
-	// Pre-iteration run: real execution, records the green-tree cache.
-	vrf.RunPreIterationTests(verifier.PreIterationInput{Ctx: context.Background(), WorkDir: gitDir})
+	// Baseline run: real execution, records the green-tree cache.
+	vrf.RunBaselineTests(verifier.BaselineInput{Ctx: context.Background(), WorkDir: gitDir})
 	if got := countTestExecutions(t, counterFile); got != 1 {
-		t.Fatalf("expected 1 real test execution from the pre-iteration run, got %d", got)
+		t.Fatalf("expected 1 real test execution from the baseline run, got %d", got)
 	}
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{

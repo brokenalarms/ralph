@@ -178,7 +178,7 @@ func TestReadLogFrom(t *testing.T) {
 }
 
 // Verifies that {{TEST_STATUS}} placeholder in internal.md gets
-// substituted with the orchestrator's pre-iteration test results,
+// substituted with the orchestrator's baseline test results,
 // so the agent knows the test status without running the suite itself.
 func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	dir, st := setupTestDir(t)

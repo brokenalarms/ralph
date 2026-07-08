@@ -46,10 +46,10 @@ func newTestVerifierWithPrompts(t *testing.T, promptsDir string, q Querier) *Ver
 	}, logging.New(nil), nil, q)
 }
 
-// RunPreIterationTests appends the passing-tests status line from the
+// RunBaselineTests appends the passing-tests status line from the
 // status-tests-pass.md prompt template — not a hardcoded Go string — so a
 // distinctive marker written into the template must appear in the message.
-func TestVerifier_RunPreIterationTests_PassingTests_UsesTemplate(t *testing.T) {
+func TestVerifier_RunBaselineTests_PassingTests_UsesTemplate(t *testing.T) {
 	dir := t.TempDir()
 	promptsDir := t.TempDir()
 
@@ -57,16 +57,16 @@ func TestVerifier_RunPreIterationTests_PassingTests_UsesTemplate(t *testing.T) {
 	os.WriteFile(filepath.Join(promptsDir, "status-tests-pass.md"), []byte("- CUSTOM PASS MARKER"), 0o644)
 
 	v := newTestVerifierWithPrompts(t, promptsDir, nil)
-	result := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	result := v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 
 	if !strings.Contains(result.Message, "CUSTOM PASS MARKER") {
 		t.Errorf("expected message sourced from status-tests-pass.md template, got: %q", result.Message)
 	}
 }
 
-// RunPreIterationTests appends the failing-tests status line from the
+// RunBaselineTests appends the failing-tests status line from the
 // status-tests-failing.md prompt template.
-func TestVerifier_RunPreIterationTests_FailingTests_UsesTemplate(t *testing.T) {
+func TestVerifier_RunBaselineTests_FailingTests_UsesTemplate(t *testing.T) {
 	dir := t.TempDir()
 	promptsDir := t.TempDir()
 
@@ -74,7 +74,7 @@ func TestVerifier_RunPreIterationTests_FailingTests_UsesTemplate(t *testing.T) {
 	os.WriteFile(filepath.Join(promptsDir, "status-tests-failing.md"), []byte("- CUSTOM FAIL MARKER"), 0o644)
 
 	v := newTestVerifierWithPrompts(t, promptsDir, nil)
-	result := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	result := v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 
 	if !strings.Contains(result.Message, "CUSTOM FAIL MARKER") {
 		t.Errorf("expected message sourced from status-tests-failing.md template, got: %q", result.Message)
@@ -84,9 +84,9 @@ func TestVerifier_RunPreIterationTests_FailingTests_UsesTemplate(t *testing.T) {
 	}
 }
 
-// RunPreIterationTests appends the compile-failing status line from the
+// RunBaselineTests appends the compile-failing status line from the
 // status-build-failing.md prompt template.
-func TestVerifier_RunPreIterationTests_CompileFailing_UsesTemplate(t *testing.T) {
+func TestVerifier_RunBaselineTests_CompileFailing_UsesTemplate(t *testing.T) {
 	dir := t.TempDir()
 	promptsDir := t.TempDir()
 
@@ -96,7 +96,7 @@ func TestVerifier_RunPreIterationTests_CompileFailing_UsesTemplate(t *testing.T)
 	os.WriteFile(filepath.Join(promptsDir, "status-build-failing.md"), []byte("- CUSTOM COMPILE FAIL MARKER"), 0o644)
 
 	v := newTestVerifierWithPrompts(t, promptsDir, nil)
-	result := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	result := v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 
 	if !strings.Contains(result.Message, "CUSTOM COMPILE FAIL MARKER") {
 		t.Errorf("expected message sourced from status-build-failing.md template, got: %q", result.Message)
@@ -375,31 +375,31 @@ func TestVerifier_RunTests_CacheKeyIsTreeHashNotCommitSHA(t *testing.T) {
 	}
 }
 
-// RunPreIterationTests writes the green-tree cache on a passing run, so a
+// RunBaselineTests writes the green-tree cache on a passing run, so a
 // subsequent RunTests call on the same unchanged, clean tree is a cache hit.
-func TestVerifier_RunPreIterationTests_GreenRun_WritesCache(t *testing.T) {
+func TestVerifier_RunBaselineTests_GreenRun_WritesCache(t *testing.T) {
 	dir := t.TempDir()
 	counterFile := filepath.Join(t.TempDir(), "counter.txt")
 	writeCountingMakefile(t, dir, counterFile)
 	initGitRepoForCache(t, dir)
 
 	v := New(Config{}, logging.New(nil), nil, nil)
-	v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 
 	result, _ := v.RunTests(context.Background(), dir)
 	if !result.Passed {
-		t.Fatalf("expected a cache hit after a green RunPreIterationTests run, got: %+v", result)
+		t.Fatalf("expected a cache hit after a green RunBaselineTests run, got: %+v", result)
 	}
 	if got := countLines(t, counterFile); got != 1 {
-		t.Fatalf("expected exactly 1 real invocation (from RunPreIterationTests) — RunTests should have hit the cache, got %d", got)
+		t.Fatalf("expected exactly 1 real invocation (from RunBaselineTests) — RunTests should have hit the cache, got %d", got)
 	}
 }
 
-// RunPreIterationTests itself must check the green-tree cache on entry, not
-// just write it: a prior green run (via RunTests or RunPreIterationTests) on
-// the same unchanged, clean tree means the next RunPreIterationTests call is
-// a cache hit — the pre-iteration test command must not run again.
-func TestVerifier_RunPreIterationTests_CacheHit_SkipsRealRun(t *testing.T) {
+// RunBaselineTests itself must check the green-tree cache on entry, not
+// just write it: a prior green run (via RunTests or RunBaselineTests) on
+// the same unchanged, clean tree means the next RunBaselineTests call is
+// a cache hit — the baseline test command must not run again.
+func TestVerifier_RunBaselineTests_CacheHit_SkipsRealRun(t *testing.T) {
 	dir := t.TempDir()
 	counterFile := filepath.Join(t.TempDir(), "counter.txt")
 	writeCountingMakefile(t, dir, counterFile)
@@ -407,33 +407,33 @@ func TestVerifier_RunPreIterationTests_CacheHit_SkipsRealRun(t *testing.T) {
 
 	v := New(Config{}, logging.New(nil), nil, nil)
 
-	first := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	first := v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 	if !first.TestResult.Passed {
 		t.Fatalf("expected first run to pass, got: %+v", first.TestResult)
 	}
 
-	second := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	second := v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 	if !second.TestResult.Passed {
 		t.Fatalf("expected second (cached) run to report passed, got: %+v", second.TestResult)
 	}
 
 	if got := countLines(t, counterFile); got != 1 {
-		t.Fatalf("expected exactly 1 real invocation across both RunPreIterationTests calls, got %d", got)
+		t.Fatalf("expected exactly 1 real invocation across both RunBaselineTests calls, got %d", got)
 	}
 }
 
-// A commit that changes the tree between two RunPreIterationTests calls
+// A commit that changes the tree between two RunBaselineTests calls
 // invalidates the cache — e.g. the base branch moved between loop
-// iterations — so the pre-iteration test command runs for real again rather
+// iterations — so the baseline test command runs for real again rather
 // than trusting a stale cache entry.
-func TestVerifier_RunPreIterationTests_TreeChanged_RunsAgain(t *testing.T) {
+func TestVerifier_RunBaselineTests_TreeChanged_RunsAgain(t *testing.T) {
 	dir := t.TempDir()
 	counterFile := filepath.Join(t.TempDir(), "counter.txt")
 	writeCountingMakefile(t, dir, counterFile)
 	initGitRepoForCache(t, dir)
 
 	v := New(Config{}, logging.New(nil), nil, nil)
-	v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 
 	if err := os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("data"), 0o644); err != nil {
 		t.Fatalf("write extra.txt: %v", err)
@@ -441,7 +441,7 @@ func TestVerifier_RunPreIterationTests_TreeChanged_RunsAgain(t *testing.T) {
 	gitRun(t, dir, "add", "-A")
 	gitRun(t, dir, "commit", "-m", "second commit")
 
-	second := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	second := v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 	if !second.TestResult.Passed {
 		t.Fatalf("expected second run to pass, got: %+v", second.TestResult)
 	}
@@ -451,10 +451,10 @@ func TestVerifier_RunPreIterationTests_TreeChanged_RunsAgain(t *testing.T) {
 	}
 }
 
-// A cache hit inside RunPreIterationTests emits the same distinct "Tests
+// A cache hit inside RunBaselineTests emits the same distinct "Tests
 // cached: tree <hash> already green" log line RunTests uses, so log-based
-// timing audits can identify a skipped pre-iteration run the same way.
-func TestVerifier_RunPreIterationTests_CacheHit_EmitsDistinctLogLine(t *testing.T) {
+// timing audits can identify a skipped baseline run the same way.
+func TestVerifier_RunBaselineTests_CacheHit_EmitsDistinctLogLine(t *testing.T) {
 	dir := t.TempDir()
 	counterFile := filepath.Join(t.TempDir(), "counter.txt")
 	writeCountingMakefile(t, dir, counterFile)
@@ -463,9 +463,9 @@ func TestVerifier_RunPreIterationTests_CacheHit_EmitsDistinctLogLine(t *testing.
 	var buf bytes.Buffer
 	v := New(Config{}, logging.NewWithWriter(&buf), nil, nil)
 
-	v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 	buf.Reset()
-	v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
 
 	if !strings.Contains(buf.String(), "Tests cached: tree") {
 		t.Errorf("expected a distinct cache-hit log line, got: %s", buf.String())
@@ -534,4 +534,29 @@ func treeHashForTest(t *testing.T, dir string) string {
 		t.Fatalf("git rev-parse HEAD^{tree}: %v", err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// RunBaselineTests must route test execution through the same runTestSuite
+// path RunTests uses, so a baseline run longer than HeartbeatInterval emits
+// the same "Tests still running..." heartbeat lines as the post-agent/
+// pre-push path — instead of going silent for the whole run.
+func TestVerifier_RunBaselineTests_EmitsHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\t@sleep 0.3\n"), 0o644)
+
+	origInterval := HeartbeatInterval
+	HeartbeatInterval = 100 * time.Millisecond
+	defer func() { HeartbeatInterval = origInterval }()
+
+	var buf bytes.Buffer
+	v := New(Config{}, logging.NewWithWriter(&buf), nil, nil)
+
+	result := v.RunBaselineTests(BaselineInput{Ctx: context.Background(), WorkDir: dir})
+
+	if !result.TestResult.Passed {
+		t.Fatalf("expected the slow test run to pass, got: %+v", result.TestResult)
+	}
+	if !strings.Contains(buf.String(), "Tests still running") {
+		t.Errorf("expected a heartbeat line during a slow baseline run, got: %s", buf.String())
+	}
 }

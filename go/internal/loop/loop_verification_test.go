@@ -702,9 +702,9 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 	}
 }
 
-// Verifies that pre-iteration test results are stored in state.json
+// Verifies that baseline test results are stored in state.json
 // so they persist across restarts and evolve cycles.
-func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
+func TestLoop_BaselineTestResultsPersistedInState(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -759,7 +759,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.LastTestResult == "" {
-		t.Error("expected last_test_result to be set in state after pre-iteration tests")
+		t.Error("expected last_test_result to be set in state after baseline tests")
 	}
 	if s.LastTestTime == "" {
 		t.Error("expected last_test_time to be set in state")

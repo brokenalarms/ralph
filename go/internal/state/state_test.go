@@ -303,7 +303,7 @@ func TestSave_AtomicWrite(t *testing.T) {
 }
 
 // Verifies that test result fields round-trip through state.json,
-// proving the orchestrator can persist pre-iteration and post-signal
+// proving the orchestrator can persist baseline and post-signal
 // test results across restarts.
 func TestState_TestResultFieldsRoundTrip(t *testing.T) {
 	dir := t.TempDir()

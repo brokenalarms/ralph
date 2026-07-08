@@ -114,7 +114,7 @@ type Verifier struct {
 	newRunner RunnerFactory
 	querier   Querier
 
-	// greenCache records the last tree hash a full RunTests/RunPreIterationTests
+	// greenCache records the last tree hash a full RunTests/RunBaselineTests
 	// run passed on, keyed by the dir it ran in. A later RunTests call for the
 	// same dir whose current tree hash matches AND whose worktree is clean is
 	// a cache hit — it returns the recorded pass without invoking the test
@@ -161,6 +161,27 @@ func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, tim
 
 	v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running test suite...")
 
+	result, elapsed := v.runTestSuite(ctx, dir)
+
+	switch {
+	case result.ScriptMissing:
+		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
+	case result.Passed:
+		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
+	default:
+		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (%s): %s", elapsed, result.Reason)
+	}
+
+	return result, elapsed
+}
+
+// runTestSuite executes the ralph:verify test command in dir with a
+// heartbeat log line every HeartbeatInterval, and records the green-tree
+// cache on a pass. This is the single execution path shared by RunTests
+// (post-agent/pre-push) and RunBaselineTests (start-of-iteration) — cache-hit
+// short-circuiting and pass/fail logging stay with each caller since their
+// log wording differs.
+func (v *Verifier) runTestSuite(ctx context.Context, dir string) (verify.Result, time.Duration) {
 	start := time.Now()
 	done := make(chan struct{})
 	defer close(done)
@@ -181,17 +202,9 @@ func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, tim
 
 	result := verify.RunTests(ctx, v.cfg.TestTimeout, v.cfg.ConfigVerify, dir)
 	elapsed := time.Since(start).Truncate(time.Millisecond)
-
-	switch {
-	case result.ScriptMissing:
-		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
-	case result.Passed:
-		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
+	if result.Passed {
 		v.recordGreenCache(dir)
-	default:
-		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (%s): %s", elapsed, result.Reason)
 	}
-
 	return result, elapsed
 }
 
@@ -438,16 +451,17 @@ func (v *Verifier) SpawnFixAgent(in FixAgentInput) FixAgentResult {
 	return v.runFixAgent(in.Ctx, desc, prompt, in.WorkDir, in.RawLogPath, in.Attempt)
 }
 
-// PreIterationInput holds inputs for RunPreIterationTests.
-type PreIterationInput struct {
+// BaselineInput holds inputs for RunBaselineTests.
+type BaselineInput struct {
 	Ctx     context.Context
-	WorkDir string // live per-task worktree directory; empty skips pre-iteration tests
+	WorkDir string // live per-task worktree directory; empty skips baseline tests
 }
 
-// PreIterationResult reports the outcome of pre-iteration checks. Loop uses
-// Message in the agent prompt and TestPassed / CompilePassed to decide what
-// to write to the state store.
-type PreIterationResult struct {
+// BaselineResult reports the outcome of the baseline test and compile
+// checks run at the start of an iteration. Loop uses Message in the agent
+// prompt and TestPassed / CompilePassed to decide what to write to the
+// state store.
+type BaselineResult struct {
 	Message        string // human-readable status message appended to agent prompt
 	TestResult     verify.Result
 	CompileResult  verify.Result
@@ -455,22 +469,26 @@ type PreIterationResult struct {
 	CompileElapsed time.Duration
 }
 
-// RunPreIterationTests runs the full test suite and compile check before
-// handing off to the agent. Returns a structured result so Loop can both
-// log progress and write test_result state without verifier reaching into
-// the state module.
-func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult {
+// RunBaselineTests runs the full test suite and compile check before handing
+// off to the agent — the run that establishes the known-green state of the
+// world at the start of an iteration. Test execution (heartbeat, green-tree
+// cache check/write) shares the same runTestSuite path RunTests uses; only
+// the start-of-run log line and pass/fail messaging differ, since this run
+// also builds the agent-facing status message. Returns a structured result
+// so Loop can both log progress and write test_result state without verifier
+// reaching into the state module.
+func (v *Verifier) RunBaselineTests(in BaselineInput) BaselineResult {
 	if in.WorkDir == "" {
-		return PreIterationResult{}
+		return BaselineResult{}
 	}
 
-	out := PreIterationResult{}
+	out := BaselineResult{}
 
 	if tree, ok := v.checkGreenCache(in.WorkDir); ok {
 		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests cached: tree %s already green", tree)
 		out.TestResult = verify.Result{Passed: true, Reason: "cached: tree " + tree + " already green"}
 		out.Message += "\n" + v.statusFragment("status-tests-pass.md")
-		return v.runPreIterationCompileCheck(in, out)
+		return v.runBaselineCompileCheck(in, out)
 	}
 
 	tc := verify.DetectTestCommand(v.cfg.ConfigVerify, in.WorkDir)
@@ -486,17 +504,16 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 		command := tc.Cmd + " " + strings.Join(tc.Args, " ")
 		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running test suite: %s (from %s in %s)", command, source, tc.Dir)
 	} else {
-		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
+		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running baseline test suite...")
 	}
-	testStart := time.Now()
-	result := verify.RunTests(in.Ctx, v.cfg.TestTimeout, v.cfg.ConfigVerify, in.WorkDir)
+
+	result, elapsed := v.runTestSuite(in.Ctx, in.WorkDir)
 	out.TestResult = result
-	out.TestElapsed = time.Since(testStart).Truncate(10 * time.Millisecond)
+	out.TestElapsed = elapsed
 
 	if result.Passed {
-		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing (%s, %s)", result.Command, out.TestElapsed)
+		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Baseline tests: passed (%s, %s)", result.Command, out.TestElapsed)
 		out.Message += "\n" + v.statusFragment("status-tests-pass.md")
-		v.recordGreenCache(in.WorkDir)
 	} else if result.ScriptMissing {
 		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — skipping test suite")
 	} else {
@@ -504,7 +521,7 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 		if cmdInfo == "" {
 			cmdInfo = "unknown command"
 		}
-		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Pre-iteration tests: failures detected (%s, %s, %s)", cmdInfo, result.Reason, out.TestElapsed)
+		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Baseline tests: failures detected (%s, %s, %s)", cmdInfo, result.Reason, out.TestElapsed)
 		out.Message += "\n" + v.statusFragment("status-tests-failing.md")
 		if result.Details != "" {
 			details := result.Details
@@ -516,13 +533,13 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 		}
 	}
 
-	return v.runPreIterationCompileCheck(in, out)
+	return v.runBaselineCompileCheck(in, out)
 }
 
-// runPreIterationCompileCheck runs the compile/build check and appends its
-// status to out.Message. Split out of RunPreIterationTests so a test-cache
-// hit can skip straight to the compile check without duplicating this tail.
-func (v *Verifier) runPreIterationCompileCheck(in PreIterationInput, out PreIterationResult) PreIterationResult {
+// runBaselineCompileCheck runs the compile/build check and appends its
+// status to out.Message. Split out of RunBaselineTests so a test-cache hit
+// can skip straight to the compile check without duplicating this tail.
+func (v *Verifier) runBaselineCompileCheck(in BaselineInput, out BaselineResult) BaselineResult {
 	compileStart := time.Now()
 	compileResult := verify.CompileCheck(in.Ctx, v.cfg.CompileCheckTimeout, in.WorkDir)
 	out.CompileResult = compileResult
@@ -537,13 +554,13 @@ func (v *Verifier) runPreIterationCompileCheck(in PreIterationInput, out PreIter
 		if cmdInfo == "" {
 			cmdInfo = "skipped"
 		}
-		v.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Pre-iteration compile check: passing (%s, %s)", cmdInfo, out.CompileElapsed)
+		v.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Baseline compile check: passing (%s, %s)", cmdInfo, out.CompileElapsed)
 	} else {
 		cmdInfo := compileResult.Command
 		if cmdInfo == "" {
 			cmdInfo = "unknown command"
 		}
-		v.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Pre-iteration compile check: failures detected (%s, %s, %s)", cmdInfo, compileResult.Reason, out.CompileElapsed)
+		v.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Baseline compile check: failures detected (%s, %s, %s)", cmdInfo, compileResult.Reason, out.CompileElapsed)
 		out.Message += "\n" + v.statusFragment("status-build-failing.md")
 		details := compileResult.Details
 		if details == "" {
@@ -613,7 +630,7 @@ func (v *Verifier) loadVerifyPrompt(filename string, vars map[string]string) str
 }
 
 // statusFragment reads a short agent-facing status line from promptsDir,
-// trimming the trailing newline. Used to append pre-iteration test/build
+// trimming the trailing newline. Used to append baseline test/build
 // status onto the agent prompt.
 func (v *Verifier) statusFragment(filename string) string {
 	return strings.TrimRight(v.loadVerifyPrompt(filename, nil), "\n")
