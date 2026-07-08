@@ -123,6 +123,42 @@ func TestCheckLeftoverRalphPRs_AnswerN_FreshFromMain(t *testing.T) {
 	}
 }
 
+// The prompt states the consequence of both answers before asking (y/n) so
+// the user can make an informed choice — the leftover-PR fate ('n' leaves
+// #1241 open and stale) must not be revealed only after answering.
+func TestCheckLeftoverRalphPRs_PromptStatesBothOutcomesBeforeAsking(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs:       []git.StubPR{{Number: 1241, Branch: "ralph/tabi-uael", State: git.PRStateOpen}},
+		},
+	})
+	var out strings.Builder
+	log := logging.NewWithWriter(&strings.Builder{})
+
+	checkLeftoverRalphPRs(context.Background(), gm, "/project", true, &out, strings.NewReader("n\n"), log)
+
+	prompt := out.String()
+	if !strings.Contains(prompt, "y — continue the stack on top of #1241") {
+		t.Errorf("expected prompt to state the 'y' outcome, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "n — start fresh from origin/main") || !strings.Contains(prompt, "#1241 stays open and may go stale as main advances") {
+		t.Errorf("expected prompt to state the 'n' outcome (leftover PR stays open and may go stale) before asking, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Ctrl-C — quit; run 'ralph merge 1241' to drain the stack first") {
+		t.Errorf("expected prompt to state the Ctrl-C escape, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Continue the stack? (y/n)") {
+		t.Errorf("expected the final question to ask 'Continue the stack? (y/n)', got: %q", prompt)
+	}
+	// The outcome lines must appear before the question is asked.
+	yIdx := strings.Index(prompt, "y — continue the stack")
+	qIdx := strings.Index(prompt, "Continue the stack? (y/n)")
+	if yIdx == -1 || qIdx == -1 || yIdx > qIdx {
+		t.Errorf("expected outcome lines before the (y/n) question, got: %q", prompt)
+	}
+}
+
 // Ctrl-C (context cancelled while the prompt is pending) exits cleanly: no
 // branch is adopted and the caller is signaled to stop before any branch
 // setup (AC #4).

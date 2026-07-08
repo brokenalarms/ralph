@@ -89,8 +89,10 @@ func checkLeftoverRalphPRs(ctx context.Context, gm git.Ops, projectDir string, i
 	for _, pr := range leftover {
 		fmt.Fprintf(w, "  #%d %s\n", pr.Number, pr.Head)
 	}
-	fmt.Fprintf(w, "Continue the stack on top of #%d (%s)? (y/n) ", top.Number, top.Head)
-	fmt.Fprintf(w, "[Ctrl-C to quit — run 'ralph merge %d' to drain the stack first] ", top.Number)
+	fmt.Fprintf(w, "  y — continue the stack on top of #%d (new work branches from it)\n", top.Number)
+	fmt.Fprintf(w, "  n — start fresh from origin/main (#%d stays open and may go stale as main advances)\n", top.Number)
+	fmt.Fprintf(w, "  Ctrl-C — quit; run 'ralph merge %d' to drain the stack first\n", top.Number)
+	fmt.Fprintf(w, "Continue the stack? (y/n) ")
 
 	answer, err := readLineFromReader(ctx, r)
 	if err != nil {
