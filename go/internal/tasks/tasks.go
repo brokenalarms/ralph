@@ -165,9 +165,17 @@ const AuditWindow = 72 * time.Hour
 // yet carrying the "audited" metadata key. closed is expected to be the
 // complete, untruncated closed-bead set (see ListClosed) — this function
 // applies no result-count limit of its own.
+//
+// The audit floor is derived from the data, not any file: among the
+// assignee+window-matching beads that carry the "audited" metadata key, the
+// minimum ClosedAt is the floor. Unstamped beads closed before that floor
+// predate the audited scheme's cutover and are treated as already handled.
+// With no stamped bead in the window there is no floor and every unstamped
+// in-window closure surfaces, unchanged from prior behavior.
 func UnauditedClosures(closed []ClosedTaskInfo, assignee string, now time.Time, window time.Duration) []ClosedTaskInfo {
 	cutoff := now.Add(-window)
-	var result []ClosedTaskInfo
+
+	var inWindow []ClosedTaskInfo
 	for _, c := range closed {
 		if c.Assignee != assignee {
 			continue
@@ -175,7 +183,25 @@ func UnauditedClosures(closed []ClosedTaskInfo, assignee string, now time.Time, 
 		if c.ClosedAt.Before(cutoff) {
 			continue
 		}
+		inWindow = append(inWindow, c)
+	}
+
+	var floor time.Time
+	for _, c := range inWindow {
+		if _, audited := c.Metadata["audited"]; !audited {
+			continue
+		}
+		if floor.IsZero() || c.ClosedAt.Before(floor) {
+			floor = c.ClosedAt
+		}
+	}
+
+	var result []ClosedTaskInfo
+	for _, c := range inWindow {
 		if _, audited := c.Metadata["audited"]; audited {
+			continue
+		}
+		if !floor.IsZero() && c.ClosedAt.Before(floor) {
 			continue
 		}
 		result = append(result, c)
