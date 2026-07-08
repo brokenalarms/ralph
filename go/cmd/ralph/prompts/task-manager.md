@@ -246,9 +246,10 @@ run `bd <command> --help`.
 - `bd create --title="…" --description="…" --type=bug|task|feature
   --priority=0..4 --acceptance="…" --labels=<a>,<b> -a=ralph-task`
 - `--deps=<id>[,<id>]` at create, or `bd dep add <id> <depends-on>` while iterating
-- `--set-metadata model=sonnet` at create, or `bd update <id> --set-metadata
-  model=sonnet` afterward, when the bead qualifies for a cheaper working model
-  — see "Model reference" below
+- `--set-metadata model=sonnet` or `--set-metadata model=opus` at create — every
+  bead needs an explicit model set at create time (see "Model reference" below);
+  `bd update <id> --set-metadata model=sonnet` (or `model=opus`) changes it
+  afterward
 
 **Update / release**
 - `bd update <id> --title/--description/--priority/--labels/--notes/--external-ref`
@@ -289,26 +290,32 @@ oldest-first). Use P-levels for relative urgency, not hard gating: a hard
 
 ## Model reference
 
-Consider a working model for EVERY bead you create — this is not optional
-per-bead judgment to skip, it's part of writing the bead.
+Set `model` metadata explicitly on EVERY `bd create` — this is not optional
+per-bead judgment to skip, it's part of writing the bead. Never leave it
+unset.
 
 - **Set `model=sonnet`** for mechanical, well-specified, single-concern work
   where the bead description fully determines the diff: renames, call-site
   sweeps, log-line changes, test-only updates, doc moves, and similar
   bounded edits.
-- **Leave the metadata unset** (the loop falls back to `working_model`,
-  typically `opus`) for anything requiring judgment, design, multi-file
+- **Set `model=opus`** for anything requiring judgment, design, multi-file
   reasoning, or diagnosis.
 
-Set it with `--set-metadata model=sonnet` on `bd create`, or `bd update <id>
---set-metadata model=sonnet` afterward. This only overrides the iteration
-agent's model — fix agents and the verifier always use their own configured
-models regardless of a bead's `model` metadata.
+Set it with `--set-metadata model=sonnet` (or `model=opus`) on `bd create`,
+or `bd update <id> --set-metadata model=sonnet` (or `model=opus`) afterward.
+This only overrides the iteration agent's model — fix agents and the
+verifier always use their own configured models regardless of a bead's
+`model` metadata.
+
+Do not claim the loop's fallback model defaults to opus — it doesn't. The
+built-in default for `working_model` is `sonnet` (see `flags.go`), and a
+project's `.ralph/config.toml` can override it per project. If you ever need
+to reference the fallback, read that project's `.ralph/config.toml` for its
+current `working_model` value rather than assuming one — do not guess.
 
 When you echo a bead back for release-gate review, always state the
-proposed model — the explicit override (e.g. "model: sonnet") when set, or
-"model: default (working_model)" when unset — so the user can veto or
-change it before release.
+concrete model set on the bead (e.g. "model: sonnet" or "model: opus") —
+never "default" — so the user can veto or change it before release.
 
 ## Screenshots
 

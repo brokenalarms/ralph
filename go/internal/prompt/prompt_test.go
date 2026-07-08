@@ -705,6 +705,63 @@ func TestBuildTaskManagerPrompt_ReleaseGateAndSplitExamplesUseTables(t *testing.
 	}
 }
 
+// Proves: the "Model reference" section requires an explicit model on every
+// bd create (sonnet for mechanical work, opus for judgment work), never
+// claims the working_model fallback is "typically opus" (the built-in
+// default is sonnet, overridable per project via .ralph/config.toml), and no
+// example table anywhere in the combined prompt shows "default" as a model
+// value — per ralph-e9bg.
+func TestBuildTaskManagerPrompt_ModelReferenceRequiresExplicitModel(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	modelRefIdx := strings.Index(result, "## Model reference")
+	if modelRefIdx < 0 {
+		t.Fatal("'Model reference' section not found")
+	}
+	nextSectionIdx := strings.Index(result[modelRefIdx:], "\n## ")
+	if nextSectionIdx < 0 {
+		t.Fatal("could not find end of 'Model reference' section")
+	}
+	section := result[modelRefIdx : modelRefIdx+nextSectionIdx]
+
+	required := []string{
+		"model=opus",
+		"model=sonnet",
+		"built-in default",
+		".ralph/config.toml",
+	}
+	for _, substr := range required {
+		if !strings.Contains(section, substr) {
+			t.Errorf("Model reference section missing %q", substr)
+		}
+	}
+
+	banned := []struct {
+		substr string
+		reason string
+	}{
+		{"leave the metadata unset", "must always require an explicit model, never allow leaving it unset"},
+		{"typically `opus`", "must not claim the working_model fallback is typically opus"},
+		{"typically opus", "must not claim the working_model fallback is typically opus"},
+	}
+	for _, tc := range banned {
+		if strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
+			t.Errorf("prompt should not contain %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	if strings.Contains(result, "| default |") {
+		t.Error("no example table should show \"default\" as a model value")
+	}
+	if strings.Contains(result, "default (working_model)") {
+		t.Error("prompt should not echo 'default (working_model)' — the model must always be stated concretely")
+	}
+}
+
 // Proves: task manager prompt includes detailed screenshot handling instructions:
 // describe the visual issue, save with naming convention, and reference in bead.
 func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {

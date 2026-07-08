@@ -187,7 +187,7 @@ Always:
 
    | ID | Priority | Type | Status | Labels | Title | Model |
    |---|---|---|---|---|---|---|
-   | ralph-abc | P2 | task | open | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | default |
+   | ralph-abc | P2 | task | open | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | sonnet |
 
    Resets the worktree to origin/main after each squash-merge so stale
    branches don't accumulate.
@@ -300,9 +300,9 @@ referencing the original rather than reopening it.
 
 After EVERY `bd` mutation (create, update, close, reopen, skip), render the
 bead's structural fields as one markdown table row: **ID**, **priority**,
-**type**, **status**, **labels**, **title**, and **model** (the explicit
-override, e.g. `sonnet`, or `default` when unset — see "Model reference").
-Description (first 3 lines, truncate with … if longer), what changed for
+**type**, **status**, **labels**, **title**, and **model** (the explicitly
+set model, e.g. `sonnet` or `opus` — every bead has one, see "Model
+reference"). Description (first 3 lines, truncate with … if longer), what changed for
 updates (old → new values), and acceptance criteria stay below the table as
 text — the table carries scannable structure, not long content.
 
@@ -316,7 +316,7 @@ Create:
 
 | ID | Priority | Type | Status | Labels | Title | Model |
 |---|---|---|---|---|---|---|
-| ralph-abc | P2 | task | open | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | default |
+| ralph-abc | P2 | task | open | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | sonnet |
 
 Resets the worktree to origin/main after each squash-merge so stale
 branches don't accumulate.
@@ -325,7 +325,7 @@ Update:
 
 | ID | Priority | Type | Status | Labels | Title | Model |
 |---|---|---|---|---|---|---|
-| ralph-abc | P1 | task | open | `orchestrator`, `git`, `ci` | ralph loop: force-reset worktree after merge | default |
+| ralph-abc | P1 | task | open | `orchestrator`, `git`, `ci` | ralph loop: force-reset worktree after merge | sonnet |
 
 Priority P3 → P1, added label `ci`.
 
@@ -333,13 +333,13 @@ Close:
 
 | ID | Priority | Type | Status | Labels | Title | Model |
 |---|---|---|---|---|---|---|
-| ralph-abc | P1 | task | closed | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | default |
+| ralph-abc | P1 | task | closed | `orchestrator`, `git` | ralph loop: force-reset worktree after merge | sonnet |
 
 Multi-bead (e.g. a split):
 
 | ID | Priority | Type | Status | Labels | Title | Model |
 |---|---|---|---|---|---|---|
-| ralph-abc | P2 | task | open | `orchestrator` | ralph task: X | default |
+| ralph-abc | P2 | task | open | `orchestrator` | ralph task: X | opus |
 | ralph-def | P2 | task | open | `orchestrator` | ralph task: Y | sonnet |
 
 Never show the raw bd command — only the echo-back.
@@ -478,9 +478,9 @@ Present the split as a concrete plan the user can approve:
 
 | ID | Priority | Type | Status | Labels | Title | Model |
 |---|---|---|---|---|---|---|
-| (new) | P2 | task | proposed | `orchestrator` | ralph task: X | default |
-| (new) | P2 | task | proposed | `orchestrator` | ralph task: Y (depends on #1) | default |
-| (new) | P3 | task | proposed | `orchestrator` | ralph task: Z | default |
+| (new) | P2 | task | proposed | `orchestrator` | ralph task: X | opus |
+| (new) | P2 | task | proposed | `orchestrator` | ralph task: Y (depends on #1) | sonnet |
+| (new) | P3 | task | proposed | `orchestrator` | ralph task: Z | sonnet |
 
 Acceptance criteria — one line per subtask:
 1. X — …
