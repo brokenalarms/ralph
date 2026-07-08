@@ -94,6 +94,42 @@ func TestEnsureIgnored_NonRepoWritesFileWithoutError(t *testing.T) {
 	}
 }
 
+// WorktreeClean must fail closed: a git status error must never be reported
+// as clean, even when the dir is a git repo (not just when it's a non-git
+// dir). A corrupted .git/index makes `git status --porcelain` error while
+// leaving `git rev-parse HEAD^{tree}` unaffected — the same asymmetry as a
+// concurrent process holding .git/index.lock, which is the real-world
+// scenario this guards against (see checkGreenCache in the verifier package).
+func TestWorktreeClean_GitStatusError_ReportsNotClean(t *testing.T) {
+	dir := t.TempDir()
+	run(t, "git", "init", "-q", "-b", "main", dir)
+	run(t, "git", "-C", dir, "config", "user.name", "test")
+	run(t, "git", "-C", dir, "config", "user.email", "test@test")
+	run(t, "git", "-C", dir, "commit", "-q", "--allow-empty", "-m", "init")
+
+	if !WorktreeClean(dir) {
+		t.Fatalf("expected clean worktree before corruption")
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("garbage not an index"), 0o644); err != nil {
+		t.Fatalf("corrupt .git/index: %v", err)
+	}
+
+	if WorktreeClean(dir) {
+		t.Error("expected WorktreeClean to report false when git status errors, got true")
+	}
+}
+
+// WorktreeClean on a non-git directory must also report not-clean, matching
+// its doc comment.
+func TestWorktreeClean_NonGitDir_ReportsNotClean(t *testing.T) {
+	dir := t.TempDir()
+
+	if WorktreeClean(dir) {
+		t.Error("expected WorktreeClean to report false for a non-git dir, got true")
+	}
+}
+
 // initPruneTestRepo creates a plain (non-bare) local repo with one commit,
 // suitable as the projectDir for PruneOrphanedWorktrees tests.
 func initPruneTestRepo(t *testing.T) string {

@@ -92,10 +92,11 @@ func TreeHash(dir string) string {
 }
 
 // WorktreeClean reports whether dir has no uncommitted changes (git status
-// --porcelain produces no output). Also false on any git error, so a
-// broken or non-git dir is never treated as clean.
+// --porcelain produces no output). Fails closed: a git status error (broken
+// or non-git dir, locked index, etc.) is never reported as clean.
 func WorktreeClean(dir string) bool {
-	return gitOutput(dir, "status", "--porcelain") == ""
+	out, err := defaultRunner.Run(context.Background(), dir, "status", "--porcelain")
+	return err == nil && out == ""
 }
 
 // RemoteDefaultBranch reads the repository's default branch from the local

@@ -321,6 +321,39 @@ func TestVerifier_RunTests_DirtyWorktree_RunsAgain(t *testing.T) {
 	}
 }
 
+// A git status failure (e.g. a concurrent process holding .git/index.lock)
+// must never be read as a clean worktree. Corrupting .git/index breaks
+// `git status --porcelain` while leaving `git rev-parse HEAD^{tree}`
+// unaffected, so the tree hash still matches the cached green tree — the
+// cache must still miss and the test command must run again.
+func TestVerifier_RunTests_WorktreeCleanCheckErrors_TreeMatches_RunsAgain(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+	result1, _ := v.RunTests(context.Background(), dir)
+	if !result1.Passed {
+		t.Fatalf("expected first run to pass, got: %+v", result1)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("garbage not an index"), 0o644); err != nil {
+		t.Fatalf("corrupt .git/index: %v", err)
+	}
+
+	result2, _ := v.RunTests(context.Background(), dir)
+	if !result2.Passed {
+		t.Fatalf("expected second run to still pass (test command re-run for real), got: %+v", result2)
+	}
+	if strings.Contains(result2.Reason, "cached") {
+		t.Errorf("expected a real re-run, not a cache hit, got reason: %q", result2.Reason)
+	}
+	if got := countLines(t, counterFile); got != 2 {
+		t.Fatalf("expected 2 real invocations — a git status error must never read as clean, got %d", got)
+	}
+}
+
 // A failing run must not populate the cache — the immediately following
 // RunTests call executes the suite for real, not a cached failure.
 func TestVerifier_RunTests_FailingRun_DoesNotCache(t *testing.T) {
