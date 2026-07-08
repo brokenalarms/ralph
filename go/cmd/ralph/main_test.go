@@ -1113,6 +1113,45 @@ func TestHandleTask_NoWorktreeRemovalOnExit(t *testing.T) {
 	}
 }
 
+// Proves: taskExtraArgs appends the positional startup prompt after the
+// --session-id flag and its value, so claude receives an initial user
+// message and the task manager's startup summary renders with zero user
+// input (AC1, AC3).
+func TestTaskExtraArgs_IncludesPositionalStartupPrompt(t *testing.T) {
+	args := taskExtraArgs("test-session-id")
+
+	want := []string{"--session-id", "test-session-id", taskStartupPrompt}
+	if len(args) != len(want) {
+		t.Fatalf("taskExtraArgs() = %q, want %q", args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("taskExtraArgs()[%d] = %q, want %q", i, args[i], want[i])
+		}
+	}
+}
+
+// Proves: handleReview does not supply an extraArgs closure, so `ralph
+// review` invocations pass no positional prompt — only `ralph task`
+// sessions get the startup-summary directive (AC2, negative criterion).
+func TestHandleReview_NoPositionalPromptExtraArgs(t *testing.T) {
+	src, err := os.ReadFile("subcommands.go")
+	if err != nil {
+		t.Fatalf("could not read subcommands.go: %v", err)
+	}
+	content := string(src)
+
+	reviewStart := strings.Index(content, "\nfunc handleReview(")
+	postReviewStart := strings.Index(content, "\nfunc postReviewCleanup(")
+	if reviewStart == -1 || postReviewStart == -1 {
+		t.Fatal("expected functions not found in subcommands.go")
+	}
+	handleReviewBody := content[reviewStart:postReviewStart]
+	if strings.Contains(handleReviewBody, "extraArgs:") {
+		t.Error("handleReview must not set an extraArgs closure — review sessions must not receive a positional prompt")
+	}
+}
+
 // handleLoop starts normally when a stale PID file exists (dead process).
 // Verifies stale cleanup by confirming the PID file is removed.
 func TestHandleLoop_CleansUpStalePID(t *testing.T) {
