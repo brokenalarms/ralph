@@ -847,6 +847,42 @@ func (b *BD) ListReady() (string, error) {
 	return b.runner().Run(b.ctx(), b.ProjectDir, "ready")
 }
 
+// ListClosed returns ClosedTaskInfo for every closed issue by calling
+// bd list --status=closed --json --limit=0 — the explicit --limit=0
+// disables bd's default 50-result cap, which otherwise silently truncates
+// the closed set to the most recent 50 beads.
+func (b *BD) ListClosed() ([]ClosedTaskInfo, error) {
+	out, err := b.runner().Run(b.ctx(), b.ProjectDir, "list", "--status=closed", "--json", "--limit=0")
+	if err != nil {
+		return nil, err
+	}
+	var items []struct {
+		ID       string            `json:"id"`
+		Title    string            `json:"title"`
+		Assignee string            `json:"assignee"`
+		ClosedAt string            `json:"closed_at"`
+		Metadata map[string]string `json:"metadata"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil {
+		return nil, nil
+	}
+	result := make([]ClosedTaskInfo, 0, len(items))
+	for _, it := range items {
+		if it.ID == "" {
+			continue
+		}
+		closedAt, _ := time.Parse(time.RFC3339, it.ClosedAt)
+		result = append(result, ClosedTaskInfo{
+			ID:       it.ID,
+			Title:    it.Title,
+			Assignee: it.Assignee,
+			ClosedAt: closedAt,
+			Metadata: it.Metadata,
+		})
+	}
+	return result, nil
+}
+
 func (b *BD) AppendNotes(id, msg string) error {
 	if id == "" || msg == "" {
 		return nil

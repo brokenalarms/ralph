@@ -530,10 +530,29 @@ func preloadTaskContext(backend tasks.Backend, log *logging.Logger) string {
 		log.Emit(logging.Opts{Level: logging.Warn}, "bd not found, skipping startup preload")
 	}
 
+	if closedList, closedErr := backend.ListClosed(); closedErr == nil {
+		unaudited := tasks.UnauditedClosures(closedList, config.LoopAssignee, time.Now(), tasks.AuditWindow)
+		if len(unaudited) > 0 {
+			parts = append(parts, formatAuditWindow(unaudited))
+		}
+	}
+
 	if len(parts) == 0 {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// formatAuditWindow renders the unaudited-closure set as the "$ audit-window"
+// startup context block the task-manager prompt reads to surface the
+// recent-closure audit prompt without recomputing the window itself.
+func formatAuditWindow(unaudited []tasks.ClosedTaskInfo) string {
+	lines := make([]string, 0, len(unaudited)+1)
+	lines = append(lines, fmt.Sprintf("%d unaudited loop closures (72h window):", len(unaudited)))
+	for _, c := range unaudited {
+		lines = append(lines, fmt.Sprintf("%s  %s  %s", c.ID, c.ClosedAt.Format(time.RFC3339), c.Title))
+	}
+	return "$ audit-window\n" + strings.Join(lines, "\n")
 }
 
 // generateSessionID returns a random v4 UUID formatted as 8-4-4-4-12 hex.

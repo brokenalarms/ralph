@@ -23,15 +23,17 @@ type StubBackend struct {
 	SkipReason         string
 	SkipDetail         string
 	ReopenedTask       string
-	ResumeIDSet        string           // last value passed to SetResumeTaskID
-	HasRemainingResult *bool            // when non-nil, HasRemaining returns this value instead of Remaining > 0
-	OpenDependents     []string         // returned by GetOpenDependents for any task
-	InProgressTasks    []tasks.TaskInfo // returned by ListInProgressByAssignee for any assignee
-	AllInProgressTasks []tasks.TaskInfo // returned by ListAllInProgress
-	OpenList           string           // returned by ListOpen
-	ReadyList          string           // returned by ListReady
-	OpenListErr        error            // when non-nil, ListOpen returns this error
-	ReadyListErr       error            // when non-nil, ListReady returns this error
+	ResumeIDSet        string                 // last value passed to SetResumeTaskID
+	HasRemainingResult *bool                  // when non-nil, HasRemaining returns this value instead of Remaining > 0
+	OpenDependents     []string               // returned by GetOpenDependents for any task
+	InProgressTasks    []tasks.TaskInfo       // returned by ListInProgressByAssignee for any assignee
+	AllInProgressTasks []tasks.TaskInfo       // returned by ListAllInProgress
+	OpenList           string                 // returned by ListOpen
+	ReadyList          string                 // returned by ListReady
+	OpenListErr        error                  // when non-nil, ListOpen returns this error
+	ReadyListErr       error                  // when non-nil, ListReady returns this error
+	ClosedTasks        []tasks.ClosedTaskInfo // returned by ListClosed
+	ClosedTasksErr     error                  // when non-nil, ListClosed returns this error
 }
 
 func (s *StubBackend) Init() error { return nil }
@@ -90,6 +92,10 @@ func (s *StubBackend) IsReady(_ string) (bool, error) { return true, nil }
 
 func (s *StubBackend) ListOpen() (string, error)  { return s.OpenList, s.OpenListErr }
 func (s *StubBackend) ListReady() (string, error) { return s.ReadyList, s.ReadyListErr }
+
+func (s *StubBackend) ListClosed() ([]tasks.ClosedTaskInfo, error) {
+	return s.ClosedTasks, s.ClosedTasksErr
+}
 
 func (s *StubBackend) Label() string {
 	if s.BackendLabel != "" {

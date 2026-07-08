@@ -1,12 +1,23 @@
 // Package tasks defines the task backend interface and the bd implementation.
 package tasks
 
+import "time"
+
 // TaskInfo holds the result of a GetNextTaskInfo call.
 type TaskInfo struct {
 	ID       string
 	Title    string
 	Priority *int
 	Assignee string // populated by list queries; empty when not requested
+}
+
+// ClosedTaskInfo holds a closed bead's audit-relevant fields.
+type ClosedTaskInfo struct {
+	ID       string
+	Title    string
+	Assignee string
+	ClosedAt time.Time
+	Metadata map[string]string
 }
 
 // Backend abstracts task tracking so ralph can drive iteration.
@@ -109,6 +120,12 @@ type Backend interface {
 	// ready to work on) as human-readable text, for startup prompt preload.
 	ListReady() (string, error)
 
+	// ListClosed returns ClosedTaskInfo for every closed issue, across all
+	// assignees, with no result-count truncation (unlike bd list's default
+	// 50-result cap). Callers filter by assignee/window/metadata themselves —
+	// this is the deterministic input to the recent-closure audit window.
+	ListClosed() ([]ClosedTaskInfo, error)
+
 	// SetMetadata sets a custom metadata key-value pair on a task.
 	SetMetadata(id, key, value string) error
 
@@ -137,4 +154,31 @@ type Backend interface {
 
 	// Label returns a human-readable name for the backend.
 	Label() string
+}
+
+// AuditWindow is the recent-closure audit lookback: how far back from now a
+// closed bead is still eligible to appear in the audit-window prompt block.
+const AuditWindow = 72 * time.Hour
+
+// UnauditedClosures filters closed to the beads the recent-closure audit
+// should surface: assigned to assignee, closed within window of now, and not
+// yet carrying the "audited" metadata key. closed is expected to be the
+// complete, untruncated closed-bead set (see ListClosed) — this function
+// applies no result-count limit of its own.
+func UnauditedClosures(closed []ClosedTaskInfo, assignee string, now time.Time, window time.Duration) []ClosedTaskInfo {
+	cutoff := now.Add(-window)
+	var result []ClosedTaskInfo
+	for _, c := range closed {
+		if c.Assignee != assignee {
+			continue
+		}
+		if c.ClosedAt.Before(cutoff) {
+			continue
+		}
+		if _, audited := c.Metadata["audited"]; audited {
+			continue
+		}
+		result = append(result, c)
+	}
+	return result
 }
