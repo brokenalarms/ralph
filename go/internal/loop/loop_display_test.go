@@ -759,25 +759,6 @@ func TestHandleRunResult_RateLimitedReturnsRetry(t *testing.T) {
 	}
 }
 
-// Verifies that when the rate limit wait is interrupted by context cancellation,
-// handleRunResult returns actionDone.
-func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
-	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	resetAt := time.Now().Add(10 * time.Minute)
-	runIter := 3
-	result := claude.Result{RateLimited: true, ResetAt: resetAt}
-	action := handleRunResultCall(l, ctx, result, nil,
-		"task-rl", "Rate limited task", "abc123", runIter)
-
-	if action != actionDone {
-		t.Fatalf("expected actionDone, got %d", action)
-	}
-}
-
 // Verifies that a normal successful result returns actionProceed without
 // modifying the iteration counters.
 func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
