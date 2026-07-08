@@ -1278,6 +1278,52 @@ func TestRun_NormalFailureDoesNotTriggerCompacted(t *testing.T) {
 	}
 }
 
+// Verifies that when a run is killed for idle timeout but the raw log
+// contains throttle evidence (plaintext "hit your limit" text, which the
+// real-time poll scan never checks — only Run()'s post-exit fallback does),
+// Run() reclassifies the result as RateLimited instead of leaving it as an
+// idle timeout, so the loop waits and retries instead of accruing idle
+// failures toward the skip cap.
+func TestRun_IdleTimeoutWithThrottleEvidenceReclassifiesAsRateLimited(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := &Runner{
+		Logger: log,
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("sh", "-c", `echo "You've hit your limit - resets 12am"; sleep 5`)
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	result, _ := runner.Run(RunConfig{
+		Ctx:          context.Background(),
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Idle: 200 * time.Millisecond},
+	})
+
+	if !result.RateLimited {
+		t.Fatalf("expected RateLimited=true after post-exit fallback scan finds throttle evidence, got result=%+v", result)
+	}
+	if result.ResetAt.IsZero() {
+		t.Error("expected ResetAt to be set")
+	}
+	if result.IdleTimeout {
+		t.Error("expected IdleTimeout=false after reclassification to RateLimited")
+	}
+}
+
 // Verifies that the shorter progress-aware timeout fires once the agent has
 // produced content output in the raw log (text activity flips activitySeen).
 func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
