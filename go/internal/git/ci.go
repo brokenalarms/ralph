@@ -329,16 +329,21 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 }
 
 // waitForCI polls PR checks until they complete, the no-progress budget
-// (noProgressTimeout) elapses with the fetched check state frozen, or the
-// hard cap (hardCap) elapses regardless of progress. Uses exponential
-// backoff starting at interval, doubling each poll up to MaxCIPollInterval.
+// (noProgressTimeout) elapses with the fetched check state frozen and no live
+// step observed, or the hard cap (hardCap) elapses regardless of progress.
+// Uses exponential backoff starting at interval, doubling each poll up to
+// MaxCIPollInterval.
 //
 // The no-progress budget resets any time the fetched check set changes (a
-// check appears, transitions, or completes), so a healthy CI run of any
-// length is waited out — hardCap is the only bound that applies regardless
-// of progress. While waiting, emits at most one status log line per minute
-// (plus one immediately when polling begins) reporting elapsed time and a
-// checks snapshot. Emits nothing when CI resolves on the first fetch.
+// check appears, transitions, or completes) or stepFetch reports at least one
+// in-progress GitHub Actions job step — a live running step is progress even
+// when the check's own state (e.g. "PENDING") hasn't moved, which is what a
+// single long-running required check looks like for its entire run. So a
+// healthy CI run of any length is waited out — hardCap is the only bound
+// that applies regardless of progress. While waiting, emits at most one
+// status log line per minute (plus one immediately when polling begins)
+// reporting elapsed time and a checks snapshot. Emits nothing when CI
+// resolves on the first fetch.
 //
 // gracePeriod controls how long to wait with zero checks before treating the
 // repo as having no CI configured and returning CIPassed. Pass 0 to disable.
@@ -360,14 +365,8 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 	var lastState map[string]string
 	var lastStatusAt time.Time
 
-	emitStatusLine := func(now time.Time) {
+	emitStatusLine := func(now time.Time, steps []JobStepStatus) {
 		completed, total, inProgress := summarizeCIChecks(checks)
-		var steps []JobStepStatus
-		if stepFetch != nil {
-			if s, err := stepFetch(); err == nil {
-				steps = s
-			}
-		}
 		log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI %s: %d/%d checks complete, %s",
 			formatCIElapsed(now.Sub(start)), completed, total, formatInProgressChecks(inProgress, steps))
 		lastStatusAt = now
@@ -404,9 +403,31 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 			}
 		}
 
+		// stepFetch is polled at the same once-per-minute cadence as the status
+		// line (never more often — see the doc comment), so the liveness check
+		// below adds no extra calls beyond what already ran to build the log
+		// line.
+		shouldEmit := lastStatusAt.IsZero() || now.Sub(lastStatusAt) >= time.Minute
+		var steps []JobStepStatus
+		if fetchErr == nil && shouldEmit && stepFetch != nil {
+			if s, err := stepFetch(); err == nil {
+				steps = s
+			}
+		}
+
+		// A running GitHub Actions job step is direct evidence CI is alive even
+		// when the fetched check state itself is frozen — e.g. a single
+		// required check whose status stays "PENDING"/"in_progress" for the
+		// whole duration of a long-running job. Treat it as progress so that
+		// case doesn't trip the no-progress timeout.
+		if len(steps) > 0 {
+			lastChangeAt = now
+		}
+
 		// A frozen check state counts as no-progress whether the freeze comes
 		// from an unchanging fetch result or from fetch itself repeatedly
-		// failing — either way nothing observable about CI has changed.
+		// failing — either way nothing observable about CI (including a live
+		// running step) has changed.
 		if now.Sub(lastChangeAt) >= noProgressTimeout {
 			return false, errCIFrozen
 		}
@@ -415,8 +436,8 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 			return false, fetchErr
 		}
 
-		if lastStatusAt.IsZero() || now.Sub(lastStatusAt) >= time.Minute {
-			emitStatusLine(now)
+		if shouldEmit {
+			emitStatusLine(now, steps)
 		}
 
 		return false, nil

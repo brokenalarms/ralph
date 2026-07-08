@@ -302,6 +302,69 @@ func TestWaitForCI_TimesOut(t *testing.T) {
 	}
 }
 
+// waitForCI treats a live GitHub Actions job step reported by stepFetch as
+// progress even when the fetched check state itself is frozen — a single
+// required check whose status stays "PENDING" for its whole run (the case of
+// a long-running job) is waited out well past noProgressTimeout instead of
+// tripping the no-progress budget, because each cadence-gated stepFetch call
+// keeps observing a running step and resets the clock.
+func TestWaitForCI_LiveStepResetsNoProgressBudget(t *testing.T) {
+	stubCISleep(t)
+	stubCINow(t, 90*time.Second)
+
+	var calls atomic.Int32
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		if n < 20 {
+			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+	stepFetch := func() ([]JobStepStatus, error) {
+		return []JobStepStatus{{JobName: "test", StepName: "Run npm test", StepIndex: 11, StepTotal: 15}}, nil
+	}
+
+	// noProgressTimeout is 5m; the fake clock advances 90s per poll, so by
+	// poll 20 (~30 minutes elapsed) a frozen-state implementation would have
+	// aborted long ago. Because stepFetch reports a running step on every
+	// cadence tick, the budget keeps resetting and all 19 pending polls
+	// complete successfully.
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, stepFetch, discardLog{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if calls.Load() < 20 {
+		t.Errorf("expected at least 20 polls, got %d", calls.Load())
+	}
+}
+
+// waitForCI still times out on the exact same frozen check state and clock
+// advance as TestWaitForCI_LiveStepResetsNoProgressBudget when stepFetch is
+// absent — proving the fix only changes behavior when live step data is
+// actually observed, not the frozen-state fallback.
+func TestWaitForCI_TimesOutWithoutStepData(t *testing.T) {
+	stubCISleep(t)
+	stubCINow(t, 90*time.Second)
+
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
+		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+	}
+
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Minute, time.Hour, 0, nil, discardLog{})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "5m0s") {
+		t.Errorf("expected error to report the no-progress budget (5m0s), got: %v", err)
+	}
+	if status != CIPending {
+		t.Errorf("expected CIPending on timeout, got %v", status)
+	}
+}
+
 // waitForCI uses exponential backoff, doubling the interval each poll up
 // to MaxCIPollInterval, so early polls are fast and later polls don't spam.
 func TestWaitForCI_BackoffDoubles(t *testing.T) {
