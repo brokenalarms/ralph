@@ -275,7 +275,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		CallsPerHour:             cfg.CallsPerHour,
 		Timeouts:                 agentTimeouts,
 		PostTask:                 cfg.PostTask,
-		VerifyBuild:              cfg.VerifyBuild,
 		Verify:                   cfg.Verify,
 		Notify:                   cfg.Notify,
 		Wait:                     cfg.Wait,

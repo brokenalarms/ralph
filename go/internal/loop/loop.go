@@ -151,7 +151,6 @@ type Config struct {
 	CallsPerHour  int
 	Timeouts      claude.Timeouts
 	PostTask      string
-	VerifyBuild   string
 	Notify        bool
 	Wait          bool
 	Verbose       bool

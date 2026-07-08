@@ -1,76 +1,15 @@
 package verify
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
 )
-
-// After Ctrl+C, RunVerifyBuild must return "" immediately without running
-// the script or emitting any log lines.
-func TestRunVerifyBuild_CancelledContext_SkipsExecution(t *testing.T) {
-	dir := t.TempDir()
-
-	scriptPath := filepath.Join(dir, "verify-build.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\necho 'ran build check'\nexit 0\n"), 0o755)
-
-	var logBuf bytes.Buffer
-	logger := logging.NewWithWriter(&logBuf)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	result := RunVerifyBuild(ctx, RunVerifyBuildParams{
-		VerifyBuild: scriptPath,
-		ProjectDir:  dir,
-		TestTimeout: 30 * time.Second,
-		Logger:      logger,
-	})
-
-	if result != "" {
-		t.Errorf("expected empty string when cancelled, got %q", result)
-	}
-	if logBuf.Len() > 0 {
-		t.Errorf("expected no log output when cancelled, got: %s", logBuf.String())
-	}
-}
-
-// RunVerifyBuild sources its "build is broken" instruction from the
-// status-build-broken.md prompt template instead of a hardcoded Go string —
-// a distinctive marker written to the template must appear verbatim in the
-// returned message.
-func TestRunVerifyBuild_FailureMessage_LoadedFromTemplate(t *testing.T) {
-	dir := t.TempDir()
-	promptsDir := t.TempDir()
-
-	os.WriteFile(filepath.Join(promptsDir, "status-build-broken.md"),
-		[]byte("- CUSTOM BUILD BROKEN MARKER"), 0o644)
-
-	scriptPath := filepath.Join(dir, "verify-build.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\necho 'boom'\nexit 1\n"), 0o755)
-
-	result := RunVerifyBuild(context.Background(), RunVerifyBuildParams{
-		VerifyBuild: scriptPath,
-		ProjectDir:  dir,
-		PromptsDir:  promptsDir,
-		TestTimeout: 30 * time.Second,
-		Logger:      logging.New(nil),
-	})
-
-	if !strings.Contains(result, "CUSTOM BUILD BROKEN MARKER") {
-		t.Errorf("expected message sourced from status-build-broken.md template, got: %q", result)
-	}
-	if !strings.Contains(result, "boom") {
-		t.Errorf("expected build failure output included, got: %q", result)
-	}
-}
 
 // RunPostTask passes RALPH_PROJECT_DIR set to projectDir so project-level
 // scripts like sync-and-build.sh can operate on the main checkout instead

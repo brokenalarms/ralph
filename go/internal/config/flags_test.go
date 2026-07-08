@@ -203,7 +203,7 @@ func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 }
 
 // Verifies that InitConfig generates entries for all flags that have non-empty defaults.
-// Flags with ConfigKey but no Default (e.g. post_task, verify_build) are intentionally omitted.
+// Flags with ConfigKey but no Default (e.g. post_task) are intentionally omitted.
 func TestInitConfigUsesRegistry(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/config.toml"

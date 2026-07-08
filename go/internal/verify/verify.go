@@ -124,13 +124,6 @@ func DetectPostTask(dirs ...string) *TestCommand {
 	return detectScript("ralph:post-task", "ralph-post-task", dirs...)
 }
 
-// DetectVerifyBuild returns the TestCommand for the detected ralph:verify-build
-// script, including which directory it was found in. Returns nil if not found
-// in any of the given directories. Does not consider the config.toml value.
-func DetectVerifyBuild(dirs ...string) *TestCommand {
-	return detectScript("ralph:verify-build", "ralph-verify-build", dirs...)
-}
-
 // RunTests executes the detected test command and returns the result.
 // When configVerify is non-empty it is used as the command instead of detecting
 // ralph:verify scripts. Accepts multiple directories checked in order — the command
@@ -191,73 +184,6 @@ func RunTests(ctx context.Context, timeout time.Duration, configVerify string, d
 	}
 
 	return Result{Passed: true, Reason: "tests passed", Command: command, Dir: tc.Dir}
-}
-
-// RunVerifyBuildParams configures RunVerifyBuild.
-type RunVerifyBuildParams struct {
-	VerifyBuild string
-	WorktreeDir string
-	ProjectDir  string
-	PromptsDir  string
-	TestTimeout time.Duration
-	Logger      *logging.Logger
-}
-
-// RunVerifyBuild executes the verify-build script if configured. Uses the
-// VerifyBuild config/CLI value first; falls back to detecting a
-// ralph:verify-build npm script or ralph-verify-build Makefile target
-// (worktree then project root). Runs in the project directory with a timeout
-// matching the test suite timeout. Returns empty string if the script passes
-// or is not configured. Returns a build failure message (stdout+stderr) if
-// the script exits non-zero.
-func RunVerifyBuild(ctx context.Context, p RunVerifyBuildParams) string {
-	if ctx.Err() != nil {
-		return ""
-	}
-
-	var script string
-	if p.VerifyBuild != "" {
-		script = p.VerifyBuild
-		p.Logger.Emit(logging.Opts{Domain: logging.Build}, "Using verify_build config: %s", script)
-	} else {
-		tc := DetectVerifyBuild(p.WorktreeDir, p.ProjectDir)
-		if tc != nil {
-			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
-			p.Logger.Emit(logging.Opts{Domain: logging.Build}, "Detected ralph:verify-build script: %s (in %s)", script, tc.Dir)
-		}
-	}
-	if script == "" {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(ctx, p.TestTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "-c", script)
-	cmd.Dir = p.ProjectDir
-	p.Logger.Emit(logging.Opts{Domain: logging.Build}, "Running verify-build: %s", script)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		p.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Build health check passed")
-		return ""
-	}
-	output := strings.TrimSpace(string(out))
-	p.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Build health check failed: %v", err)
-	msg := "\n" + readPromptFragment(p.PromptsDir, "status-build-broken.md")
-	if output != "" {
-		msg += "\n  Build failure output:\n  " + strings.ReplaceAll(output, "\n", "\n  ")
-	}
-	return msg
-}
-
-// readPromptFragment reads a short agent-facing status fragment from
-// promptsDir, trimming the trailing newline. Returns empty string when the
-// fragment is missing — a misconfigured promptsDir degrades the message
-// rather than failing the build check itself.
-func readPromptFragment(promptsDir, name string) string {
-	data, err := os.ReadFile(filepath.Join(promptsDir, name))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimRight(string(data), "\n")
 }
 
 // RunPostTaskParams configures RunPostTask.
