@@ -324,6 +324,28 @@ func TestState_TestResultFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+// Verifies that the last-green test tree cache (dir + tree hash) round-trips
+// through state.json, so a new loop process can seed the verifier's
+// in-memory cache from the prior session's last green run.
+func TestState_GreenCacheFieldsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	st.Write("last_green_dir", "/work/ralph-20260707-01")
+	st.Write("last_green_tree", "abc123deadbeef")
+
+	s, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.LastGreenDir != "/work/ralph-20260707-01" {
+		t.Errorf("LastGreenDir = %q, want %q", s.LastGreenDir, "/work/ralph-20260707-01")
+	}
+	if s.LastGreenTree != "abc123deadbeef" {
+		t.Errorf("LastGreenTree = %q, want %q", s.LastGreenTree, "abc123deadbeef")
+	}
+}
+
 // Verifies that SaveCLIConfig/LoadCLIConfig round-trips a config map through
 // state.json, enabling evolve restart to reconstruct args from semantic config.
 func TestSaveCLIConfig_Roundtrip(t *testing.T) {
@@ -438,13 +460,15 @@ func TestState_TestResultFieldsInJSON(t *testing.T) {
 		Status:         "running",
 		LastTestResult: "fail",
 		LastTestTime:   "2026-03-22T11:00:00Z",
+		LastGreenDir:   "/work/ralph-20260707-01",
+		LastGreenTree:  "abc123deadbeef",
 	}
 	data, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw := string(data)
-	for _, field := range []string{"last_test_result", "last_test_time"} {
+	for _, field := range []string{"last_test_result", "last_test_time", "last_green_dir", "last_green_tree"} {
 		if !strings.Contains(raw, field) {
 			t.Errorf("expected %q in JSON output: %s", field, raw)
 		}

@@ -383,3 +383,144 @@ func TestVerifier_RunPreIterationTests_GreenRun_WritesCache(t *testing.T) {
 		t.Fatalf("expected exactly 1 real invocation (from RunPreIterationTests) — RunTests should have hit the cache, got %d", got)
 	}
 }
+
+// RunPreIterationTests itself must check the green-tree cache on entry, not
+// just write it: a prior green run (via RunTests or RunPreIterationTests) on
+// the same unchanged, clean tree means the next RunPreIterationTests call is
+// a cache hit — the pre-iteration test command must not run again.
+func TestVerifier_RunPreIterationTests_CacheHit_SkipsRealRun(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+
+	first := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	if !first.TestResult.Passed {
+		t.Fatalf("expected first run to pass, got: %+v", first.TestResult)
+	}
+
+	second := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	if !second.TestResult.Passed {
+		t.Fatalf("expected second (cached) run to report passed, got: %+v", second.TestResult)
+	}
+
+	if got := countLines(t, counterFile); got != 1 {
+		t.Fatalf("expected exactly 1 real invocation across both RunPreIterationTests calls, got %d", got)
+	}
+}
+
+// A commit that changes the tree between two RunPreIterationTests calls
+// invalidates the cache — e.g. the base branch moved between loop
+// iterations — so the pre-iteration test command runs for real again rather
+// than trusting a stale cache entry.
+func TestVerifier_RunPreIterationTests_TreeChanged_RunsAgain(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+	v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+
+	if err := os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("write extra.txt: %v", err)
+	}
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-m", "second commit")
+
+	second := v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	if !second.TestResult.Passed {
+		t.Fatalf("expected second run to pass, got: %+v", second.TestResult)
+	}
+
+	if got := countLines(t, counterFile); got != 2 {
+		t.Fatalf("expected 2 real invocations after the tree changed, got %d", got)
+	}
+}
+
+// A cache hit inside RunPreIterationTests emits the same distinct "Tests
+// cached: tree <hash> already green" log line RunTests uses, so log-based
+// timing audits can identify a skipped pre-iteration run the same way.
+func TestVerifier_RunPreIterationTests_CacheHit_EmitsDistinctLogLine(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	var buf bytes.Buffer
+	v := New(Config{}, logging.NewWithWriter(&buf), nil, nil)
+
+	v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+	buf.Reset()
+	v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+
+	if !strings.Contains(buf.String(), "Tests cached: tree") {
+		t.Errorf("expected a distinct cache-hit log line, got: %s", buf.String())
+	}
+}
+
+// SeedGreenCache lets a freshly constructed Verifier (simulating a new loop
+// process) start with a cache hit when the persisted dir/tree from a prior
+// session's state.json matches the current worktree — without any real run
+// happening in this process instance.
+func TestVerifier_SeedGreenCache_EnablesHitWithoutPriorRunInThisInstance(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	// Prime the tree hash using a throwaway verifier instance — this stands
+	// in for a value read out of state.json.
+	tree := treeHashForTest(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+	v.SeedGreenCache(dir, tree)
+
+	result, _ := v.RunTests(context.Background(), dir)
+	if !result.Passed {
+		t.Fatalf("expected a cache hit from the seeded cache, got: %+v", result)
+	}
+	if got := countLines(t, counterFile); got != 0 {
+		t.Fatalf("expected zero real invocations — the seeded cache should have been used, got %d", got)
+	}
+}
+
+// GreenCache exposes the current in-memory cache (dir, tree) after a green
+// run so the loop can persist it to state.json.
+func TestVerifier_GreenCache_ReturnsDirAndTreeAfterGreenRun(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+
+	if gotDir, gotTree := v.GreenCache(); gotDir != "" || gotTree != "" {
+		t.Fatalf("expected empty cache before any run, got dir=%q tree=%q", gotDir, gotTree)
+	}
+
+	v.RunTests(context.Background(), dir)
+
+	gotDir, gotTree := v.GreenCache()
+	if gotDir != dir {
+		t.Errorf("GreenCache dir = %q, want %q", gotDir, dir)
+	}
+	wantTree := treeHashForTest(t, dir)
+	if gotTree != wantTree {
+		t.Errorf("GreenCache tree = %q, want %q", gotTree, wantTree)
+	}
+}
+
+// treeHashForTest returns the current HEAD^{tree} hash for dir, used to
+// build expectations without importing internal/git (would cycle).
+func treeHashForTest(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "HEAD^{tree}")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD^{tree}: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}

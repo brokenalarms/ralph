@@ -228,6 +228,29 @@ func (v *Verifier) recordGreenCache(dir string) {
 	v.greenCacheDir, v.greenCacheTree = dir, tree
 }
 
+// SeedGreenCache primes the in-memory cache with a (dir, tree) pair read
+// from a prior session's persisted state, so a freshly constructed Verifier
+// (a new loop process) can hit the cache on its very first check instead of
+// only ever missing until it records its own green run. checkGreenCache
+// still re-verifies the seeded tree against the live worktree (current tree
+// hash + clean status) before treating it as a hit, so a stale or mismatched
+// seed is safely ignored.
+func (v *Verifier) SeedGreenCache(dir, tree string) {
+	v.greenCacheMu.Lock()
+	defer v.greenCacheMu.Unlock()
+	v.greenCacheDir, v.greenCacheTree = dir, tree
+}
+
+// GreenCache returns the current in-memory cache's (dir, tree) pair, or two
+// empty strings if no green run has been recorded yet. Callers (Loop) use
+// this to persist the cache to state.json after a green run, so it survives
+// a process restart.
+func (v *Verifier) GreenCache() (dir, tree string) {
+	v.greenCacheMu.Lock()
+	defer v.greenCacheMu.Unlock()
+	return v.greenCacheDir, v.greenCacheTree
+}
+
 // CompileCheck runs the build/type check (go build / tsc --noEmit) in dir.
 // Verifier owns its own start/result narrative; callers only log
 // orchestration concerns.
@@ -436,6 +459,13 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 
 	out := PreIterationResult{}
 
+	if tree, ok := v.checkGreenCache(in.WorkDir); ok {
+		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests cached: tree %s already green", tree)
+		out.TestResult = verify.Result{Passed: true, Reason: "cached: tree " + tree + " already green"}
+		out.Message += "\n" + v.statusFragment("status-tests-pass.md")
+		return v.runPreIterationCompileCheck(in, out)
+	}
+
 	tc := verify.DetectTestCommand(v.cfg.ConfigVerify, in.WorkDir)
 	if tc != nil {
 		source := "config.toml"
@@ -479,6 +509,13 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 		}
 	}
 
+	return v.runPreIterationCompileCheck(in, out)
+}
+
+// runPreIterationCompileCheck runs the compile/build check and appends its
+// status to out.Message. Split out of RunPreIterationTests so a test-cache
+// hit can skip straight to the compile check without duplicating this tail.
+func (v *Verifier) runPreIterationCompileCheck(in PreIterationInput, out PreIterationResult) PreIterationResult {
 	compileStart := time.Now()
 	compileResult := verify.CompileCheck(in.Ctx, v.cfg.CompileCheckTimeout, in.WorkDir)
 	out.CompileResult = compileResult
