@@ -530,8 +530,53 @@ func (g *ghCLI) deleteBranch(ctx context.Context, nwo, prNumber string) {
 	if branch == "" {
 		return
 	}
-	// best-effort delete — log on failure but don't propagate
-	g.runGHCmd(ctx, []string{"api", fmt.Sprintf("repos/%s/git/refs/heads/%s", nwo, branch), "--method", "DELETE"}) //nolint:errcheck
+	// best-effort delete — log on failure but don't propagate. GitHub's
+	// "automatically delete head branches" repo setting can race us and
+	// delete the ref first, which gh reports as a 422 "Reference does not
+	// exist" — that's an expected outcome, not a failure worth a warning
+	// dump, so it's inspected before logging rather than going through
+	// runGHCmd's auto-log.
+	delArgs := []string{"api", fmt.Sprintf("repos/%s/git/refs/heads/%s", nwo, branch), "--method", "DELETE"}
+	stdout, stderr, elapsed, delErr := g.runGHCmdRaw(ctx, delArgs)
+	if delErr == nil {
+		return
+	}
+	if refAlreadyDeleted(stderr, stdout) {
+		if g.logger != nil {
+			g.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s already deleted by GitHub", branch)
+		}
+		return
+	}
+	g.logGHFailure(delArgs, stderr, stdout, elapsed, delErr)
+}
+
+// refAlreadyDeleted reports whether a gh ref-delete failure's stderr or
+// response body indicates the ref was already gone (HTTP 422 "Reference
+// does not exist") — the benign race with GitHub's "automatically delete
+// head branches" setting, distinct from a genuine failure.
+func refAlreadyDeleted(stderr, stdout []byte) bool {
+	const marker = "Reference does not exist"
+	return bytes.Contains(stderr, []byte(marker)) || bytes.Contains(stdout, []byte(marker))
+}
+
+// runGHCmdRaw runs gh with the given args, capturing stdout and stderr
+// separately, without emitting any log entry — unlike runGHCmd/runGHCombined,
+// which always log on failure. Callers that need to classify a failure
+// before deciding how to log it use this instead.
+func (g *ghCLI) runGHCmdRaw(ctx context.Context, args []string) (stdout, stderr []byte, elapsed time.Duration, err error) {
+	ctx, cancel := context.WithTimeout(ctx, ghCallTimeout)
+	defer cancel()
+	start := time.Now()
+	var stderrBuf bytes.Buffer
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Stderr = &stderrBuf
+	out, cmdErr := cmd.Output()
+	elapsed = time.Since(start)
+	stderr = stderrBuf.Bytes()
+	if cmdErr != nil || ctx.Err() != nil {
+		return out, stderr, elapsed, firstErr(ctx, cmdErr)
+	}
+	return out, stderr, elapsed, nil
 }
 
 func (g *ghCLI) ListChecks(ctx context.Context, prNumber int, repoURL string) ([]CICheckResult, error) {
