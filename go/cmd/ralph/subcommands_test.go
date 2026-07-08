@@ -151,3 +151,29 @@ func TestPreloadTaskContext_OmitsAuditWindowWhenEmpty(t *testing.T) {
 		t.Errorf("expected no audit-window section, got %q", got)
 	}
 }
+
+// Proves: preloadTaskContext logs a Warn-level message when ListClosed
+// errors (e.g. a malformed bd JSON response), rather than silently skipping
+// the audit-window block with no trace — and that bd list/ready sections
+// are still included since only the audit-window block is affected.
+func TestPreloadTaskContext_WarnsWhenListClosedErrors(t *testing.T) {
+	var buf strings.Builder
+	backend := &testutil.StubBackend{
+		OpenList:       "ralph-abc: fix the thing",
+		ReadyList:      "ralph-xyz: ready task",
+		ClosedTasksErr: errBDUnavailable,
+	}
+	log := logging.NewWithWriter(&buf)
+
+	got := preloadTaskContext(backend, log)
+
+	if !strings.Contains(buf.String(), "bd unavailable") {
+		t.Errorf("expected Warn log to mention the ListClosed error, got log output %q", buf.String())
+	}
+	if strings.Contains(got, "audit-window") {
+		t.Errorf("expected no audit-window section, got %q", got)
+	}
+	if !strings.Contains(got, "$ bd list\nralph-abc: fix the thing") || !strings.Contains(got, "$ bd ready\nralph-xyz: ready task") {
+		t.Errorf("expected bd list/ready sections unaffected, got %q", got)
+	}
+}

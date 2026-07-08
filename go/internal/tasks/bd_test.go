@@ -1269,6 +1269,82 @@ func TestBD_ListClosed_QueriesWithNoLimitAndParsesFields(t *testing.T) {
 	}
 }
 
+// Proves: ListClosed decodes closed beads whose metadata contains a mix of
+// JSON scalar types — bd writes numeric-looking metadata (e.g.
+// failed_starts, compaction_parks, the audited timestamp) as JSON ints, not
+// strings. Both an int-metadata bead and a plain string-metadata bead must
+// come through, with the int value converted to its string form ("1", not
+// "1e+00" or a swallowed-error empty result), and the int-valued bead must
+// still flow through UnauditedClosures when it's unstamped, in-window, and
+// loop-assigned.
+func TestBD_ListClosed_DecodesIntAndStringMetadataValues(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		return `[
+			{"id":"ralph-int","title":"Int metadata bead","assignee":"ralph-loop","closed_at":"2026-07-07T16:26:06Z","metadata":{"failed_starts":1}},
+			{"id":"ralph-str","title":"String metadata bead","assignee":"ralph-loop","closed_at":"2026-07-07T16:00:00Z","metadata":{"audited":"1720180800"}}
+		]`, nil
+	}
+	b := setupBD(t, runner)
+
+	closed, err := b.ListClosed()
+	if err != nil {
+		t.Fatalf("ListClosed() error = %v, want nil", err)
+	}
+	if len(closed) != 2 {
+		t.Fatalf("ListClosed() returned %d items, want 2: %+v", len(closed), closed)
+	}
+
+	var intBead, strBead *ClosedTaskInfo
+	for i := range closed {
+		switch closed[i].ID {
+		case "ralph-int":
+			intBead = &closed[i]
+		case "ralph-str":
+			strBead = &closed[i]
+		}
+	}
+	if intBead == nil || strBead == nil {
+		t.Fatalf("expected both ralph-int and ralph-str in result, got %+v", closed)
+	}
+	if intBead.Metadata["failed_starts"] != "1" {
+		t.Errorf("intBead.Metadata[failed_starts] = %q, want %q", intBead.Metadata["failed_starts"], "1")
+	}
+	if strBead.Metadata["audited"] != "1720180800" {
+		t.Errorf("strBead.Metadata[audited] = %q, want %q", strBead.Metadata["audited"], "1720180800")
+	}
+
+	now := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	unaudited := UnauditedClosures(closed, "ralph-loop", now, AuditWindow)
+	found := false
+	for _, u := range unaudited {
+		if u.ID == "ralph-int" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected ralph-int (unstamped, in-window, loop-assigned) in UnauditedClosures, got %+v", unaudited)
+	}
+}
+
+// Proves: ListClosed propagates the json.Unmarshal error to the caller
+// instead of swallowing it as "return nil, nil" — a malformed closed-list
+// response must surface as a real error so preloadTaskContext can warn
+// instead of silently omitting the audit-window block.
+func TestBD_ListClosed_PropagatesUnmarshalError(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		return `not valid json`, nil
+	}
+	b := setupBD(t, runner)
+
+	closed, err := b.ListClosed()
+	if err == nil {
+		t.Fatal("ListClosed() error = nil, want unmarshal error")
+	}
+	if closed != nil {
+		t.Errorf("ListClosed() = %+v, want nil on error", closed)
+	}
+}
+
 // Proves: HasRemaining returns false when the loop inbox (bd ready --assignee=ralph-loop)
 // returns no tasks — simulates all tasks having been reassigned away from ralph-loop.
 func TestBD_HasRemaining_EmptyInbox(t *testing.T) {
