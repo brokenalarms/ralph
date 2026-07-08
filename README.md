@@ -21,14 +21,15 @@ ralph loop --auto-merge --base-branch main --evolve
 Add this alias for rapid iteration:
 
 ```bash
-alias loop='ralph loop --auto-merge --base-branch main --evolve'
+alias loop='ralph loop --auto-merge --base-branch main --evolve --wait'
 ```
 
 - `--auto-merge` — squash-merges each PR automatically after CI passes
 - `--base-branch main` — rebases and merges into `main` (change to match your repo)
 - `--evolve` — re-execs ralph after each merge so improvements take effect immediately
+- `--wait` — keep running when the backlog empties, polling for new tasks
 
-The loop runs until you press Ctrl-C. When the backlog empties it polls for new tasks — no flag needed. To rebuild the project on each iteration (useful for self-improving loops), add `--post-task <build-script>` alongside `--evolve`.
+With `--wait` the loop runs until you press Ctrl-C; without it, it exits once the backlog is drained. To rebuild the project on each iteration (useful for self-improving loops), add `--post-task <build-script>` alongside `--evolve`.
 
 Run two windows side by side, named `{project}-loop` and `{project}-task`:
 
@@ -100,6 +101,7 @@ Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 | `--base-branch <name>` | Base branch for rebase/merge | develop | `RALPH_BASE_BRANCH` |
 | `--auto-merge` | Squash-merge PRs after task completion | — | |
 | `--evolve` | Self-improving mode: re-exec ralph after each merged task so improvements take effect immediately (requires `--auto-merge`) | — | |
+| `--wait` | Keep running after the backlog empties, polling for new tasks | — | |
 | `--post-task <script>` | Run a script after each task completes, before evolve re-exec. Receives `RALPH_TASK_ID`, `RALPH_PR_NUMBER`, and `RALPH_MERGED` env vars. | — | |
 | `--verify-build <script>` | Run a script before pre-iteration tests to check project-level build health | — | |
 | `--notify` | Send macOS notification on each task completion | — | |
@@ -151,10 +153,14 @@ Ralph assigns models per role, configured in `.ralph/config.toml` as bare tier a
 
 ### Verification pipeline
 
+Tests run via the project's `ralph:verify` script — a package.json script or Makefile target (or the `verify` key in config.toml). Each iteration starts with a pre-iteration run of that suite plus a compile check, so the agent starts from a known-green tree.
+
 After the agent signals completion:
 
-1. **Test suite** — full `make test` (or equivalent) must pass. If it fails, a fix agent is spawned to address the failures (up to 3 retries).
+1. **Test suite** — the full `ralph:verify` suite must pass. If it fails, a fix agent is spawned to address the failures (up to 3 retries).
 2. **LLM diff review** — haiku reviews the diff against the bead's acceptance criteria. If rejected, a fix agent addresses the issues (up to 3 retries, escalating to sonnet).
+
+Green test runs are cached by git tree hash: a run on a tree that already passed is skipped instead of re-executed, and the cache persists in `state.json` across iterations. Because squash-merging preserves the verified tree, the pre-iteration check after a merge is normally a cache hit — only a genuine tree change (agent or fix-agent commits, or another change landing on the base) triggers a real run. The first iteration of a fresh session always runs the suite to capture the starting state of the world.
 
 ### Merge pipeline
 
