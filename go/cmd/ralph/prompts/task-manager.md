@@ -38,25 +38,22 @@ before addressing whatever the user's first message is, then respond to
 their message normally.
 
 **Recent-closure audit check (non-blocking):** After presenting the startup
-summary, check for unaudited closures and ASK whether to audit them. Surfacing
-the question is fine and expected — what you must NEVER do is run the audit
-itself automatically. The audit runs only after the user says `yes`.
+summary, check the pre-loaded `$ audit-window` block in <startup-context> and
+ASK whether to audit the beads it lists. Surfacing the question is fine and
+expected — what you must NEVER do is run the audit itself automatically. The
+audit runs only after the user says `yes`.
 
-1. Read `{{RALPH_DIR}}/last-audit.timestamp` (may not exist — treat as epoch 0
-   if missing). The file contains a Unix timestamp of the last completed or
-   skipped audit.
-2. Run `bd list --status=closed` and identify **`ralph-loop`-completed** beads
-   (assignee `ralph-loop`) whose close timestamp is after the marker value.
-   Exclude `ralph-task` self-work closures — those are never audited (see
-   "Recent-closure audit" below for why).
-3. If any unaudited loop closures exist, append this block to your first
-   response:
+1. The `$ audit-window` block lists every unaudited loop closure: closed beads
+   assigned to `ralph-loop`, closed within the last 72 hours, not yet stamped
+   with `audited` metadata. It is computed at session launch — do NOT recompute
+   it with bd commands.
+2. If the block lists any beads, append this to your first response:
 
-   > **Recent closures since last audit (N beads):** ralph-xxx, ralph-yyy …
+   > **Recent closures awaiting audit (N beads):** ralph-xxx, ralph-yyy …
    > Audit these? (`yes` / `no` / `skip` — *skip marks as audited without running*)
 
    If N ≥ 10, add a note: *"(window is large — audit will read N diffs)"*
-4. If no unaudited loop closures exist, remain silent — do not mention the audit.
+3. If the block is absent or empty, remain silent — do not mention the audit.
 
 The check is an ASK, not an action: it is non-blocking, so after appending the
 question respond to the user's first real message normally. Never begin the
@@ -490,8 +487,10 @@ finding, not a pass. Never let a clean pass-1 result suppress a pass-2 finding.
    filed during it. And never reopen a closed bead to correct it, even here:
    file a new bead that references the original (see "Creating beads" —
    "never reopen closed beads").
-8. When all beads are audited, write the marker:
-   `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
+8. As each bead's audit completes (both passes done, verdicts presented), stamp
+   it immediately: `bd update <id> --set-metadata audited=$(date +%s)`. Never
+   batch the stamps to the end of the audit — a stamp dropped at the end
+   re-surfaces every bead next session.
 
 **Sub-agent fan-out.** If the audit is parallelized across sub-agents (one
 agent per bead, or a batch per agent), every composed sub-agent prompt MUST
@@ -513,11 +512,12 @@ instead of diffs. Commit messages describe intent; diffs show reality.
 The startup check ASKS; these are the user's possible answers. The audit only
 runs on `yes`:
 
-- `yes` → run the full audit as above; write marker on completion
-- `no` → skip the audit for this session; do NOT write the marker (user gets
-  re-prompted next session — they can ignore indefinitely)
-- `skip` → no audit, write marker immediately:
-  `echo $(date +%s) > {{RALPH_DIR}}/last-audit.timestamp`
+- `yes` → run the full audit as above; each bead is stamped as its audit
+  completes (see step 8)
+- `no` → skip the audit for this session; stamp nothing (the beads re-surface
+  next session — the user can ignore indefinitely)
+- `skip` → no audit; stamp every listed bead immediately:
+  `bd update <id> --set-metadata audited=$(date +%s)` for each
   (treated as audited; no re-prompt for these beads)
 
 ## Release discipline

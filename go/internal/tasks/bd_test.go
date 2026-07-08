@@ -1232,6 +1232,43 @@ func TestBD_GetMetadata_NoMetadata(t *testing.T) {
 	}
 }
 
+// Proves: ListClosed calls `bd list --status=closed --json --limit=0` — the
+// explicit --limit=0 is what disables bd's default 50-result truncation —
+// and parses id/title/assignee/closed_at/metadata off the JSON response.
+func TestBD_ListClosed_QueriesWithNoLimitAndParsesFields(t *testing.T) {
+	var capturedArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		capturedArgs = args
+		return `[{"id":"ralph-abc","title":"Fix the thing","assignee":"ralph-loop","closed_at":"2026-07-05T12:00:00Z","metadata":{"audited":"1720180800"}}]`, nil
+	}
+	b := setupBD(t, runner)
+
+	closed, err := b.ListClosed()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "--status=closed") || !strings.Contains(joined, "--limit=0") || !strings.Contains(joined, "--json") {
+		t.Errorf("expected --status=closed --json --limit=0 in args, got: %v", capturedArgs)
+	}
+
+	if len(closed) != 1 {
+		t.Fatalf("ListClosed() returned %d items, want 1", len(closed))
+	}
+	got := closed[0]
+	want := ClosedTaskInfo{
+		ID:       "ralph-abc",
+		Title:    "Fix the thing",
+		Assignee: "ralph-loop",
+		ClosedAt: time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC),
+		Metadata: map[string]string{"audited": "1720180800"},
+	}
+	if got.ID != want.ID || got.Title != want.Title || got.Assignee != want.Assignee || !got.ClosedAt.Equal(want.ClosedAt) || got.Metadata["audited"] != want.Metadata["audited"] {
+		t.Errorf("ListClosed()[0] = %+v, want %+v", got, want)
+	}
+}
+
 // Proves: HasRemaining returns false when the loop inbox (bd ready --assignee=ralph-loop)
 // returns no tasks — simulates all tasks having been reassigned away from ralph-loop.
 func TestBD_HasRemaining_EmptyInbox(t *testing.T) {

@@ -46,6 +46,7 @@ func (b *minimalBackend) ListAllInProgress() ([]TaskInfo, error)                
 func (b *minimalBackend) IsReady(_ string) (bool, error)                        { return true, nil }
 func (b *minimalBackend) ListOpen() (string, error)                             { return "", nil }
 func (b *minimalBackend) ListReady() (string, error)                            { return "", nil }
+func (b *minimalBackend) ListClosed() ([]ClosedTaskInfo, error)                 { return nil, nil }
 func (b *minimalBackend) Label() string                                         { return "beads" }
 func (b *minimalBackend) SetResumeTaskID(id string) {
 	b.resumeIDCalled = true

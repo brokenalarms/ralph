@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 )
 
@@ -107,5 +109,45 @@ func TestPreloadTaskContext_SkipsFailedSection(t *testing.T) {
 	}
 	if !strings.Contains(got, "$ bd ready\nralph-xyz: ready task") {
 		t.Errorf("expected bd ready section, got %q", got)
+	}
+}
+
+// Proves: preloadTaskContext appends a "$ audit-window" block listing
+// unaudited ralph-loop closures from the last 72 hours, computed
+// deterministically in Go rather than left to the session to recompute.
+func TestPreloadTaskContext_AppendsAuditWindowWhenUnauditedClosuresExist(t *testing.T) {
+	now := time.Now()
+	backend := &testutil.StubBackend{
+		ClosedTasks: []tasks.ClosedTaskInfo{
+			{ID: "ralph-abc", Title: "Fix the thing", Assignee: config.LoopAssignee, ClosedAt: now.Add(-1 * time.Hour)},
+			{ID: "ralph-old", Title: "Too old", Assignee: config.LoopAssignee, ClosedAt: now.Add(-73 * time.Hour)},
+			{ID: "ralph-self", Title: "Self work", Assignee: config.TaskAssignee, ClosedAt: now.Add(-1 * time.Hour)},
+		},
+	}
+	log := logging.New(nil)
+
+	got := preloadTaskContext(backend, log)
+
+	if !strings.Contains(got, "$ audit-window") {
+		t.Fatalf("expected an audit-window section, got %q", got)
+	}
+	if !strings.Contains(got, "ralph-abc") {
+		t.Errorf("expected ralph-abc in audit-window section, got %q", got)
+	}
+	if strings.Contains(got, "ralph-old") || strings.Contains(got, "ralph-self") {
+		t.Errorf("expected stale/self-work closures excluded, got %q", got)
+	}
+}
+
+// Proves: preloadTaskContext omits the "$ audit-window" block entirely when
+// no unaudited closures exist, so the task-manager prompt stays silent.
+func TestPreloadTaskContext_OmitsAuditWindowWhenEmpty(t *testing.T) {
+	backend := &testutil.StubBackend{}
+	log := logging.New(nil)
+
+	got := preloadTaskContext(backend, log)
+
+	if strings.Contains(got, "audit-window") {
+		t.Errorf("expected no audit-window section, got %q", got)
 	}
 }
