@@ -1,8 +1,11 @@
 package verifier
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,5 +152,234 @@ func TestVerifier_LLMVerify_UsesReviewTemplate(t *testing.T) {
 	}
 	if result.Passed {
 		t.Error("expected rejection to be reported (Passed=false)")
+	}
+}
+
+// gitRun runs a git command in dir, failing the test on error.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// initGitRepoForCache creates a real git repository at dir with one commit,
+// so verify.TreeHash / verify.WorktreeClean (the green-tree cache's data
+// source) have real git state to operate on. A local identity is configured
+// so the commit succeeds regardless of the environment's global git config.
+func initGitRepoForCache(t *testing.T, dir string) {
+	t.Helper()
+	gitRun(t, dir, "init")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-m", "init")
+}
+
+// writeCountingMakefile writes a ralph-verify Makefile target to dir that
+// appends one line to counterFile (kept outside dir, so invocations don't
+// dirty the git worktree under test) every time it runs.
+func writeCountingMakefile(t *testing.T, dir, counterFile string) {
+	t.Helper()
+	makefile := fmt.Sprintf("ralph-verify:\n\t@echo run >> %s\n", counterFile)
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte(makefile), 0o644); err != nil {
+		t.Fatalf("write Makefile: %v", err)
+	}
+}
+
+// countLines returns the number of lines in path, or 0 if it does not exist.
+// Used to count real test-command invocations recorded by
+// writeCountingMakefile's counter file.
+func countLines(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("read counter file: %v", err)
+	}
+	trimmed := strings.TrimRight(string(data), "\n")
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, "\n"))
+}
+
+// headSHA returns the commit SHA at HEAD in dir.
+func headSHA(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// RunTests caches a green run keyed by tree hash: a second call on the same
+// clean, unchanged tree returns a pass without invoking the test command
+// again.
+func TestVerifier_RunTests_CachesGreenTreeHash(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+
+	result1, _ := v.RunTests(context.Background(), dir)
+	if !result1.Passed {
+		t.Fatalf("expected first run to pass, got: %+v", result1)
+	}
+	result2, _ := v.RunTests(context.Background(), dir)
+	if !result2.Passed {
+		t.Fatalf("expected second (cached) run to pass, got: %+v", result2)
+	}
+
+	if got := countLines(t, counterFile); got != 1 {
+		t.Fatalf("expected the test command to run exactly once across both calls, got %d invocations", got)
+	}
+}
+
+// A cache hit emits a distinct "Tests cached: tree <hash> already green" log
+// line so log-based timing audits can distinguish hits from real runs.
+func TestVerifier_RunTests_CacheHit_EmitsDistinctLogLine(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	var buf bytes.Buffer
+	v := New(Config{}, logging.NewWithWriter(&buf), nil, nil)
+
+	v.RunTests(context.Background(), dir)
+	buf.Reset()
+	v.RunTests(context.Background(), dir)
+
+	if !strings.Contains(buf.String(), "Tests cached: tree") {
+		t.Errorf("expected a distinct cache-hit log line, got: %s", buf.String())
+	}
+}
+
+// A commit that changes the tree between calls invalidates the cache — the
+// test command runs for real again.
+func TestVerifier_RunTests_TreeChanged_RunsAgain(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+	v.RunTests(context.Background(), dir)
+
+	if err := os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("write extra.txt: %v", err)
+	}
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-m", "second commit")
+
+	v.RunTests(context.Background(), dir)
+
+	if got := countLines(t, counterFile); got != 2 {
+		t.Fatalf("expected 2 real invocations after the tree changed, got %d", got)
+	}
+}
+
+// An uncommitted change (dirty worktree) invalidates the cache even though
+// HEAD^{tree} is unchanged — the test command runs for real again.
+func TestVerifier_RunTests_DirtyWorktree_RunsAgain(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+	v.RunTests(context.Background(), dir)
+
+	if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("write untracked.txt: %v", err)
+	}
+
+	v.RunTests(context.Background(), dir)
+
+	if got := countLines(t, counterFile); got != 2 {
+		t.Fatalf("expected 2 real invocations when the worktree is dirty, got %d", got)
+	}
+}
+
+// A failing run must not populate the cache — the immediately following
+// RunTests call executes the suite for real, not a cached failure.
+func TestVerifier_RunTests_FailingRun_DoesNotCache(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	makefile := fmt.Sprintf("ralph-verify:\n\t@echo run >> %s\n\t@exit 1\n", counterFile)
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte(makefile), 0o644); err != nil {
+		t.Fatalf("write Makefile: %v", err)
+	}
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+
+	result1, _ := v.RunTests(context.Background(), dir)
+	if result1.Passed {
+		t.Fatal("expected first run to fail")
+	}
+	result2, _ := v.RunTests(context.Background(), dir)
+	if result2.Passed {
+		t.Fatal("expected second run to fail for real too — a failing run must not populate the cache")
+	}
+
+	if got := countLines(t, counterFile); got != 2 {
+		t.Fatalf("expected 2 real invocations — a failing run must not populate the cache, got %d", got)
+	}
+}
+
+// The cache key is the tree hash, not the commit SHA: an empty commit
+// (new SHA, identical tree) still hits the cache.
+func TestVerifier_RunTests_CacheKeyIsTreeHashNotCommitSHA(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+	v.RunTests(context.Background(), dir)
+
+	firstSHA := headSHA(t, dir)
+	gitRun(t, dir, "commit", "--allow-empty", "-m", "empty commit, same tree")
+	secondSHA := headSHA(t, dir)
+	if firstSHA == secondSHA {
+		t.Fatal("expected the empty commit to produce a new commit SHA")
+	}
+
+	result2, _ := v.RunTests(context.Background(), dir)
+	if !result2.Passed {
+		t.Fatalf("expected a cache hit despite the new commit SHA (same tree), got: %+v", result2)
+	}
+	if got := countLines(t, counterFile); got != 1 {
+		t.Fatalf("expected exactly 1 real invocation — tree hash unchanged despite the new commit SHA, got %d", got)
+	}
+}
+
+// RunPreIterationTests writes the green-tree cache on a passing run, so a
+// subsequent RunTests call on the same unchanged, clean tree is a cache hit.
+func TestVerifier_RunPreIterationTests_GreenRun_WritesCache(t *testing.T) {
+	dir := t.TempDir()
+	counterFile := filepath.Join(t.TempDir(), "counter.txt")
+	writeCountingMakefile(t, dir, counterFile)
+	initGitRepoForCache(t, dir)
+
+	v := New(Config{}, logging.New(nil), nil, nil)
+	v.RunPreIterationTests(PreIterationInput{Ctx: context.Background(), WorkDir: dir})
+
+	result, _ := v.RunTests(context.Background(), dir)
+	if !result.Passed {
+		t.Fatalf("expected a cache hit after a green RunPreIterationTests run, got: %+v", result)
+	}
+	if got := countLines(t, counterFile); got != 1 {
+		t.Fatalf("expected exactly 1 real invocation (from RunPreIterationTests) — RunTests should have hit the cache, got %d", got)
 	}
 }
