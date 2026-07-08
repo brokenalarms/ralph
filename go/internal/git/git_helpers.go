@@ -83,6 +83,21 @@ func IsGitRepo(dir string) bool {
 	return gitCmdErr(dir, "rev-parse", "--git-dir") == nil
 }
 
+// TreeHash returns the git tree hash of HEAD in dir (git rev-parse
+// HEAD^{tree}). Returns empty string when dir is not a git repository or
+// has no commits — callers treat that as "hash unavailable", never as a
+// valid cache key.
+func TreeHash(dir string) string {
+	return gitOutput(dir, "rev-parse", "HEAD^{tree}")
+}
+
+// WorktreeClean reports whether dir has no uncommitted changes (git status
+// --porcelain produces no output). Also false on any git error, so a
+// broken or non-git dir is never treated as clean.
+func WorktreeClean(dir string) bool {
+	return gitOutput(dir, "status", "--porcelain") == ""
+}
+
 // RemoteDefaultBranch reads the repository's default branch from the local
 // git remote HEAD (refs/remotes/origin/HEAD). It falls back to "main" when the
 // symbolic ref is unset. Unlike the loop's commit/PR-creation path — which

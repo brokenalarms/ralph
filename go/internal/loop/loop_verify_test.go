@@ -3,7 +3,9 @@ package loop
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1231,5 +1233,192 @@ func TestRunVerifyPipeline_EmptyDiffAheadOfBase_AbortsAsToolingError(t *testing.
 	}
 	if backend.SkippedTask != "" {
 		t.Errorf("task must not be skipped on infra abort, got SkippedTask=%q", backend.SkippedTask)
+	}
+}
+
+// gitRunForCache runs a git command in dir, failing the test on error. Named
+// distinctly from any git stub helpers in this file — this shells out to the
+// real git binary against a real repo on disk, independent of git.NewStub.
+func gitRunForCache(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// initGitRepoForCache creates a real git repository at dir with one commit,
+// so the verifier's tree-hash green-run cache (verify.TreeHash /
+// verify.WorktreeClean) has real git state to operate on. Loop's own git
+// module stays stubbed (git.NewStub) for orchestration concerns (diff
+// fetching, HeadRev) — the cache reads git directly against dir, independent
+// of that stub.
+func initGitRepoForCache(t *testing.T, dir string) {
+	t.Helper()
+	gitRunForCache(t, dir, "init")
+	gitRunForCache(t, dir, "config", "user.email", "test@example.com")
+	gitRunForCache(t, dir, "config", "user.name", "Test")
+	gitRunForCache(t, dir, "add", "-A")
+	gitRunForCache(t, dir, "commit", "-m", "init")
+}
+
+// writeCountingMakefile writes a ralph-verify Makefile target to dir that
+// appends one line to counterFile (kept outside dir, so invocations don't
+// dirty the git worktree under test) every time it runs.
+func writeCountingMakefile(t *testing.T, dir, counterFile string) {
+	t.Helper()
+	makefile := fmt.Sprintf("ralph-verify:\n\t@echo run >> %s\n", counterFile)
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte(makefile), 0o644); err != nil {
+		t.Fatalf("write Makefile: %v", err)
+	}
+}
+
+// countTestExecutions returns the number of real test-command invocations
+// recorded by writeCountingMakefile's counter file, or 0 if it does not exist.
+func countTestExecutions(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("read counter file: %v", err)
+	}
+	trimmed := strings.TrimRight(string(data), "\n")
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, "\n"))
+}
+
+// AC2: happy-path iteration — exactly one full-suite execution runs across
+// the whole post-agent verify pipeline when the LLM verifier passes on
+// attempt 1 and no fix agent runs. testFixPlan's testCheck (the pipeline's
+// first stage) executes the suite for real and records the green-tree
+// cache; llmVerifyFixPlan's own testCheck (run afterward, same tree, clean
+// worktree) is then a cache hit rather than a second full-suite run.
+func TestRunVerifyPipeline_HappyPath_ExactlyOneTestExecution(t *testing.T) {
+	gitDir := t.TempDir()
+	baseDir := t.TempDir()
+	ralphDir := filepath.Join(baseDir, ".ralph")
+	promptsDir := filepath.Join(baseDir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), []byte("test {{TASK_TITLE}} {{TASK_DESCRIPTION}} {{ACCEPTANCE_CRITERIA}} {{DIFF_SOURCE}} {{DIFF}}"), 0o644)
+
+	counterFile := filepath.Join(baseDir, "counter.txt")
+	writeCountingMakefile(t, gitDir, counterFile)
+	initGitRepoForCache(t, gitDir)
+
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: gitDir, WorkDir: gitDir, DiffFromBaseResult: "+ stub diff"})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: gitDir, WorkDir: gitDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TestTimeout:   5 * time.Second,
+	}
+	logger := logging.New(nil)
+	vrf := verifier.New(verifier.Config{
+		ProjectDir:  gitDir,
+		PromptsDir:  promptsDir,
+		RalphDir:    ralphDir,
+		TestTimeout: 5 * time.Second,
+	}, logger, nil, &stubQuerier{fn: func(_ context.Context, _, _, _ string) (string, error) {
+		return "YES: looks good", nil
+	}})
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:       logger,
+		Verifier:     vrf,
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: gitDir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-cache-happy", nextTask: "Cache happy path",
+	})
+	if skipReason != "" {
+		l.skipTask("test-cache-happy", tasks.SkipVerificationRejected, skipReason)
+	}
+	if !verified {
+		t.Fatal("expected verification to pass")
+	}
+	if got := countTestExecutions(t, counterFile); got != 1 {
+		t.Errorf("expected exactly 1 full-suite execution (testFixPlan runs for real; llmVerifyFixPlan's testCheck is a cache hit), got %d", got)
+	}
+}
+
+// AC3: no_code_needed path — when the pre-iteration run was green and the
+// tree is unchanged, every test check in the post-agent verify pipeline
+// (testFixPlan's and llmVerifyFixPlan's) is a cache hit: zero full-suite
+// executions.
+func TestRunVerifyPipeline_NoCodeNeeded_TreeUnchanged_ZeroTestExecutions(t *testing.T) {
+	gitDir := t.TempDir()
+	baseDir := t.TempDir()
+	ralphDir := filepath.Join(baseDir, ".ralph")
+	promptsDir := filepath.Join(baseDir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-no-code-needed.md"), []byte("no code needed: {{TASK_TITLE}}"), 0o644)
+
+	counterFile := filepath.Join(baseDir, "counter.txt")
+	writeCountingMakefile(t, gitDir, counterFile)
+	initGitRepoForCache(t, gitDir)
+
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: gitDir, WorkDir: gitDir})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: gitDir, WorkDir: gitDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TestTimeout:   5 * time.Second,
+	}
+	logger := logging.New(nil)
+	vrf := verifier.New(verifier.Config{
+		ProjectDir:  gitDir,
+		PromptsDir:  promptsDir,
+		RalphDir:    ralphDir,
+		TestTimeout: 5 * time.Second,
+	}, logger, nil, &stubQuerier{fn: func(_ context.Context, _, _, _ string) (string, error) {
+		return "YES: confirmed no code needed", nil
+	}})
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:       logger,
+		Verifier:     vrf,
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	// Pre-iteration run: real execution, records the green-tree cache.
+	vrf.RunPreIterationTests(verifier.PreIterationInput{Ctx: context.Background(), WorkDir: gitDir})
+	if got := countTestExecutions(t, counterFile); got != 1 {
+		t.Fatalf("expected 1 real test execution from the pre-iteration run, got %d", got)
+	}
+
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
+		ctx: context.Background(), headBefore: "same-sha",
+		workDir: gitDir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-no-code", nextTask: "No code needed test",
+		skipCommitCheck: true, noCodeNeeded: true, agentSummary: "already implemented",
+	})
+	if skipReason != "" {
+		l.skipTask("test-no-code", tasks.SkipVerificationRejected, skipReason)
+	}
+	if !verified {
+		t.Fatal("expected no_code_needed verification to pass")
+	}
+	if got := countTestExecutions(t, counterFile); got != 1 {
+		t.Errorf("expected zero additional full-suite executions in the post-agent pipeline (all cache hits), got %d total executions", got)
 	}
 }

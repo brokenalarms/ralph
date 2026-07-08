@@ -8,7 +8,9 @@
 // entry point. The loop orchestrates these operations: it fetches fresh
 // HEAD/diff from its own git module between calls, tracks retry counters as
 // local variables, and writes state-store side effects. Verifier never holds
-// or reaches into git / state / tasks modules.
+// a reference to the git/state/tasks modules — its one exception is calling
+// git.TreeHash/git.WorktreeClean, two stateless data-only queries (no
+// git.Ops, no module instance) used to key the green-tree test cache.
 //
 // Verifier owns two submodules at construction time:
 //
@@ -27,10 +29,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/verify"
 )
@@ -102,6 +106,16 @@ type Verifier struct {
 	logger    *logging.Logger
 	newRunner RunnerFactory
 	querier   Querier
+
+	// greenCache records the last tree hash a full RunTests/RunPreIterationTests
+	// run passed on, keyed by the dir it ran in. A later RunTests call for the
+	// same dir whose current tree hash matches AND whose worktree is clean is
+	// a cache hit — it returns the recorded pass without invoking the test
+	// command. Not persisted across process restarts (out of scope for this
+	// in-process cache).
+	greenCacheMu   sync.Mutex
+	greenCacheDir  string
+	greenCacheTree string
 }
 
 // New creates a Verifier from a pure-data Config, a logger, an explicit
@@ -133,6 +147,11 @@ func New(cfg Config, logger *logging.Logger, newRunner RunnerFactory, querier Qu
 // own operation; callers (Loop) only log orchestration concerns like retry
 // counters. Returns the test result and elapsed duration.
 func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, time.Duration) {
+	if tree, ok := v.checkGreenCache(dir); ok {
+		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests cached: tree %s already green", tree)
+		return verify.Result{Passed: true, Reason: "cached: tree " + tree + " already green"}, 0
+	}
+
 	v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running test suite...")
 
 	start := time.Now()
@@ -161,11 +180,52 @@ func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, tim
 		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
 	case result.Passed:
 		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
+		v.recordGreenCache(dir)
 	default:
 		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (%s): %s", elapsed, result.Reason)
 	}
 
 	return result, elapsed
+}
+
+// checkGreenCache reports whether dir's current tree hash matches the last
+// recorded green run for dir and the worktree is clean. Returns the tree
+// hash and true on a cache hit. A dirty worktree, a changed tree, or a dir
+// mismatch (including non-git dirs, where TreeHash returns "") is always a
+// miss — real work never reads a stale cache.
+func (v *Verifier) checkGreenCache(dir string) (string, bool) {
+	v.greenCacheMu.Lock()
+	cachedDir, cachedTree := v.greenCacheDir, v.greenCacheTree
+	v.greenCacheMu.Unlock()
+
+	if cachedTree == "" || cachedDir != dir {
+		return "", false
+	}
+	tree := git.TreeHash(dir)
+	if tree == "" || tree != cachedTree {
+		return "", false
+	}
+	if !git.WorktreeClean(dir) {
+		return "", false
+	}
+	return tree, true
+}
+
+// recordGreenCache records dir's current tree hash as the last known green
+// run. Called only after a passing test run. A hash that cannot be computed
+// (non-git dir) simply clears any prior cache for dir rather than recording
+// a bad key.
+func (v *Verifier) recordGreenCache(dir string) {
+	tree := git.TreeHash(dir)
+	v.greenCacheMu.Lock()
+	defer v.greenCacheMu.Unlock()
+	if tree == "" {
+		if v.greenCacheDir == dir {
+			v.greenCacheDir, v.greenCacheTree = "", ""
+		}
+		return
+	}
+	v.greenCacheDir, v.greenCacheTree = dir, tree
 }
 
 // CompileCheck runs the build/type check (go build / tsc --noEmit) in dir.
@@ -399,6 +459,7 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 	if result.Passed {
 		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing (%s, %s)", result.Command, out.TestElapsed)
 		out.Message += "\n" + v.statusFragment("status-tests-pass.md")
+		v.recordGreenCache(in.WorkDir)
 	} else if result.ScriptMissing {
 		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — skipping test suite")
 	} else {

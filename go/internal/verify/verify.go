@@ -158,8 +158,8 @@ func RunTests(ctx context.Context, timeout time.Duration, configVerify string, d
 
 	if startErr := cmd.Start(); startErr != nil {
 		return Result{
-			Passed: false,
-			Reason: fmt.Sprintf("failed to start test command: %v", startErr),
+			Passed:  false,
+			Reason:  fmt.Sprintf("failed to start test command: %v", startErr),
 			Command: command,
 			Dir:     tc.Dir,
 		}
@@ -593,4 +593,3 @@ func lastNLines(s string, n int) string {
 	}
 	return strings.Join(lines[len(lines)-n:], "\n")
 }
-
