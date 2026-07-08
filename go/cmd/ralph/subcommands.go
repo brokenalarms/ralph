@@ -530,7 +530,10 @@ func preloadTaskContext(backend tasks.Backend, log *logging.Logger) string {
 		log.Emit(logging.Opts{Level: logging.Warn}, "bd not found, skipping startup preload")
 	}
 
-	if closedList, closedErr := backend.ListClosed(); closedErr == nil {
+	closedList, closedErr := backend.ListClosed()
+	if closedErr != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "bd list closed failed, skipping audit-window: %v", closedErr)
+	} else {
 		unaudited := tasks.UnauditedClosures(closedList, config.LoopAssignee, time.Now(), tasks.AuditWindow)
 		if len(unaudited) > 0 {
 			parts = append(parts, formatAuditWindow(unaudited))

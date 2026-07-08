@@ -857,14 +857,14 @@ func (b *BD) ListClosed() ([]ClosedTaskInfo, error) {
 		return nil, err
 	}
 	var items []struct {
-		ID       string            `json:"id"`
-		Title    string            `json:"title"`
-		Assignee string            `json:"assignee"`
-		ClosedAt string            `json:"closed_at"`
-		Metadata map[string]string `json:"metadata"`
+		ID       string                     `json:"id"`
+		Title    string                     `json:"title"`
+		Assignee string                     `json:"assignee"`
+		ClosedAt string                     `json:"closed_at"`
+		Metadata map[string]json.RawMessage `json:"metadata"`
 	}
 	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil {
-		return nil, nil
+		return nil, jsonErr
 	}
 	result := make([]ClosedTaskInfo, 0, len(items))
 	for _, it := range items {
@@ -872,15 +872,36 @@ func (b *BD) ListClosed() ([]ClosedTaskInfo, error) {
 			continue
 		}
 		closedAt, _ := time.Parse(time.RFC3339, it.ClosedAt)
+		var metadata map[string]string
+		if len(it.Metadata) > 0 {
+			metadata = make(map[string]string, len(it.Metadata))
+			for k, v := range it.Metadata {
+				metadata[k] = metadataValueToString(v)
+			}
+		}
 		result = append(result, ClosedTaskInfo{
 			ID:       it.ID,
 			Title:    it.Title,
 			Assignee: it.Assignee,
 			ClosedAt: closedAt,
-			Metadata: it.Metadata,
+			Metadata: metadata,
 		})
 	}
 	return result, nil
+}
+
+// metadataValueToString converts a JSON scalar metadata value into its
+// string form. bd stores metadata values as whatever JSON type the writer
+// used (e.g. numeric-looking values like failed_starts or compaction_parks
+// are written as JSON ints, not strings) — a JSON string is unquoted, and
+// every other scalar (int, bool, null) keeps its literal JSON text, so an
+// int 1 becomes "1" rather than a float-rounded "1.0".
+func metadataValueToString(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
 }
 
 func (b *BD) AppendNotes(id, msg string) error {
