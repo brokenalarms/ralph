@@ -5,6 +5,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -50,6 +51,72 @@ func TestRunAgent_CancelledContext_ReturnsImmediately(t *testing.T) {
 	}
 	if runnerCalled {
 		t.Error("runner must not be called when context is cancelled")
+	}
+}
+
+// When prepareAndBuildPrompt aborts after ClaimTask already claimed the task
+// (here: WaitForInternet declines during the wait-for-connectivity step),
+// runAgent must release the claim before returning actionDone — otherwise
+// the bead is left orphaned in_progress with no agent working it.
+func TestRunAgent_PrepareAbortsAfterClaim_ReleasesClaim(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix something", NextID: "ralph-abrt"}
+	logger := logging.New(nil)
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir}),
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: &stubConnectivity{offline: true, waitDeclined: true},
+	})
+
+	result := l.runAgent(context.Background(), taskContext{id: "ralph-abrt", title: "Fix something"}, 1)
+
+	if result.action != actionDone {
+		t.Errorf("expected actionDone, got %v", result.action)
+	}
+	if backend.ReopenedTask != "ralph-abrt" {
+		t.Errorf("expected claim released via ReopenTask(ralph-abrt), got ReopenedTask=%q", backend.ReopenedTask)
+	}
+}
+
+// Verifies that when the rate limit wait is interrupted by context cancellation,
+// handleRunResult returns actionDone and releases the task claim (ReopenTask)
+// so the bead ends up open, not orphaned in_progress.
+func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+	backend := &testutil.StubBackend{}
+	l.taskBackend = backend
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	resetAt := time.Now().Add(10 * time.Minute)
+	runIter := 3
+	result := claude.Result{RateLimited: true, ResetAt: resetAt}
+	action := handleRunResultCall(l, ctx, result, nil,
+		"task-rl", "Rate limited task", "abc123", runIter)
+
+	if action != actionDone {
+		t.Fatalf("expected actionDone, got %d", action)
+	}
+	if backend.ReopenedTask != "task-rl" {
+		t.Errorf("expected claim released via ReopenTask(task-rl), got ReopenedTask=%q", backend.ReopenedTask)
 	}
 }
 

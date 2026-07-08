@@ -519,6 +519,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 
 	prep, ok := l.prepareAndBuildPrompt(ctx, task.id, task.title)
 	if !ok {
+		l.releaseClaimForRetry(task.id)
 		return agentRunResult{action: actionDone}
 	}
 

@@ -723,6 +723,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		})
 		if err != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Rate limit wait interrupted: %v", err)
+			l.releaseClaimForRetry(taskID)
 			return actionDone
 		}
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: l.cfg.WorkingModel}, "Rate limit reset — resuming")
