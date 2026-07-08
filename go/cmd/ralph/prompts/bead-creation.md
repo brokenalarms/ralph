@@ -192,7 +192,7 @@ Always:
    Resets the worktree to origin/main after each squash-merge so stale
    branches don't accumulate.
 
-   Looks good? (enter to release to the loop, or type changes)
+   Looks good? ('release' to hand to the loop, or type changes)
 3. **On approval** → release with `bd update <id> -a=ralph-loop`. (For a bead you
    will work yourself, leave it owned and start the work instead of releasing.)
 4. **On changes** → apply with `bd update` (title, description, priority, labels,
