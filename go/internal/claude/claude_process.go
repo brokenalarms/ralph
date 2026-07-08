@@ -151,12 +151,18 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		}
 	}
 
-	// Check for Claude rate limit in the raw log output.
-	if !result.SignalDetected && !result.IdleTimeout {
+	// Check for Claude rate limit in the raw log output. Runs even when the
+	// session was classified as an idle timeout — a server-side throttle can
+	// stall output long enough for the idle watchdog to fire before the
+	// throttle evidence (JSON rate_limit_event or plaintext "hit your limit")
+	// is scanned in real time, so this fallback reclassifies the result
+	// instead of letting the throttle masquerade as an idle timeout.
+	if !result.SignalDetected {
 		if logData, err := os.ReadFile(cfg.RawLog); err == nil {
 			if resetAt, found := ScanRawLogForRateLimit(string(logData), time.Now()); found {
 				result.RateLimited = true
 				result.ResetAt = resetAt
+				result.IdleTimeout = false
 				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Claude rate limit detected — resets at %s", resetAt.Format("3:04pm"))
 			}
 		}

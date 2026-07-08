@@ -709,6 +709,26 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}
+	// Checked before IdleTimeout/WallClockTimeout: a throttled run that also
+	// looks idle (output stalls under rate limiting) must wait-and-retry
+	// rather than accrue an idle-timeout failure toward the skip cap. In the
+	// normal path claude.Runner already clears IdleTimeout when it
+	// reclassifies a run as RateLimited (see claude_process.go); this
+	// ordering is belt-and-suspenders for the case where both are ever set.
+	if result.RateLimited {
+		waitDur := claude.FormatWaitDuration(time.Until(result.ResetAt))
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
+		err := l.limiter.WaitUntil(ctx, result.ResetAt, func(secs int) {
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.WorkingModel}, "Rate limit: %ds until reset", secs)
+		})
+		if err != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Rate limit wait interrupted: %v", err)
+			return actionDone
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: l.cfg.WorkingModel}, "Rate limit reset — resuming")
+		l.releaseClaimForRetry(taskID)
+		return actionRetry
+	}
 	if result.IdleTimeout || result.WallClockTimeout {
 		kind := "idle timeout"
 		analysis := "idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output"
@@ -751,20 +771,6 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			l.recordSkipStreak(tasks.SkipIdleTimeout)
 			return actionRetry
 		}
-		l.releaseClaimForRetry(taskID)
-		return actionRetry
-	}
-	if result.RateLimited {
-		waitDur := claude.FormatWaitDuration(time.Until(result.ResetAt))
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
-		err := l.limiter.WaitUntil(ctx, result.ResetAt, func(secs int) {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.WorkingModel}, "Rate limit: %ds until reset", secs)
-		})
-		if err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.WorkingModel}, "Rate limit wait interrupted: %v", err)
-			return actionDone
-		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: l.cfg.WorkingModel}, "Rate limit reset — resuming")
 		l.releaseClaimForRetry(taskID)
 		return actionRetry
 	}

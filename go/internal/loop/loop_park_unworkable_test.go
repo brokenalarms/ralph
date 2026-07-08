@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -14,6 +15,70 @@ import (
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
+
+// Verifies that when a result has both RateLimited and IdleTimeout set (the
+// belt-and-suspenders case — claude.Runner's post-exit fallback normally
+// clears IdleTimeout when it reclassifies a run as RateLimited, but
+// handleRunResult must not depend on that), the RateLimited branch takes
+// precedence: the run waits and retries without incrementing
+// taskIdleTimeouts or calling skipTask.
+func TestHandleRunResult_RateLimitedTakesPrecedenceOverIdleTimeout(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+
+	backend := &testutil.StubBackend{}
+	l.taskBackend = backend
+	l.currentTaskID = "task-both"
+	l.taskIdleTimeouts = l.maxIdleTimeoutFailures() - 1
+
+	resetAt := time.Now().Add(-1 * time.Second)
+	result := claude.Result{RateLimited: true, IdleTimeout: true, ResetAt: resetAt}
+	action := handleRunResultCall(l, context.Background(), result, nil,
+		"task-both", "Throttled task", "abc123", 3)
+
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry, got %d", action)
+	}
+	if l.taskIdleTimeouts != l.maxIdleTimeoutFailures()-1 {
+		t.Errorf("expected taskIdleTimeouts unchanged at %d, got %d", l.maxIdleTimeoutFailures()-1, l.taskIdleTimeouts)
+	}
+	if backend.SkippedTask != "" {
+		t.Errorf("expected skipTask not called, got skipped task %q", backend.SkippedTask)
+	}
+}
+
+// Verifies criterion 4 (existing behavior preserved): a genuine idle timeout
+// with NO throttle evidence — RateLimited is false, so the RateLimited branch
+// that now precedes the IdleTimeout branch is skipped — still increments
+// taskIdleTimeouts and skips the task via SkipIdleTimeout once the count
+// reaches maxIdleTimeoutFailures. The git stub reports a landed commit so the
+// failed-start cap is bypassed and the idle-timeout cap is the branch that
+// fires.
+func TestHandleRunResult_GenuineIdleTimeoutIncrementsAndSkips(t *testing.T) {
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
+	l.git = git.NewStub(git.StubRepoConfig{LogOnelineResult: "abc123 commit landed"})
+
+	backend := &testutil.StubBackend{}
+	l.taskBackend = backend
+	l.currentTaskID = "task-idle-genuine"
+	l.taskIdleTimeouts = l.maxIdleTimeoutFailures() - 1
+
+	result := claude.Result{IdleTimeout: true}
+	action := handleRunResultCall(l, context.Background(), result, nil,
+		"task-idle-genuine", "Genuinely idle task", "abc123", 3)
+
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry, got %d", action)
+	}
+	if l.taskIdleTimeouts != l.maxIdleTimeoutFailures() {
+		t.Errorf("expected taskIdleTimeouts incremented to %d, got %d", l.maxIdleTimeoutFailures(), l.taskIdleTimeouts)
+	}
+	if backend.SkippedTask != "task-idle-genuine" {
+		t.Errorf("expected task skipped, got %q", backend.SkippedTask)
+	}
+	if backend.SkipReason != string(tasks.SkipIdleTimeout) {
+		t.Errorf("expected skip reason %q, got %q", tasks.SkipIdleTimeout, backend.SkipReason)
+	}
+}
 
 // Proves: a Compacted result parks the task even when the task has open
 // dependents — the strand guard is removed, so open deps never block parking.
