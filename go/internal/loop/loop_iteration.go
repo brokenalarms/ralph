@@ -569,7 +569,7 @@ type iterationPrompt struct {
 	workDir    string
 }
 
-// prepareAndBuildPrompt sets the task phase, runs pre-iteration tests, reads
+// prepareAndBuildPrompt sets the task phase, runs baseline tests, reads
 // feedback, assembles attempt context, and builds the full prompt. Returns
 // false if Run() should break (internet or rate limit unavailable).
 func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask string) (iterationPrompt, bool) {
@@ -589,7 +589,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
-	testStatus := l.runPreIterationTests(ctx)
+	testStatus := l.runBaselineTests(ctx)
 
 	if !l.connectivity.WaitForInternet(ctx, l.logger) {
 		return iterationPrompt{}, false

@@ -152,14 +152,14 @@ Ralph assigns models per role, configured in `.ralph/config.toml` as bare tier a
 
 ### Verification pipeline
 
-Tests run via the project's `ralph:verify` script — a package.json script or Makefile target (or the `verify` key in config.toml). Each iteration starts with a pre-iteration run of that suite plus a compile check, so the agent starts from a known-green tree.
+Tests run via the project's `ralph:verify` script — a package.json script or Makefile target (or the `verify` key in config.toml). Each iteration starts with a baseline run of that suite plus a compile check, so the agent starts from a known-green tree.
 
 After the agent signals completion:
 
 1. **Test suite** — the full `ralph:verify` suite must pass. If it fails, a fix agent is spawned to address the failures (up to 3 retries).
 2. **LLM diff review** — haiku reviews the diff against the bead's acceptance criteria. If rejected, a fix agent addresses the issues (up to 3 retries, escalating to sonnet).
 
-Green test runs are cached by git tree hash: a run on a tree that already passed is skipped instead of re-executed, and the cache persists in `state.json` across iterations. Because squash-merging preserves the verified tree, the pre-iteration check after a merge is normally a cache hit — only a genuine tree change (agent or fix-agent commits, or another change landing on the base) triggers a real run. The first iteration of a fresh session always runs the suite to capture the starting state of the world.
+Green test runs are cached by git tree hash: a run on a tree that already passed is skipped instead of re-executed, and the cache persists in `state.json` across iterations. Because squash-merging preserves the verified tree, the baseline check after a merge is normally a cache hit — only a genuine tree change (agent or fix-agent commits, or another change landing on the base) triggers a real run. The first iteration of a fresh session always runs the suite to capture the starting state of the world.
 
 ### Merge pipeline
 

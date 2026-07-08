@@ -508,12 +508,12 @@ func TestIntegrationReal_PriorIterationCommit_SignalOnRetry_ShipsAndCloses(t *te
 // derive its starting point from that branch — not from origin/main — so
 // the stack is coherent.
 //
-// It also covers ralph-3sie's pre-iteration test cache ordering: no
+// It also covers ralph-3sie's baseline test cache ordering: no
 // VerifyHook is set, so verification falls through to the real
 // runSimpleVerifyCompletion path (real l.verifier.RunTests against the real
 // worktree), and a counting ralph-verify Makefile target lets the test
 // count real invocations. Task A's post-agent green run (after its commit)
-// primes the tree-hash cache; task B's pre-iteration test phase starts on
+// primes the tree-hash cache; task B's baseline test phase starts on
 // that same unchanged tree (no push/merge alters worktree content between
 // iterations here) and must be a cache hit — the test command must not run
 // again for it.
@@ -521,7 +521,7 @@ func TestIntegrationReal_PriorIterationCommit_SignalOnRetry_ShipsAndCloses(t *te
 // Observable end-state: both tasks closed via the ship pipeline, both
 // agent commits present in the project repo's log, and exactly 3 real test
 // invocations across the 4 potential test phases (2 iterations × pre +
-// post-agent) — proving task B's pre-iteration phase was the cache hit.
+// post-agent) — proving task B's baseline phase was the cache hit.
 func TestIntegrationReal_TwoTasksCompleteSequentially(t *testing.T) {
 	setup := newGitIntegrationSetup(t)
 	// Prompts live outside the project repo (unlike other tests in this
@@ -628,7 +628,7 @@ func TestIntegrationReal_TwoTasksCompleteSequentially(t *testing.T) {
 		Connectivity: onlineStubConnectivity(),
 		// No VerifyHook: verification falls through to the real
 		// runSimpleVerifyCompletion path (real l.verifier.RunTests), so this
-		// test can observe the pre-iteration test cache hit ordering.
+		// test can observe the baseline test cache hit ordering.
 	})
 	l.runner = runner
 
@@ -657,15 +657,15 @@ func TestIntegrationReal_TwoTasksCompleteSequentially(t *testing.T) {
 	}
 
 	// ralph-3sie: task A's post-agent green run primes the tree-hash cache;
-	// task B's pre-iteration test phase starts on that same unchanged tree
+	// task B's baseline test phase starts on that same unchanged tree
 	// and must be a cache hit, so the counting Makefile target only runs 3
 	// times (task A pre + task A post-agent + task B post-agent) instead of
-	// 4 (task B's pre-iteration phase is the one skipped).
+	// 4 (task B's baseline phase is the one skipped).
 	if got := countTestInvocations(t, counterFile); got != 3 {
-		t.Errorf("expected 3 real test invocations (task B's pre-iteration phase should be a cache hit), got %d", got)
+		t.Errorf("expected 3 real test invocations (task B's baseline phase should be a cache hit), got %d", got)
 	}
 	if !strings.Contains(logBuf.String(), "Tests cached: tree") {
-		t.Errorf("expected a distinct cache-hit log line for task B's pre-iteration cache hit, got log:\n%s", logBuf.String())
+		t.Errorf("expected a distinct cache-hit log line for task B's baseline cache hit, got log:\n%s", logBuf.String())
 	}
 
 	// Observable: the green-tree cache persisted to state.json, so a new

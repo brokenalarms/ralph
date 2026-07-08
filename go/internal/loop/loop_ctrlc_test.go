@@ -204,9 +204,9 @@ func TestLoop_NoSignal_ReleasesClaimViaSetPhaseInterrupted(t *testing.T) {
 	}
 }
 
-// After Ctrl+C, runPreIterationTests must return "" immediately without
+// After Ctrl+C, runBaselineTests must return "" immediately without
 // emitting "Running test suite" or compile-check log lines.
-func TestRunPreIterationTests_CancelledContext_SkipsTests(t *testing.T) {
+func TestRunBaselineTests_CancelledContext_SkipsTests(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
@@ -233,7 +233,7 @@ func TestRunPreIterationTests_CancelledContext_SkipsTests(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	result := l.runPreIterationTests(ctx)
+	result := l.runBaselineTests(ctx)
 
 	if result != "" {
 		t.Errorf("expected empty string when cancelled, got %q", result)

@@ -974,7 +974,7 @@ func (l *Loop) shipPhase2Merge(ctx context.Context, taskID, title, workDir, rawL
 		if mergeResult.CIFailure && mergeResult.CIFailureDetail != nil {
 			// Infrastructure failure (zero job steps): CI never actually ran —
 			// billing, runner allocation, or a broken workflow file. The work is
-			// already verified locally by pre-iteration tests + the pre-push
+			// already verified locally by baseline tests + the pre-push
 			// compile check, so there is nothing for a fix agent to do.
 			// Close the bead, leave the PR open, and move on — it will merge
 			// when CI infrastructure recovers. Spawning an expensive fix agent

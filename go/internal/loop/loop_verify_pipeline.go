@@ -392,16 +392,16 @@ func (l *Loop) maxLLMVerifyAttempts() int {
 	return 3
 }
 
-// runPreIterationTests runs pre-iteration test and compile checks via the
+// runBaselineTests runs the baseline test and compile checks via the
 // verifier and writes last_test_result/last_test_time to state. Verifier
 // reports results; Loop writes state. Returns the human-readable status
 // message to append to the agent prompt.
-func (l *Loop) runPreIterationTests(ctx context.Context) string {
+func (l *Loop) runBaselineTests(ctx context.Context) string {
 	if ctx.Err() != nil {
 		return ""
 	}
 
-	result := l.verifier.RunPreIterationTests(verifier.PreIterationInput{Ctx: ctx, WorkDir: l.git.GetWorkDir()})
+	result := l.verifier.RunBaselineTests(verifier.BaselineInput{Ctx: ctx, WorkDir: l.git.GetWorkDir()})
 	if result.TestResult.ScriptMissing {
 		return result.Message
 	}
