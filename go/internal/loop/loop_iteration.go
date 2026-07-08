@@ -589,15 +589,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
-	buildStatus := verify.RunVerifyBuild(ctx, verify.RunVerifyBuildParams{
-		VerifyBuild: l.cfg.VerifyBuild,
-		WorktreeDir: l.git.GetWorkDir(),
-		ProjectDir:  l.cfg.Dirs.ProjectDir,
-		PromptsDir:  l.cfg.Dirs.PromptsDir,
-		TestTimeout: l.cfg.TestTimeout,
-		Logger:      l.logger,
-	})
-	testStatus := buildStatus + l.runPreIterationTests(ctx)
+	testStatus := l.runPreIterationTests(ctx)
 
 	if !l.connectivity.WaitForInternet(ctx, l.logger) {
 		return iterationPrompt{}, false

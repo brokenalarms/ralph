@@ -664,6 +664,26 @@ func TestLoadConfigNoOpWhenFileMissing(t *testing.T) {
 	}
 }
 
+// Verifies that a config.toml left over from before verify_build was removed
+// does not crash config loading — unknown keys are silently skipped, and
+// other keys in the same file still load correctly.
+func TestLoadConfigFileIgnoresRemovedVerifyBuildKey(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	content := "verify_build = \"npm run build\"\nmax_iterations = 42\n"
+	os.WriteFile(tomlPath, []byte(content), 0o644)
+
+	cfg, _ := Parse(nil)
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile should not error on unknown verify_build key, got: %v", err)
+	}
+	if cfg.MaxIterations != 42 {
+		t.Errorf("MaxIterations = %d, want 42 (verify_build line should not block later keys)", cfg.MaxIterations)
+	}
+}
+
 // Verifies that LoadConfigFile ignores comments and blank lines,
 // matching bats test "load_config ignores comments and blank lines".
 func TestLoadConfigIgnoresCommentsAndBlankLines(t *testing.T) {
@@ -879,7 +899,7 @@ func TestInitConfigIncludesVerifyComment(t *testing.T) {
 	}
 }
 
-// Verifies that InitConfig omits keys with empty defaults (post_task, verify_build)
+// Verifies that InitConfig omits keys with empty defaults (post_task)
 // so the generated file doesn't contain confusing "post_task = " lines.
 func TestInitConfigOmitsEmptyDefaults(t *testing.T) {
 	dir := t.TempDir()
@@ -895,7 +915,7 @@ func TestInitConfigOmitsEmptyDefaults(t *testing.T) {
 	}
 
 	content := string(data)
-	for _, key := range []string{"post_task", "verify_build"} {
+	for _, key := range []string{"post_task"} {
 		if strings.Contains(content, key) {
 			t.Errorf("generated config should not contain empty-default key %q", key)
 		}

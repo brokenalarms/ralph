@@ -119,7 +119,7 @@ func createPromptTemplatesIn(t *testing.T, dir string) {
 		"feedback.md", "refactor.md", "refactor-style.md",
 		"execution-bd.md", "bead-creation.md", "verify-review.md",
 		"status-tests-pass.md", "status-tests-failing.md",
-		"status-build-failing.md", "status-build-broken.md",
+		"status-build-failing.md",
 		"status-tests-failure-context.md", "status-build-failure-context.md",
 	}
 	for _, name := range names {

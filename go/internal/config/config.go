@@ -77,7 +77,6 @@ type Config struct {
 	VerifyEscalationModel      string
 	FixModel                   string
 	PostTask                   string
-	VerifyBuild                string
 	Verify                     string
 	Notify                     bool
 	CIPollTimeout              time.Duration

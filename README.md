@@ -103,7 +103,6 @@ Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 | `--evolve` | Self-improving mode: re-exec ralph after each merged task so improvements take effect immediately (requires `--auto-merge`) | — | |
 | `--wait` | Keep running after the backlog empties, polling for new tasks | — | |
 | `--post-task <script>` | Run a script after each task completes, before evolve re-exec. Receives `RALPH_TASK_ID`, `RALPH_PR_NUMBER`, and `RALPH_MERGED` env vars. | — | |
-| `--verify-build <script>` | Run a script before pre-iteration tests to check project-level build health | — | |
 | `--notify` | Send macOS notification on each task completion | — | |
 | `--tmux` | Run in tmux 3-pane layout (status / output / plan) | — | |
 
