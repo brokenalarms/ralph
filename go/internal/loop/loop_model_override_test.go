@@ -15,7 +15,7 @@ import (
 )
 
 // A task with metadata model=sonnet must run its iteration agent on sonnet,
-// with the log line naming the model and the task-override source.
+// with the log line naming the model and the bead-metadata-override source.
 func TestResolveAgentModel_ValidOverride_UsesTaskModel(t *testing.T) {
 	backend := &testutil.MutableBackend{
 		Metadata: map[string]map[string]string{
@@ -34,13 +34,15 @@ func TestResolveAgentModel_ValidOverride_UsesTaskModel(t *testing.T) {
 	if model != "sonnet" {
 		t.Errorf("expected model %q, got %q", "sonnet", model)
 	}
-	if source != "task override" {
-		t.Errorf("expected source %q, got %q", "task override", source)
+	if source != "set by bead model metadata" {
+		t.Errorf("expected source %q, got %q", "set by bead model metadata", source)
 	}
 }
 
 // A task with an unrecognized model metadata value must log a warning and
-// fall back to cfg.WorkingModel rather than passing the bogus value through.
+// fall back to cfg.WorkingModel rather than passing the bogus value through,
+// reporting the fallback's true origin (here, the built-in default since
+// WorkingModelSource is unset).
 func TestResolveAgentModel_InvalidOverride_FallsBackWithWarning(t *testing.T) {
 	backend := &testutil.MutableBackend{
 		Metadata: map[string]map[string]string{
@@ -59,8 +61,8 @@ func TestResolveAgentModel_InvalidOverride_FallsBackWithWarning(t *testing.T) {
 	if model != "opus" {
 		t.Errorf("expected fallback to WorkingModel %q, got %q", "opus", model)
 	}
-	if source != "" {
-		t.Errorf("expected empty source on fallback, got %q", source)
+	if source != "built-in default" {
+		t.Errorf("expected fallback source %q, got %q", "built-in default", source)
 	}
 	if !strings.Contains(buf.String(), "gpt5") {
 		t.Errorf("expected warning to name the unrecognized value, got log: %s", buf.String())
@@ -70,8 +72,34 @@ func TestResolveAgentModel_InvalidOverride_FallsBackWithWarning(t *testing.T) {
 	}
 }
 
+// A task with an unrecognized model metadata value falls back to
+// cfg.WorkingModel, and the reported source must reflect config.toml when
+// that is what set WorkingModelSource — not a bare "built-in default".
+func TestResolveAgentModel_InvalidOverride_FallsBackReportsConfigTomlSource(t *testing.T) {
+	backend := &testutil.MutableBackend{
+		Metadata: map[string]map[string]string{
+			"ralph-abc": {"model": "gpt5"},
+		},
+	}
+	l := &Loop{
+		cfg:         Config{WorkingModel: "opus", WorkingModelSource: "set by working_model in config.toml"},
+		taskBackend: backend,
+		logger:      logging.New(nil),
+	}
+
+	model, source := l.resolveAgentModel("ralph-abc")
+
+	if model != "opus" {
+		t.Errorf("expected fallback to WorkingModel %q, got %q", "opus", model)
+	}
+	if source != "set by working_model in config.toml" {
+		t.Errorf("expected fallback source %q, got %q", "set by working_model in config.toml", source)
+	}
+}
+
 // A task with no model metadata must behave exactly as before: the working
-// model is used unchanged, with no override source.
+// model is used unchanged, with the source naming the built-in default when
+// WorkingModelSource is unset.
 func TestResolveAgentModel_NoMetadata_UsesWorkingModelUnchanged(t *testing.T) {
 	backend := &testutil.MutableBackend{}
 	l := &Loop{
@@ -85,8 +113,28 @@ func TestResolveAgentModel_NoMetadata_UsesWorkingModelUnchanged(t *testing.T) {
 	if model != "opus" {
 		t.Errorf("expected WorkingModel %q, got %q", "opus", model)
 	}
-	if source != "" {
-		t.Errorf("expected empty source, got %q", source)
+	if source != "built-in default" {
+		t.Errorf("expected source %q, got %q", "built-in default", source)
+	}
+}
+
+// A task with no model metadata and a WorkingModelSource set from
+// config.toml must report that source verbatim, not the built-in default.
+func TestResolveAgentModel_NoMetadata_ReportsConfigTomlSource(t *testing.T) {
+	backend := &testutil.MutableBackend{}
+	l := &Loop{
+		cfg:         Config{WorkingModel: "sonnet", WorkingModelSource: "set by working_model in config.toml"},
+		taskBackend: backend,
+		logger:      logging.New(nil),
+	}
+
+	model, source := l.resolveAgentModel("ralph-abc")
+
+	if model != "sonnet" {
+		t.Errorf("expected WorkingModel %q, got %q", "sonnet", model)
+	}
+	if source != "set by working_model in config.toml" {
+		t.Errorf("expected source %q, got %q", "set by working_model in config.toml", source)
 	}
 }
 

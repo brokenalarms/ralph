@@ -129,6 +129,11 @@ type Config struct {
 	LogRetentionDays int
 
 	cliSet map[string]bool
+	// fileSet tracks which ConfigKeys were explicitly set by config.toml,
+	// mirroring cliSet. Needed because a config.toml value equal to the
+	// built-in default is otherwise indistinguishable from "never set" —
+	// see WorkingModelSource.
+	fileSet map[string]bool
 }
 
 // Defaults returns a Config with default values derived from the Flags
@@ -248,6 +253,14 @@ func (c *Config) CLISet(key string) bool {
 	return c.cliSet[key]
 }
 
+// FileSet reports whether a config key was explicitly set by config.toml.
+func (c *Config) FileSet(key string) bool {
+	if c.fileSet == nil {
+		return false
+	}
+	return c.fileSet[key]
+}
+
 // BaseBranchSource reports where the resolved base branch came from, for
 // startup diagnostics. Call after LoadConfigFile. A CLI flag always wins, so it
 // is reported first; otherwise the value came from the environment or the
@@ -261,6 +274,21 @@ func (c *Config) BaseBranchSource() string {
 		return "RALPH_BASE_BRANCH env"
 	}
 	return "config.toml"
+}
+
+// WorkingModelSource reports what set the resolved WorkingModel value, for
+// provenance in log lines. Call after LoadConfigFile. working_model has no
+// CLI flag or env var today, so CLISet is checked first only to future-proof
+// against one being added later; in practice this falls through to fileSet
+// (config.toml explicitly set working_model) or the built-in default.
+func (c *Config) WorkingModelSource() string {
+	if c.CLISet("working_model") {
+		return "set by --working-model flag"
+	}
+	if c.FileSet("working_model") {
+		return "set by working_model in config.toml"
+	}
+	return "built-in default"
 }
 
 // ErrHelp is returned when -h/--help is passed.
@@ -351,6 +379,10 @@ func (c *Config) LoadConfigFile(path string) error {
 			continue
 		}
 		_ = fd.Apply(c, value)
+		if c.fileSet == nil {
+			c.fileSet = make(map[string]bool)
+		}
+		c.fileSet[key] = true
 	}
 	return scanner.Err()
 }

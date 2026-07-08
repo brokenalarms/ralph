@@ -504,6 +504,58 @@ func TestLoadConfigSetsValuesFromTOML(t *testing.T) {
 	}
 }
 
+// Verifies that WorkingModelSource reports the built-in default when neither
+// a CLI flag nor config.toml set working_model.
+func TestWorkingModelSource_BuiltInDefault(t *testing.T) {
+	cfg, _ := Parse(nil)
+
+	if got := cfg.WorkingModelSource(); got != "built-in default" {
+		t.Errorf("WorkingModelSource() = %q, want %q", got, "built-in default")
+	}
+}
+
+// Verifies that WorkingModelSource attributes config.toml when working_model
+// is set there, even when the configured value equals the built-in default
+// ("sonnet") — proving the source is tracked via fileSet, not inferred from
+// value comparison.
+func TestWorkingModelSource_ConfigTomlExplicitDefault(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("working_model = sonnet\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+
+	if cfg.WorkingModel != ModelSonnet {
+		t.Fatalf("WorkingModel = %q, want %q", cfg.WorkingModel, ModelSonnet)
+	}
+	if got := cfg.WorkingModelSource(); got != "set by working_model in config.toml" {
+		t.Errorf("WorkingModelSource() = %q, want %q", got, "set by working_model in config.toml")
+	}
+}
+
+// Verifies that WorkingModelSource attributes config.toml when working_model
+// is set to a non-default value there.
+func TestWorkingModelSource_ConfigTomlNonDefault(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("working_model = opus\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+
+	if cfg.WorkingModel != ModelOpus {
+		t.Fatalf("WorkingModel = %q, want %q", cfg.WorkingModel, ModelOpus)
+	}
+	if got := cfg.WorkingModelSource(); got != "set by working_model in config.toml" {
+		t.Errorf("WorkingModelSource() = %q, want %q", got, "set by working_model in config.toml")
+	}
+}
+
 // A boolean flag set to "false" in config.toml must stay OFF. Bool flag Apply
 // funcs are presence-based (they ignore the value and set true), so the loader
 // must honor the explicit value — otherwise "key = false" enables the flag.

@@ -143,19 +143,24 @@ type Modules struct {
 // no function fields, no module references. The behavioral injection
 // points (Connectivity, hooks, runner) live on Modules.
 type Config struct {
-	Dirs                  workctx.WorkContext
-	PlanFile              string
-	MaxIterations         int
-	AutoMerge             bool
-	Evolve                bool
-	CallsPerHour          int
-	Timeouts              claude.Timeouts
-	PostTask              string
-	VerifyBuild           string
-	Notify                bool
-	Wait                  bool
-	Verbose               bool
-	WorkingModel          string
+	Dirs          workctx.WorkContext
+	PlanFile      string
+	MaxIterations int
+	AutoMerge     bool
+	Evolve        bool
+	CallsPerHour  int
+	Timeouts      claude.Timeouts
+	PostTask      string
+	VerifyBuild   string
+	Notify        bool
+	Wait          bool
+	Verbose       bool
+	WorkingModel  string
+	// WorkingModelSource names what set WorkingModel (config.Config.WorkingModelSource),
+	// e.g. "set by working_model in config.toml" or "built-in default". Used to
+	// give the "Agent model:" log line explicit provenance when no bead
+	// metadata override applies.
+	WorkingModelSource    string
 	Version               string
 	Verify                string // when non-empty, used as the verify command instead of detecting ralph:verify scripts
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
@@ -477,28 +482,40 @@ func (l *Loop) waitForRate(ctx context.Context) bool {
 	return err == nil
 }
 
-// resolveAgentModel returns the working model for the iteration agent and,
-// when it differs from cfg.WorkingModel, a human-readable source label for
-// the log line. A task's "model" metadata overrides the configured working
-// model when it names a recognized model family (config.ModelFamilies); an
-// unrecognized value is logged as a warning and falls back to cfg.WorkingModel.
-// This override applies only to the working agent — fix agents and the
-// verifier always use their own configured models.
+// resolveAgentModel returns the working model for the iteration agent and an
+// explicit set-by phrase naming what determined it, for the log line. A
+// task's "model" metadata overrides the configured working model when it
+// names a recognized model family (config.ModelFamilies), reporting "set by
+// bead model metadata"; otherwise (including when the metadata is
+// unrecognized and a warning is logged) the model is cfg.WorkingModel and the
+// source is cfg.WorkingModelSource, naming whether config.toml or the
+// built-in default set it. This override applies only to the working agent —
+// fix agents and the verifier always use their own configured models.
 func (l *Loop) resolveAgentModel(taskID string) (model, source string) {
 	if l.taskBackend == nil || taskID == "" {
-		return l.cfg.WorkingModel, ""
+		return l.cfg.WorkingModel, l.workingModelSource()
 	}
 	override, err := l.taskBackend.GetMetadata(taskID, "model")
 	if err != nil || override == "" {
-		return l.cfg.WorkingModel, ""
+		return l.cfg.WorkingModel, l.workingModelSource()
 	}
 	for _, family := range config.ModelFamilies {
 		if override == family {
-			return override, "task override"
+			return override, "set by bead model metadata"
 		}
 	}
 	l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Task %s has unrecognized model metadata %q, falling back to %s", taskID, override, l.cfg.WorkingModel)
-	return l.cfg.WorkingModel, ""
+	return l.cfg.WorkingModel, l.workingModelSource()
+}
+
+// workingModelSource returns cfg.WorkingModelSource, falling back to the
+// built-in-default label when unset (e.g. in tests that construct a Config
+// literal without populating it).
+func (l *Loop) workingModelSource() string {
+	if l.cfg.WorkingModelSource == "" {
+		return "built-in default"
+	}
+	return l.cfg.WorkingModelSource
 }
 
 func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int) agentRunResult {
@@ -525,11 +542,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 
 	taskStart := time.Now()
 	agentModel, modelSource := l.resolveAgentModel(task.id)
-	if modelSource != "" {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s (%s)", agentModel, modelSource)
-	} else {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
-	}
+	l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s (%s)", agentModel, modelSource)
 	result, runErr := l.runner.Run(claude.RunConfig{
 		Ctx:          ctx,
 		WorkDir:      prep.workDir,

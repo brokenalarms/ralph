@@ -280,6 +280,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Notify:                   cfg.Notify,
 		Wait:                     cfg.Wait,
 		WorkingModel:             cfg.WorkingModel,
+		WorkingModelSource:       cfg.WorkingModelSource(),
 		Version:                  config.Version,
 		VerifyModel:              cfg.VerifyModel,
 		VerifyEscalationModel:    cfg.VerifyEscalationModel,
