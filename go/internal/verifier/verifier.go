@@ -43,6 +43,13 @@ import (
 // Exported so tests can override it.
 var HeartbeatInterval = 30 * time.Second
 
+// formatHeartbeatElapsed truncates elapsed to whole seconds for the
+// heartbeat log line, so ticker jitter of a few milliseconds past a tick
+// (e.g. 30.001s) doesn't leak sub-second noise into the printed duration.
+func formatHeartbeatElapsed(elapsed time.Duration) string {
+	return elapsed.Truncate(time.Second).String()
+}
+
 // Runner is the minimal subprocess interface verifier uses for fix agents.
 // Verifier only calls Run on fix-agent runners — it never calls StopStreaming
 // or InjectMessage on them, so this is narrower than the loop's claudeRunner
@@ -167,7 +174,7 @@ func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, tim
 				return
 			case <-ticker.C:
 				v.logger.Emit(logging.Opts{Domain: logging.Test},
-					"Tests still running... (%s elapsed)", time.Since(start).Truncate(time.Millisecond))
+					"Tests still running... (%s elapsed)", formatHeartbeatElapsed(time.Since(start)))
 			}
 		}
 	}()

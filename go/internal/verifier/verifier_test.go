@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
 )
@@ -217,6 +218,16 @@ func headSHA(t *testing.T, dir string) string {
 		t.Fatalf("git rev-parse HEAD: %v", err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// The heartbeat line printed while tests run must show whole seconds only —
+// ticker jitter of a few milliseconds past a tick must not leak into the
+// printed duration (e.g. "1m0.001s elapsed" instead of "1m0s elapsed").
+func TestFormatHeartbeatElapsed_TruncatesToWholeSeconds(t *testing.T) {
+	got := formatHeartbeatElapsed(60*time.Second + time.Millisecond)
+	if got != "1m0s" {
+		t.Fatalf("expected jittered 60.001s to format as %q, got %q", "1m0s", got)
+	}
 }
 
 // RunTests caches a green run keyed by tree hash: a second call on the same
