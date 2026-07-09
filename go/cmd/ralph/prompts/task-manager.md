@@ -276,10 +276,11 @@ run `bd <command> --help`.
 - `bd create --title="…" --description="…" --type=bug|task|feature
   --priority=0..4 --acceptance="…" --labels=<a>,<b> -a=ralph-task`
 - `--deps=<id>[,<id>]` at create, or `bd dep add <id> <depends-on>` while iterating
-- `--set-metadata model=sonnet` or `--set-metadata model=opus` at create — every
-  bead needs an explicit model set at create time (see "Model reference" below);
-  `bd update <id> --set-metadata model=sonnet` (or `model=opus`) changes it
-  afterward
+- `--metadata '{"model":"sonnet"}'` or `--metadata '{"model":"opus"}'` at
+  create — every bead needs an explicit model set at create time (see "Model
+  reference" below). `bd create` has no `--set-metadata` flag (unknown flag,
+  the command fails); `bd update <id> --set-metadata model=sonnet` (or
+  `model=opus`) changes it afterward
 
 **Update / release**
 - `bd update <id> --title/--description/--priority/--labels/--notes/--external-ref`
@@ -331,9 +332,10 @@ unset.
 - **Set `model=opus`** for anything requiring judgment, design, multi-file
   reasoning, or diagnosis.
 
-Set it with `--set-metadata model=sonnet` (or `model=opus`) on `bd create`,
-or `bd update <id> --set-metadata model=sonnet` (or `model=opus`) afterward.
-This only overrides the iteration agent's model — fix agents and the
+Set it with `--metadata '{"model":"sonnet"}'` (or `{"model":"opus"}`) on
+`bd create` — `bd create` has no `--set-metadata` flag, only `bd update` does;
+`bd update <id> --set-metadata model=sonnet` (or `model=opus`) changes it
+afterward. This only overrides the iteration agent's model — fix agents and the
 verifier always use their own configured models regardless of a bead's
 `model` metadata.
 

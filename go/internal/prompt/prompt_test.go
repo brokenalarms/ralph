@@ -2041,3 +2041,31 @@ func TestTaskManagerPrompt_BeadDescriptionNamesGoverningSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskManagerPrompt_CreateUsesMetadataJSONNotSetMetadata(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{`--metadata '{"model":"sonnet"}'` + "` or `" + `--metadata '{"model":"opus"}'` + "` at", "Task backend create bullet must show the --metadata JSON form"},
+		{"`bd create` has no `--set-metadata` flag (unknown flag,", "Task backend create bullet must warn --set-metadata fails on create"},
+		{"Set it with `--metadata '{\"model\":\"sonnet\"}'` (or `{\"model\":\"opus\"}`) on", "Model reference section must show the --metadata JSON form for create"},
+		{"`bd create` has no `--set-metadata` flag, only `bd update` does;", "Model reference section must warn --set-metadata is update-only"},
+		{"`bd update <id> --set-metadata model=sonnet` (or `model=opus`) changes it", "bd update examples must retain the --set-metadata key=value form"},
+	}
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+
+	if strings.Contains(result, "`--set-metadata model=sonnet` or `--set-metadata model=opus` at create") {
+		t.Error("prompt still documents --set-metadata as a bd create flag")
+	}
+}
