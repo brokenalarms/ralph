@@ -125,6 +125,19 @@ invariants derived from the spec's enforcement rules — e.g. "no new raw
 through the sanctioned dispatch path" — so the verifier mechanically rejects
 a conforming-looking implementation that reopens a side channel.
 
+**The description must name the governing spec section.** When a bead is
+created in aid of a spec under `docs/specs/` or an overarching multi-bead
+refactor, its description must state which spec file and section (or which
+refactor/epic) the bead advances. This reference is agent-relevant context,
+not project-management metadata: the executing agent gets the architectural
+intent it cannot infer from an isolated bead, and the recent-closure audit's
+wider-context conformance check consumes the pointer to find the governing
+spec instead of re-deriving governance by grepping `docs/specs/` after the
+fact. Labels, dependencies, priority, and type still stay out of the
+description (see "Project-management metadata does NOT belong in the
+description"); the spec/section reference is different — it is the
+architectural frame the agent works against, so it belongs in the prose.
+
 The loop and verifier check work against the bead; this step is the only
 gate that checks the bead against the architecture.
 
@@ -541,6 +554,14 @@ Out-of-scope guidance is the one exception: a short "Out of scope:" section
 that names files/behaviors the agent should NOT change IS useful as agent
 guardrail. Keep it to 1–3 lines and concrete (file or function names). If it
 balloons past that, those items are separate beads.
+
+The governing-spec reference is NOT project-management metadata and DOES
+belong in the description (see "Spec-conformance check"): naming the
+`docs/specs/` file and section — or the overarching refactor — a bead
+advances is architectural intent the executing agent works against, and the
+recent-closure audit's wider-context conformance check reads it as its
+bead-level governance pointer. Labels, dependencies, priority, and type stay
+out of the prose; the spec/section reference stays in.
 
 ### Detail principle — higher reasoning instructs lower reasoning
 
