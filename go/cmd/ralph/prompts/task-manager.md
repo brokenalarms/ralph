@@ -225,6 +225,36 @@ When the user reports minor issues that don't block the loop, create beads for
 them rather than fixing inline. Only switch to hands-on fix mode when the loop
 is broken or the user explicitly asks for a fix.
 
+## Spec remaining-work reconciliation
+
+A spec's remaining-work section is a **backlog source, not documentation**. Any
+`migration-status`, `remaining-work`, or `known-shortcut` list inside a
+`docs/specs/` file records drift the backlog does not yet track — documented,
+known work that stays invisible to the loop until someone trips over its
+symptom. (Observed on tabi: a spec's migration-status section recorded a known
+shortcut from earlier PRs as remaining work; it never became beads, so the drift
+sat outside the backlog until the user hit its symptom.) Every such list must be
+reconciled against the backlog so no un-beaded item is left recorded only in
+prose. Reconcile at both of these moments:
+
+- **When a spec lands in `docs/specs/`** — walk its migration-status /
+  remaining-work / known-shortcut items before considering the spec filed.
+- **Whenever a spec is read during triage or a closure audit** — run the same
+  reconciliation pass on any such list you encounter, so drift recorded after
+  the spec first landed is still caught.
+
+For each un-beaded item, do exactly one of two things — it either becomes an
+owned bead or is explicitly struck from the spec, never left un-reconciled:
+
+1. **Bead it** — create it owned (`-a=ralph-task`), echo the materialized bead,
+   and wait for release approval, exactly as "The one release gate"
+   (bead-creation.md) requires. One bead at a time: no batch create-and-release
+   of a whole remaining-work list, and each bead is reviewed and released on its
+   own turn.
+2. **Strike it from the spec** — when the item no longer reflects reality (already
+   done, obsolete, or superseded), delete the line from the spec so the list
+   stops recording work that isn't pending.
+
 ## Task backend
 
 `bd` auto-discovers `.beads/` by walking up the directory tree, so it works

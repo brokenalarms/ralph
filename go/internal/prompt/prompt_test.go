@@ -30,7 +30,7 @@ func testVars(t *testing.T) Vars {
 		WorkDir:          "/tmp/project/worktree",
 		RalphDir:         "/tmp/project/.ralph",
 		PlanFile:         "/tmp/project/.ralph/plan.md",
-		SignalToken:       "/tmp/project/.ralph/.signal_complete",
+		SignalToken:      "/tmp/project/.ralph/.signal_complete",
 		CurrentTaskToken: "/tmp/project/.ralph/.signal_current_task",
 		AllCompleteToken: "/tmp/project/.ralph/.signal_all_complete",
 		TaskPrompt:       "Fix auth",
@@ -780,6 +780,41 @@ func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {
 		{"slug", "should explain the naming convention with slug"},
 		{"bd update", "should instruct referencing screenshot path in the bead"},
 		{"Read tool", "should mention the fixing agent reads via multimodal Read"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: task-manager.md treats a spec's migration-status / remaining-work /
+// known-shortcut list as a backlog source — each item is reconciled into an
+// owned bead (through the normal create → echo → release gate) or explicitly
+// struck from the spec, both when a spec lands and whenever a spec is read
+// during triage or a closure audit.
+func TestTaskManagerPrompt_SpecRemainingWorkReconciledIntoBeads(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"backlog source, not documentation", "must frame remaining-work lists as a backlog source, not documentation"},
+		{"migration-status", "must name migration-status lists as reconcilable"},
+		{"remaining-work", "must name remaining-work lists as reconcilable"},
+		{"known-shortcut", "must name known-shortcut lists as reconcilable"},
+		{"When a spec lands", "must reconcile when a spec lands in docs/specs/"},
+		{"during triage or a closure audit", "must reconcile whenever a spec is read during triage or audit"},
+		{"struck from the spec", "each un-beaded item is either beaded or explicitly struck from the spec"},
+		{"create it owned", "resulting beads route through the normal owned-create gate"},
+		{"echo the materialized bead", "resulting beads route through the materialized-echo gate"},
+		{"no batch create-and-release", "must forbid batch create+release of reconciled items"},
 	}
 
 	for _, tc := range required {
