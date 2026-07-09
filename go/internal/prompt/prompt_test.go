@@ -2011,3 +2011,33 @@ func TestTaskManagerPrompt_RecentClosureAuditIsSpecConformanceFramed(t *testing.
 		}
 	}
 }
+
+// Proves: the bead-creation guidance requires a spec-governed bead's
+// description to name the governing spec file+section (or overarching
+// refactor), states that reference is consumed by the closure audit's
+// wider-context conformance check, and keeps it as agent-relevant context
+// distinct from the project-management-metadata prohibition.
+func TestTaskManagerPrompt_BeadDescriptionNamesGoverningSpec(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"which spec file and section", "must require naming the governing spec file and section in the description"},
+		{"overarching multi-bead", "must accept an overarching multi-bead refactor as the governance target"},
+		{"wider-context conformance check", "must state the reference is consumed by the closure audit's wider-context conformance check"},
+		{"recent-closure audit", "must tie the description reference to the recent-closure audit"},
+		{"not project-management metadata", "must mark the spec reference as agent-relevant context, not PM metadata"},
+		{"belongs in the", "must state the spec/section reference belongs in the description prose"},
+	}
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
