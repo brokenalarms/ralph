@@ -401,21 +401,24 @@ for docs/.
 
 ## Recent-closure audit
 
-**What this audit IS:** a genuine, code-level re-verification of each closed
-bead — a manual LLM verification pass, equivalent to (and independent of) the
-loop's own verifier. You are re-doing the verification step yourself: reading
-the actual code and judging, criterion by criterion, whether the implemented
-behavior does what the acceptance criteria require.
+**What this audit IS:** a wider-context conformance review of each closed bead —
+does the merged work fit the governing spec and the overarching refactor it
+belongs to? You read the merged code and judge whether it conforms to the
+`docs/specs/` section that governs the touched area and whether it coheres with
+the surrounding structures and the multi-bead effort it is part of. The canonical
+finding this audit exists to catch is a bead implemented correctly in isolation
+that satisfies its ACs *in spirit* while sitting inside a structure the spec
+forbids — a parallel solution that bypasses the mandated architecture. That
+defect is invisible to a diff-scoped, per-AC check.
 
-**What this audit is NOT:** a reconciliation that a closed bead has a matching
-merge commit or PR. That a bead is closed, that a merge commit exists, that the
-PR is green, or that the diff touches the expected files is **NOT** evidence the
-work is correct — the loop's verifier can be fed a wrong or truncated diff, an
-agent can satisfy AC superficially, and work can be stubbed or papered over and
-still merge. Checking that "tasks and PRs line up" is mechanical reconciliation
-the user can do without you. Do not produce that. Treat every closed bead as
-**unverified** until you have read the actual code and confirmed each criterion
-behaviorally.
+**What this audit is NOT:** a per-AC re-verification of the diff. The loop's own
+verifier already ran diff-vs-AC before the bead closed — re-doing it here
+duplicates that pass and still misses the spec-conformance defect above, because
+a bead can satisfy every AC against its diff and still violate the governing
+spec. Do NOT re-verify each acceptance criterion against the diff as an audit
+pass. It is also NOT a reconciliation that "tasks and PRs line up": that a bead
+is closed, a merge commit exists, or the PR is green is mechanical
+reconciliation the user can do without you. Do not produce that.
 
 **Scope — audit ONLY loop-completed beads.** This audit applies exclusively to
 beads that were completed by `ralph-loop` (released to the loop, worked, and
@@ -428,63 +431,66 @@ beads before doing anything else.
 
 When the user answers `yes` to the audit prompt (the audit never runs without
 that go-ahead — see the startup audit check above), run the audit for every
-loop-completed bead in the unaudited window. Each bead gets **two required
-passes** — running only the first is an incomplete audit:
+loop-completed bead in the unaudited window. Each bead gets **an integrity floor
+plus a spec/context conformance pass** — the conformance pass is the primary
+work, the floor is a cheap sanity gate that precedes it.
 
-- **Pass 1 — per-AC verification.** For each acceptance criterion, read the
-  implementation and confirm the behavior is genuinely present. This catches
-  dropped ACs, stubs, and deleted/hollow tests.
-- **Pass 2 — adversarial implementation-correctness review.** This pass is
-  explicitly NOT anchored to the ACs.
+- **Integrity floor (cheap sanity gate).** Confirm the merge commit exists, the
+  diff is non-empty, the change is not stubbed or hollow (real implementation,
+  not a no-op or placeholder), and no tests that exercised the behavior were
+  deleted. This replaces the old per-AC re-verification: it is a floor, not a
+  criterion-by-criterion re-check. A floor failure is reportable on its own.
+- **Spec/context conformance pass (primary).** Verify the merged work in wider
+  context: conformance to the governing `docs/specs/` section, coherence with
+  the overarching multi-bead refactor it belongs to, and correct interaction
+  with adjacent code and the structures the change sits inside. **A conforming
+  diff inside a spec-violating structure is a reportable finding** — drift is
+  reportable even when the bead's original ACs were fully satisfied.
 
-**The frame distinction (do not blur these):** *AC verification asks: is every claim evidenced? Correctness review asks: is the implementation wrong anywhere the ACs are silent?* A bead can pass every AC and still contain a correctness defect the ACs never named — pass 2 exists to find that defect.
+**The frame (do not blur these):** *The integrity floor asks: is this a real,
+non-hollow change with its tests intact? The conformance pass asks: does the
+merged work conform to the governing spec and cohere with the structures around
+it?* A bead can clear the floor and satisfy every AC and still have drifted from
+the spec or the overarching refactor — the conformance pass exists to find that
+drift.
 
-**Pass 1 procedure:**
+**Integrity-floor procedure:**
 
-1. Fetch the bead's acceptance criteria via `bd show <id>`.
-2. Locate the merge commit(s): check the bead's `external-ref` field first; if
-   absent, run `git log --grep=<id> --oneline` in the project directory.
-3. Read the diff for those commits: `git show <sha>` or `git diff <sha>^..<sha>`.
-4. For each AC criterion, **read the actual implementation and verify the
-   behavior is genuinely present** — not worked around, not silently skipped,
-   not papered over. Inspecting the diff is the starting point, not the whole
-   job: when the diff alone cannot settle whether a criterion holds (it calls a
-   helper, relies on surrounding logic, deletes code, or only renames things),
-   open the current state of the affected functions in the merged tree and trace
-   what the code actually does. The test to apply for each criterion is: *if I
-   ran this code, would this criterion hold?* A diff that merely mentions the
-   right file, function, or symbol name is not proof the behavior exists.
-5. Flag any of these as mismatches:
+1. Locate the merge commit(s): check the bead's `external-ref` field first; if
+   absent, run `git log --grep=<id> --oneline` in the project directory. Confirm
+   a merge commit exists and the diff is non-empty.
+2. Read the diff: `git show <sha>` or `git diff <sha>^..<sha>`. Flag any of:
    - Stub-only changes (real implementation replaced by a no-op or placeholder)
    - Deleted tests (tests that previously exercised the behavior are removed)
-   - AC criteria silently dropped — the diff does not address the criterion at all
+   - A hollow diff that touches the right files but implements nothing real
 
-**Pass 2 procedure — run for every merged diff, regardless of the pass-1
-result:**
+**Spec/context conformance procedure — the primary pass:**
 
-1. Read each changed function **IN FULL** in the merged tree — not just the
-   lines an AC names. Partial reads miss defects at the edges of a change.
-2. Enumerate every call site of each changed or renamed symbol and check that
-   each one still behaves correctly under the new implementation.
-3. Probe boundary and edge conditions of any new or changed predicate, break
-   condition, or early-return condition — what input would make this
-   condition true or false when it shouldn't be?
-4. Check interactions with adjacent logic the diff touches but the AC does not
-   name — dedup passes, caching, ordering, state shared with other code paths.
-5. Throughout, ask **"what input would make this change wrong?"** rather than
-   "is this claim evidenced?" — that second question is pass 1's job, not
-   pass 2's.
+1. **Identify the governing spec.** Use the spec reference written in the bead
+   description when one is present. When the bead names no spec, grep
+   `docs/specs/` for the components, files, or symbols the diff touches and take
+   the matching spec section as governing. If no spec governs the touched area,
+   record that and fall back to coherence-with-the-refactor alone.
+2. Read the governing spec section and the merged code together. Verify the work
+   conforms to that section's rules — not merely that it produces the AC's
+   observable behavior, but that it does so through the architecture the spec
+   mandates, not a parallel path that bypasses it.
+3. Read the changed functions **IN FULL** in the merged tree — not just the lines
+   an AC names — and check they interact correctly with the adjacent code and the
+   structures the change sits inside: the call sites of changed symbols, the
+   shared state and ordering, and the containing refactor's other beads.
+4. Throughout, ask **"does this conform to the spec and cohere with the wider
+   refactor?"** — a conforming-looking diff that reopens a side channel the spec
+   forbids, or a solution built parallel to the mandated structure, is drift and
+   a reportable finding **even when every original AC was satisfied**.
 
-A correctness concern found in pass 2 is a **reportable finding regardless of
-the pass-1 result** — an all-ACs-pass bead with an edge-case defect is a
-finding, not a pass. Never let a clean pass-1 result suppress a pass-2 finding.
-
-6. Present findings per bead with **both verdicts stated separately**:
-   - **ACs verified:** yes / no (+ which specific criterion failed, if no)
-   - **Correctness concerns:** none / list (function, the specific input or
-     interaction that breaks it, and what the diff actually did vs. what
-     correct behavior requires)
-7. **Filing corrective beads follows the one release gate, with no exception for audit closeout.** If a finding warrants a new bead, create
+5. Present findings per bead with **both verdicts stated separately**:
+   - **Integrity floor:** pass / fail (+ what failed: stub, deleted test, empty
+     or hollow diff, missing merge commit)
+   - **Spec/context conformance:** conforms / drift (+ the governing spec section
+     and the specific violating structure — what the merged work does vs. what
+     the spec or the overarching refactor requires)
+6. **Filing corrective beads follows the one release gate, with no exception for audit closeout.** If a finding warrants a new bead, create
    it owned (`-a=ralph-task`), echo the materialized bead, and wait — exactly
    as "The one release gate" (bead-creation.md) requires for any other bead.
    Never batch-create and batch-release the corrective beads filed across an
@@ -494,19 +500,21 @@ finding, not a pass. Never let a clean pass-1 result suppress a pass-2 finding.
    filed during it. And never reopen a closed bead to correct it, even here:
    file a new bead that references the original (see "Creating beads" —
    "never reopen closed beads").
-8. As each bead's audit completes (both passes done, verdicts presented), stamp
-   it immediately: `bd update <id> --set-metadata audited=$(date +%s)`. Never
-   batch the stamps to the end of the audit — a stamp dropped at the end
+7. As each bead's audit completes (floor and conformance pass done, verdicts
+   presented), stamp it immediately: `bd update <id> --set-metadata audited=$(date +%s)`.
+   Never batch the stamps to the end of the audit — a stamp dropped at the end
    re-surfaces every bead next session.
 
 **Sub-agent fan-out.** If the audit is parallelized across sub-agents (one
 agent per bead, or a batch per agent), every composed sub-agent prompt MUST
-carry both passes — the pass-1 per-AC checklist AND the pass-2 adversarial
-correctness frame, including the frame-distinction sentence above. A sub-agent
-prompt built only from the pass-1 checklist reproduces the exact failure this
-audit design fixes: a report of "all ACs verified" that never looked past the
-lines the ACs name. Require each sub-agent to return both verdicts separately,
-exactly as step 6 above requires.
+carry the wider-context conformance frame — the integrity floor AND the
+spec/context conformance pass, including the frame sentence above and the
+instruction to identify the governing spec from the bead description or by
+grepping `docs/specs/`. A sub-agent prompt built as a per-AC checklist
+reproduces the exact failure this audit design fixes: a report of "all ACs
+verified" that never asked whether the work conforms to the spec it sits inside.
+Require each sub-agent to return both verdicts separately — integrity floor and
+spec/context conformance — exactly as step 5 above requires.
 
 **Token-cost rationale (do not trim):** Opus on a first pass with no
 verification step still misinterprets work — an audit catches compounding errors

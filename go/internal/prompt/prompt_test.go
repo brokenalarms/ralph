@@ -1904,14 +1904,17 @@ func TestStyleGuide_ForbidsSpecPathReferences(t *testing.T) {
 	}
 }
 
-// Proves: task-manager.md's Recent-closure audit section requires two named
-// passes per audited bead — per-AC verification AND an AC-independent
-// implementation-correctness review — states the frame distinction between
-// them, requires both verdicts to be reported separately per bead, defines a
-// correctness concern on an all-ACs-pass bead as a reportable finding (not a
-// pass), and requires any fanned-out sub-agent prompts to carry the pass-2
-// frame as well as the pass-1 checklist.
-func TestTaskManagerPrompt_RecentClosureAuditRequiresCorrectnessPass(t *testing.T) {
+// Proves: task-manager.md's Recent-closure audit section is framed around
+// wider-context spec conformance, not per-AC re-verification. The primary pass
+// verifies the merged work against the governing docs/specs/ section and the
+// surrounding structures (drift reportable even when the original ACs were
+// satisfied); a cheap integrity floor (merge exists, diff non-empty, not
+// stubbed, tests not deleted) replaces per-AC re-verification; the governing
+// spec is taken from the bead description or by grepping docs/specs/; both
+// verdicts (integrity floor, spec/context conformance) are reported separately;
+// and fanned-out sub-agent prompts carry the wider-context frame, not a per-AC
+// checklist. Stamping, dismiss semantics, and loop-only scope are unchanged.
+func TestTaskManagerPrompt_RecentClosureAuditIsSpecConformanceFramed(t *testing.T) {
 	dir := promptsDir(t)
 	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph", "")
 	if err != nil {
@@ -1932,25 +1935,44 @@ func TestTaskManagerPrompt_RecentClosureAuditRequiresCorrectnessPass(t *testing.
 		substr string
 		reason string
 	}{
-		{"Pass 1", "must name the per-AC verification pass"},
-		{"Pass 2", "must name the AC-independent correctness pass"},
-		{"is every claim evidenced", "must state the AC-verification frame"},
-		{"is the implementation wrong anywhere", "must state the correctness-review frame"},
-		{"IN FULL", "correctness pass must require reading changed functions in full"},
-		{"call site", "correctness pass must require enumerating call sites of changed symbols"},
-		{"boundary and edge conditions", "correctness pass must require probing edge/boundary conditions"},
-		{"adjacent logic", "correctness pass must require checking interactions with adjacent logic"},
-		{"what input would make this change wrong", "correctness pass must use the adversarial framing, not the evidence framing"},
-		{"ACs verified:", "report format must state the AC-verification verdict separately"},
-		{"Correctness concerns:", "report format must state the correctness verdict separately"},
-		{"reportable finding regardless of", "an all-ACs-pass bead with a correctness concern must be a finding, not a pass"},
-		{"Sub-agent fan-out", "must instruct that fanned-out sub-agent prompts carry both passes"},
+		{"Integrity floor", "must name the cheap integrity floor that replaces per-AC re-verification"},
+		{"Spec/context conformance", "must name the primary spec/context conformance pass"},
+		{"governing spec", "must direct the audit to identify the governing spec"},
+		{"docs/specs/", "must reference the docs/specs/ directory the audit conforms work against"},
+		{"grep", "must fall back to grepping docs/specs/ for touched components"},
+		{"spec reference written in the bead", "must use a spec reference from the bead description when present"},
+		{"spec-violating structure is a reportable finding", "drift inside a spec-violating structure must be a finding"},
+		{"even when the bead's original ACs were fully satisfied", "drift must be reportable even when the original ACs were satisfied"},
+		{"non-empty", "integrity floor must require the diff be non-empty"},
+		{"stub", "integrity floor must catch stub-only changes"},
+		{"Deleted tests", "integrity floor must catch deleted tests"},
+		{"Integrity floor:", "report format must state the integrity-floor verdict separately"},
+		{"Spec/context conformance:", "report format must state the conformance verdict separately"},
+		{"conforms / drift", "conformance verdict must be conforms/drift"},
+		{"Sub-agent fan-out", "must instruct that fanned-out sub-agent prompts carry the wider-context frame"},
+		{"wider-context conformance frame", "sub-agent prompts must carry the wider-context conformance frame"},
 		{"loop-completed beads", "scope restriction to loop-completed beads must remain unchanged"},
 		{"Token-cost rationale", "token-cost rationale block must remain unchanged"},
 	}
 	for _, tc := range required {
 		if !strings.Contains(section, tc.substr) {
 			t.Errorf("missing %q in Recent-closure audit section: %s", tc.substr, tc.reason)
+		}
+	}
+
+	// Per-AC re-verification must be dropped as a required audit pass: the old
+	// two-pass framing and its per-criterion re-check language must be gone.
+	banned := []struct {
+		substr string
+		reason string
+	}{
+		{"Pass 1 — per-AC verification", "per-AC verification must no longer be a required audit pass"},
+		{"For each AC criterion", "the audit must not re-verify each AC criterion against the diff"},
+		{"For each acceptance criterion", "the audit must not re-verify each acceptance criterion as a pass"},
+	}
+	for _, tc := range banned {
+		if strings.Contains(section, tc.substr) {
+			t.Errorf("forbidden %q still present in Recent-closure audit section: %s", tc.substr, tc.reason)
 		}
 	}
 }
