@@ -190,6 +190,10 @@ func ParseSubcommand(args []string) (Subcommand, bool) {
 		return Subcommand{Name: "merge", Dir: ".", Args: args[1:]}, true
 	case "filter-stream":
 		return parseFilterStream(args), true
+	case "guard-edit":
+		// Hidden subcommand — invoked only by the PreToolUse hook the task
+		// session installs into its worktree (see writeTaskGuardSettings).
+		return Subcommand{Name: "guard-edit", Dir: ".", Args: args[1:]}, true
 	default:
 		return Subcommand{}, false
 	}

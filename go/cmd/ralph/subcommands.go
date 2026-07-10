@@ -115,6 +115,9 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 		}
 		claude.FilterStream(sub.Args[0], workDir, false)
 		return 0
+
+	case "guard-edit":
+		return handleGuardEdit(sub)
 	}
 
 	return 1
@@ -214,6 +217,10 @@ type interactiveSessionConfig struct {
 	// extraArgs returns additional CLI args appended after the system
 	// prompt (e.g. --session-id). May be nil.
 	extraArgs func() ([]string, error)
+	// postWorktreeSetup runs after the session worktree is created (workDir
+	// known) and before the Interactive launch. Task sessions use it to
+	// install the main-checkout guard hook into the worktree. May be nil.
+	postWorktreeSetup func(projectDir, workDir string) error
 	// onExit runs once Interactive returns successfully, after the
 	// terminal-settle delay.
 	onExit func(gm git.Ops, projectDir, workDir string)
@@ -267,6 +274,13 @@ func runInteractiveSession(sub config.Subcommand, log *logging.Logger, cfg inter
 		return 1
 	}
 	workDir := gm.GetWorkDir()
+
+	if cfg.postWorktreeSetup != nil {
+		if err := cfg.postWorktreeSetup(projectDir, workDir); err != nil {
+			log.Emit(logging.Opts{Level: logging.Error}, "Worktree guard setup failed: %v", err)
+			return 1
+		}
+	}
 
 	systemPrompt, err := cfg.buildPrompt(promptsDir, projectDir, ralphDir)
 	if err != nil {
@@ -379,9 +393,16 @@ func handleAttach(sub config.Subcommand, log *logging.Logger) int {
 }
 
 // taskExtraArgs assembles the extra CLI args for a task session: the
-// session-id flag and its value.
+// session-id flag and its value, plus --disallowedTools EnterWorktree to pin
+// the session's working root to the ralph-assigned worktree (the harness's
+// session-level worktree-switch tool must not re-anchor the session into the
+// main checkout). This does NOT restrict the Agent tool's per-subagent
+// worktree isolation — that is a separate, legitimate harness mechanism.
 func taskExtraArgs(sessionID string) []string {
-	return []string{"--session-id", sessionID}
+	return []string{
+		"--session-id", sessionID,
+		"--disallowedTools", "EnterWorktree",
+	}
 }
 
 // handleTask launches an interactive Claude session with the task manager prompt.
@@ -406,6 +427,13 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 			}
 			sessionID = id
 			return taskExtraArgs(id), nil
+		},
+		postWorktreeSetup: func(projectDir, workDir string) error {
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("resolving ralph executable: %w", err)
+			}
+			return writeTaskGuardSettings(workDir, projectDir, exe)
 		},
 		onExit: func(gm git.Ops, projectDir, workDir string) {
 			if promptKeepOrCleanupWorktree(os.Stdout, os.Stdin, gm) {
