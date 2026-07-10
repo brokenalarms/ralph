@@ -102,10 +102,14 @@ func executionInstructions(v Vars) (string, error) {
 }
 
 // BuildTaskManagerPrompt assembles the system prompt for the interactive
-// task manager pane, substituting project and ralph directory paths.
-// startupContext is the pre-loaded output of bd list/ready — injected
-// so the task manager can present the summary without making tool calls.
-func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupContext string) (string, error) {
+// task manager pane, substituting project, worktree, and ralph directory
+// paths. workDir is the concrete session worktree the task session is
+// anchored to (e.g. .ralph/worktrees/ralph-task-*) — substituted into
+// {{WORKTREE_DIR}} so the prompt names the actual assigned directory instead
+// of only the generic ".ralph/worktrees/" wording. startupContext is the
+// pre-loaded output of bd list/ready — injected so the task manager can
+// present the summary without making tool calls.
+func BuildTaskManagerPrompt(promptsDir, projectDir, workDir, ralphDir, startupContext string) (string, error) {
 	tmpl, err := readTemplate(promptsDir, "task-manager.md")
 	if err != nil {
 		return "", err
@@ -116,6 +120,7 @@ func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupContext str
 	}
 	r := strings.NewReplacer(
 		"{{PROJECT_DIR}}", projectDir,
+		"{{WORKTREE_DIR}}", workDir,
 		"{{RALPH_DIR}}", ralphDir,
 		"{{STARTUP_CONTEXT}}", startupContext,
 	)

@@ -212,8 +212,9 @@ type interactiveSessionConfig struct {
 	usage func()
 	model string
 	// buildPrompt returns the system prompt for the session given the
-	// resolved prompts/project/.ralph directories.
-	buildPrompt func(promptsDir, projectDir, ralphDir string) (string, error)
+	// resolved prompts/project/.ralph directories and the session's own
+	// worktree (workDir). The review-session builder ignores workDir.
+	buildPrompt func(promptsDir, projectDir, ralphDir, workDir string) (string, error)
 	// extraArgs returns additional CLI args appended after the system
 	// prompt (e.g. --session-id). May be nil.
 	extraArgs func() ([]string, error)
@@ -282,7 +283,7 @@ func runInteractiveSession(sub config.Subcommand, log *logging.Logger, cfg inter
 		}
 	}
 
-	systemPrompt, err := cfg.buildPrompt(promptsDir, projectDir, ralphDir)
+	systemPrompt, err := cfg.buildPrompt(promptsDir, projectDir, ralphDir, workDir)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
@@ -318,7 +319,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	return runInteractiveSession(sub, log, interactiveSessionConfig{
 		usage: printReviewUsage,
 		model: agent.ModelOpus,
-		buildPrompt: func(promptsDir, projectDir, ralphDir string) (string, error) {
+		buildPrompt: func(promptsDir, projectDir, ralphDir, workDir string) (string, error) {
 			reflections, err := prompt.ReadReflections(ralphDir)
 			if err != nil {
 				log.Emit(logging.Opts{Level: logging.Warn}, "Failed to read reflections: %v", err)
@@ -412,9 +413,9 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	return runInteractiveSession(sub, log, interactiveSessionConfig{
 		usage: printTaskUsage,
 		model: agent.ModelFable,
-		buildPrompt: func(promptsDir, projectDir, ralphDir string) (string, error) {
+		buildPrompt: func(promptsDir, projectDir, ralphDir, workDir string) (string, error) {
 			startupCtx := preloadTaskContext(&tasks.BD{ProjectDir: projectDir}, log)
-			systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir, startupCtx)
+			systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, workDir, ralphDir, startupCtx)
 			if err != nil {
 				return "", fmt.Errorf("failed to build task manager prompt: %w", err)
 			}
