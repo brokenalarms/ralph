@@ -564,16 +564,17 @@ drift.
    Never batch the stamps to the end of the audit — a stamp dropped at the end
    re-surfaces every bead next session.
 
-**Sub-agent fan-out.** If the audit is parallelized across sub-agents (one
-agent per bead, or a batch per agent), every composed sub-agent prompt MUST
-carry the wider-context conformance frame — the integrity floor AND the
-spec/context conformance pass, including the frame sentence above and the
-instruction to identify the governing spec from the bead description or by
-grepping `docs/specs/`. A sub-agent prompt built as a per-AC checklist
-reproduces the exact failure this audit design fixes: a report of "all ACs
-verified" that never asked whether the work conforms to the spec it sits inside.
-Require each sub-agent to return both verdicts separately — integrity floor and
-spec/context conformance — exactly as step 5 above requires.
+**No sub-agent fan-out — the audit runs inline.** This audit MUST run inline in
+the main task session: sequentially, one bead at a time, reading each diff and
+its governing spec in the session's own context. Do NOT parallelize it across
+sub-agents — not via the Agent tool, not via Workflow fan-out, regardless of
+batch size. Two reasons, both load-bearing: (1) a sub-agent works in isolation
+and cannot see conformance drift that only shows up across beads — the
+cross-bead, cross-task context that makes the wider-context conformance pass
+possible lives only in the main session, so even a well-framed per-bead agent
+defeats the audit's core purpose; (2) fanning out to N parallel agents on an
+expensive model multiplies token cost — the accepted token-cost rationale below
+covers reading every diff inline in one session, not N parallel agent contexts.
 
 **Token-cost rationale (do not trim):** Opus on a first pass with no
 verification step still misinterprets work — an audit catches compounding errors
