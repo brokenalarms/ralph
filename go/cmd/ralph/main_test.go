@@ -1113,14 +1113,14 @@ func TestHandleTask_NoWorktreeRemovalOnExit(t *testing.T) {
 	}
 }
 
-// Proves: taskExtraArgs appends the positional startup prompt after the
-// --session-id flag and its value, so claude receives an initial user
-// message and the task manager's startup summary renders with zero user
-// input (AC1, AC3).
-func TestTaskExtraArgs_IncludesPositionalStartupPrompt(t *testing.T) {
+// Proves: taskExtraArgs returns only the --session-id flag and its value,
+// with no positional startup prompt appended, so the human's first real
+// message becomes the resume-picker title source instead of every session
+// collapsing to the same seeded title.
+func TestTaskExtraArgs_NoPositionalStartupPrompt(t *testing.T) {
 	args := taskExtraArgs("test-session-id")
 
-	want := []string{"--session-id", "test-session-id", taskStartupPrompt}
+	want := []string{"--session-id", "test-session-id"}
 	if len(args) != len(want) {
 		t.Fatalf("taskExtraArgs() = %q, want %q", args, want)
 	}
