@@ -153,8 +153,13 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 		l.git.SetBranchRenamed(true)
 	}
 
-	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch: %s", l.git.GetWorktreeBranch())
-	l.state.WriteRunBranch(l.git.GetWorktreeBranch())
+	worktreeBranch := l.git.GetWorktreeBranch()
+	if worktreeBranch != git.WipBranchName() {
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Worktree on previous-session branch %s — will reset for next task", worktreeBranch)
+	} else {
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch: %s", worktreeBranch)
+	}
+	l.state.WriteRunBranch(worktreeBranch)
 	return nil
 }
 

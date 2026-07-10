@@ -878,7 +878,7 @@ func (r *repo) PrepareForNextTask(nextTaskID, baseRef string) {
 		// in-progress work from a prior session isn't silently destroyed.
 		if r.branchSafeToDelete(oldBranch) {
 			if err := r.gitCmdErr(r.projectDir, "branch", "-D", oldBranch); err == nil {
-				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", oldBranch)
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Cleaned up previous-session branch %s — fully merged into %s", oldBranch, r.baseBranch)
 			}
 		} else {
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Preserving local branch %s — unmerged commits ahead of %s", oldBranch, r.baseBranch)

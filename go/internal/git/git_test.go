@@ -1041,6 +1041,14 @@ func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 	if !runner.CalledWith("branch", "-D", taskBranch) {
 		t.Errorf("expected branch -D %s to be called", taskBranch)
 	}
+
+	if log.contains("Deleted local branch "+taskBranch) {
+		t.Errorf("expected bare 'Deleted local branch' emit to be replaced with a previous-session framing, got messages: %v", log.messages)
+	}
+	wantMsg := fmt.Sprintf("Cleaned up previous-session branch %s — fully merged into %s", taskBranch, mgr.baseBranch)
+	if !log.contains(wantMsg) {
+		t.Errorf("expected log to contain %q, got messages: %v", wantMsg, log.messages)
+	}
 }
 
 // PrepareForNextTask preserves a task branch when it has unmerged local

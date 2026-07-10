@@ -1,8 +1,10 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,5 +229,87 @@ func TestInitWorktree_NoopWhenNoWorktreeBranch(t *testing.T) {
 	err := l.initWorktree(context.Background())
 	if err != nil {
 		t.Fatalf("initWorktree returned error for no-worktree case: %v", err)
+	}
+}
+
+// Verifies that initWorktree frames a leftover previous-session branch as
+// such, rather than emitting a bare "Branch: %s" line that reads as if the
+// new run were actively on the old task's branch. At this point in startup
+// PrepareForNextTask has not run yet, so GetWorktreeBranch still reports the
+// previous session's task branch.
+func TestInitWorktree_FramesLeftoverPreviousSessionBranch(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	staleBranch := "ralph/tabi-sk3y-tabi-ui-introduce-generic"
+	backend := &testutil.StubBackend{}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "wt"),
+		WorktreeBranch: staleBranch,
+	})
+	cfg := Config{
+		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), RalphDir: filepath.Join(dir, ".ralph")},
+	}
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
+
+	if err := l.initWorktree(context.Background()); err != nil {
+		t.Fatalf("initWorktree returned error: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "Branch: "+staleBranch) {
+		t.Errorf("expected bare 'Branch: %s' to be replaced with previous-session framing, got log: %s", staleBranch, out)
+	}
+	wantMsg := "Worktree on previous-session branch " + staleBranch + " — will reset for next task"
+	if !strings.Contains(out, wantMsg) {
+		t.Errorf("expected log to contain %q, got: %s", wantMsg, out)
+	}
+}
+
+// Verifies that initWorktree keeps the plain "Branch: %s" form when the
+// worktree is already on the WIP placeholder branch — no previous-session
+// framing is needed since there is no leftover branch to explain.
+func TestInitWorktree_PlainBranchLineWhenOnWipBranch(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	wipBranch := git.WipBranchName()
+	backend := &testutil.StubBackend{}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "wt"),
+		WorktreeBranch: wipBranch,
+	})
+	cfg := Config{
+		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), RalphDir: filepath.Join(dir, ".ralph")},
+	}
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
+
+	if err := l.initWorktree(context.Background()); err != nil {
+		t.Fatalf("initWorktree returned error: %v", err)
+	}
+
+	out := buf.String()
+	wantMsg := "Branch: " + wipBranch
+	if !strings.Contains(out, wantMsg) {
+		t.Errorf("expected log to contain %q, got: %s", wantMsg, out)
+	}
+	if strings.Contains(out, "previous-session branch") {
+		t.Errorf("did not expect previous-session framing when already on WIP branch, got: %s", out)
 	}
 }
