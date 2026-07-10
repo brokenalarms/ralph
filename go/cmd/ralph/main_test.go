@@ -1113,14 +1113,15 @@ func TestHandleTask_NoWorktreeRemovalOnExit(t *testing.T) {
 	}
 }
 
-// Proves: taskExtraArgs returns only the --session-id flag and its value,
-// with no positional startup prompt appended, so the human's first real
-// message becomes the resume-picker title source instead of every session
-// collapsing to the same seeded title.
+// Proves: taskExtraArgs returns the --session-id flag/value and disables the
+// session-level EnterWorktree tool (pinning the session's working root to the
+// assigned worktree), with no positional startup prompt appended, so the
+// human's first real message becomes the resume-picker title source instead of
+// every session collapsing to the same seeded title.
 func TestTaskExtraArgs_NoPositionalStartupPrompt(t *testing.T) {
 	args := taskExtraArgs("test-session-id")
 
-	want := []string{"--session-id", "test-session-id"}
+	want := []string{"--session-id", "test-session-id", "--disallowedTools", "EnterWorktree"}
 	if len(args) != len(want) {
 		t.Fatalf("taskExtraArgs() = %q, want %q", args, want)
 	}
