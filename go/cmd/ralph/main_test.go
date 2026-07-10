@@ -1037,7 +1037,7 @@ func TestRunInteractiveSession_HelpFlagSkipsConfigClosures(t *testing.T) {
 	usageCalled := false
 	cfg := interactiveSessionConfig{
 		usage: func() { usageCalled = true },
-		buildPrompt: func(promptsDir, projectDir, ralphDir string) (string, error) {
+		buildPrompt: func(promptsDir, projectDir, ralphDir, workDir string) (string, error) {
 			t.Fatal("buildPrompt should not be called when the help flag is set")
 			return "", nil
 		},
@@ -1062,7 +1062,7 @@ func TestRunInteractiveSession_HelpFlagSkipsConfigClosures(t *testing.T) {
 func TestRunInteractiveSession_NonGitDirSkipsConfigClosures(t *testing.T) {
 	cfg := interactiveSessionConfig{
 		usage: func() {},
-		buildPrompt: func(promptsDir, projectDir, ralphDir string) (string, error) {
+		buildPrompt: func(promptsDir, projectDir, ralphDir, workDir string) (string, error) {
 			t.Fatal("buildPrompt should not be called for a non-git directory")
 			return "", nil
 		},

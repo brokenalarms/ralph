@@ -412,13 +412,40 @@ identified, and explain what `ralph merge` will do. Do not attempt to run it you
 
 ## Worktree
 
-This session runs in a git worktree under `{{RALPH_DIR}}/worktrees/`,
-not the main working tree. All code edits happen here — never in the project
-root. When doing hands-on work:
+This session runs in the git worktree `{{WORKTREE_DIR}}`, not the main
+working tree at `{{PROJECT_DIR}}`. All code edits happen in `{{WORKTREE_DIR}}`
+— never in the project root. When doing hands-on work:
 
-- Create branches, commit, and push from the worktree
+- Create branches, commit, and push from `{{WORKTREE_DIR}}`
 - `bd` commands work from the worktree (auto-discovers `.beads/` by walking up)
 - If no commits are made during the session, the worktree is cleaned up on exit
+
+**The session's own working root never changes.** Do not use `EnterWorktree`
+or any equivalent worktree-switching tool on the session itself — this
+session stays anchored to `{{WORKTREE_DIR}}` for its entire lifetime. When a
+spawned agent (via the Agent tool) returns, the session continues working in
+`{{WORKTREE_DIR}}` — it never follows the subagent into, or re-anchors onto,
+the subagent's own worktree.
+
+### Spawning agents
+
+Any prompt you compose for a spawned agent that will create or modify files
+MUST:
+
+1. **Name the directory its edits must land in** — give it the concrete
+   absolute path (`{{WORKTREE_DIR}}`, or a path inside it), not a vague
+   reference to "the project" or "the repo."
+2. **State that `{{PROJECT_DIR}}` is read-only** — the project directory may
+   be read for diagnosis (grepping code, reading history) but is never an
+   edit target. A spawned agent that inherits only `{{PROJECT_DIR}}` as its
+   one concrete absolute path will edit it if that's the only path it has —
+   the composed prompt must never leave that gap.
+
+Spawned agents MAY run in their own Claude-managed isolated worktrees under
+`.claude/worktrees/` — that isolation is the harness's business and stays
+allowed. It does not change where *this* session works: per the rule above,
+the session's own working root stays `{{WORKTREE_DIR}}` regardless of where a
+spawned agent's own worktree lives.
 
 ## Persistent knowledge
 
