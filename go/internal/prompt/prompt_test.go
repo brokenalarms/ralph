@@ -1953,8 +1953,9 @@ func TestStyleGuide_ForbidsSpecPathReferences(t *testing.T) {
 // stubbed, tests not deleted) replaces per-AC re-verification; the governing
 // spec is taken from the bead description or by grepping docs/specs/; both
 // verdicts (integrity floor, spec/context conformance) are reported separately;
-// and fanned-out sub-agent prompts carry the wider-context frame, not a per-AC
-// checklist. Stamping, dismiss semantics, and loop-only scope are unchanged.
+// and the audit runs inline in the main task session, sequentially, and must
+// never be parallelized across sub-agents. Stamping, dismiss semantics, and
+// loop-only scope are unchanged.
 func TestTaskManagerPrompt_RecentClosureAuditIsSpecConformanceFramed(t *testing.T) {
 	dir := promptsDir(t)
 	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph/worktrees/session", "/proj/.ralph", "")
@@ -1990,8 +1991,8 @@ func TestTaskManagerPrompt_RecentClosureAuditIsSpecConformanceFramed(t *testing.
 		{"Integrity floor:", "report format must state the integrity-floor verdict separately"},
 		{"Spec/context conformance:", "report format must state the conformance verdict separately"},
 		{"conforms / drift", "conformance verdict must be conforms/drift"},
-		{"Sub-agent fan-out", "must instruct that fanned-out sub-agent prompts carry the wider-context frame"},
-		{"wider-context conformance frame", "sub-agent prompts must carry the wider-context conformance frame"},
+		{"the audit runs inline", "must state the audit runs inline in the main task session"},
+		{"Do NOT parallelize it across\nsub-agents", "must forbid parallelizing the audit across sub-agents"},
 		{"loop-completed beads", "scope restriction to loop-completed beads must remain unchanged"},
 		{"Token-cost rationale", "token-cost rationale block must remain unchanged"},
 	}
