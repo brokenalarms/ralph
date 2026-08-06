@@ -83,12 +83,20 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	return syscall.Exec(scriptPath, execArgs, os.Environ())
 }
 
-func extractEmbeddedPrompts() (string, error) {
-	tmpDir, err := os.MkdirTemp("", "ralph-prompts-*")
-	if err != nil {
+// extractEmbeddedPrompts writes the embedded prompt templates under
+// <ralphDir>/prompts, overwriting whatever a previous process left there.
+// The destination is deliberately NOT os.MkdirTemp: macOS's periodic
+// maintenance job purges /var/folders temp files not accessed for a few
+// days, which deletes the templates out from under a long-running loop
+// and fails every subsequent prompt build. Each file is written to a
+// .tmp sibling and renamed into place so a concurrent reader (loop and
+// task session sharing one project) never observes a partial file.
+func extractEmbeddedPrompts(ralphDir string) (string, error) {
+	dir := filepath.Join(ralphDir, "prompts")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	err = fs.WalkDir(embeddedPrompts, "prompts", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(embeddedPrompts, "prompts", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -96,11 +104,15 @@ func extractEmbeddedPrompts() (string, error) {
 		if err != nil {
 			return err
 		}
-		// Strip "prompts/" prefix — write directly to tmpDir
+		// Strip "prompts/" prefix — write directly to dir
 		name := strings.TrimPrefix(path, "prompts/")
-		return os.WriteFile(filepath.Join(tmpDir, name), data, 0o644)
+		tmp := filepath.Join(dir, name+".tmp")
+		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+			return err
+		}
+		return os.Rename(tmp, filepath.Join(dir, name))
 	})
-	return tmpDir, err
+	return dir, err
 }
 
 // killChildProcesses kills all descendant processes before exec to prevent
