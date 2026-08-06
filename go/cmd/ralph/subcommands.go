@@ -176,12 +176,12 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 
 	promptsDir := filepath.Join(cfg.ProjectDir, "go", "cmd", "ralph", "prompts")
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
-		tmpDir, extractErr := extractEmbeddedPrompts()
+		extractedDir, extractErr := extractEmbeddedPrompts(ralphDir)
 		if extractErr != nil {
 			log.Emit(logging.Opts{Level: logging.Error}, "Failed to extract embedded prompts: %v", extractErr)
 			return 1
 		}
-		promptsDir = tmpDir
+		promptsDir = extractedDir
 	}
 
 	dirs := workctx.New(cfg.ProjectDir, promptsDir)
@@ -254,12 +254,12 @@ func runInteractiveSession(sub config.Subcommand, log *logging.Logger, cfg inter
 
 	promptsDir := filepath.Join(projectDir, "go", "cmd", "ralph", "prompts")
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
-		tmpDir, extractErr := extractEmbeddedPrompts()
+		extractedDir, extractErr := extractEmbeddedPrompts(ralphDir)
 		if extractErr != nil {
 			log.Emit(logging.Opts{Level: logging.Error}, "Failed to extract embedded prompts: %v", extractErr)
 			return 1
 		}
-		promptsDir = tmpDir
+		promptsDir = extractedDir
 	}
 
 	// Spawn the session inside an isolated worktree — never the project
