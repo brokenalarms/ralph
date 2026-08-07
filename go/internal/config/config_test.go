@@ -922,7 +922,8 @@ func TestInitConfigOmitsEmptyDefaults(t *testing.T) {
 	}
 }
 
-// Verifies that InitConfig writes keys in alphabetical order.
+// Verifies that InitConfig writes keys in alphabetical order within each TOML
+// table (a table header starts a fresh alphabetical run).
 func TestInitConfigKeysAreAlphabetical(t *testing.T) {
 	dir := t.TempDir()
 	tomlPath := filepath.Join(dir, "config.toml")
@@ -936,20 +937,24 @@ func TestInitConfigKeysAreAlphabetical(t *testing.T) {
 		t.Fatalf("failed to read generated config: %v", err)
 	}
 
-	var keys []string
+	prev := ""
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
-		if eqIdx := strings.Index(line, " = "); eqIdx >= 0 {
-			keys = append(keys, line[:eqIdx])
+		if strings.HasPrefix(line, "[") {
+			prev = ""
+			continue
 		}
-	}
-
-	for i := 1; i < len(keys); i++ {
-		if keys[i] < keys[i-1] {
-			t.Errorf("keys not in alphabetical order: %q comes after %q", keys[i], keys[i-1])
+		eqIdx := strings.Index(line, " = ")
+		if eqIdx < 0 {
+			continue
 		}
+		key := line[:eqIdx]
+		if prev != "" && key < prev {
+			t.Errorf("keys not in alphabetical order: %q comes after %q", key, prev)
+		}
+		prev = key
 	}
 }
 

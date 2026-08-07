@@ -186,6 +186,41 @@ func RunTests(ctx context.Context, timeout time.Duration, configVerify string, d
 	return Result{Passed: true, Reason: "tests passed", Command: command, Dir: tc.Dir}
 }
 
+// RunAcceptance executes the project's ship-time acceptance command in dir and
+// reports whether it passed. Unlike RunTests it takes the command verbatim (no
+// script detection) and runs it through a shell, because acceptance suites are
+// project-specific one-liners configured under [acceptance] in config.toml.
+// An empty command passes without running anything — the gate is disabled.
+func RunAcceptance(ctx context.Context, command, dir string, timeout time.Duration) Result {
+	if strings.TrimSpace(command) == "" {
+		return Result{Passed: true, Reason: "no acceptance command configured"}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = dir
+	cmd.WaitDelay = 3 * time.Second
+	killProcessGroup(cmd)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		reason := fmt.Sprintf("acceptance command failed: %v", err)
+		if ctx.Err() == context.DeadlineExceeded {
+			reason = fmt.Sprintf("acceptance command timed out after %s", timeout.Truncate(time.Second))
+		}
+		return Result{
+			Passed:  false,
+			Reason:  reason,
+			Details: lastNLines(string(out), 30),
+			Command: command,
+			Dir:     dir,
+		}
+	}
+	return Result{Passed: true, Reason: "acceptance passed", Command: command, Dir: dir}
+}
+
 // RunPostTaskParams configures RunPostTask.
 type RunPostTaskParams struct {
 	PostTask    string

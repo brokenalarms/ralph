@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -126,6 +127,15 @@ type Config struct {
 	// LogRetentionDays is the number of days to keep loop logs in the stable
 	// log directory. Zero disables pruning.
 	LogRetentionDays int
+
+	// AcceptanceCommand is the project's ship-time acceptance suite, run
+	// immediately before push/PR creation. Empty disables the gate entirely.
+	// Configured under the [acceptance] table in config.toml.
+	AcceptanceCommand string
+
+	// AcceptanceCountdown is how long the cancellable countdown dialog stays
+	// up before the acceptance command runs unattended.
+	AcceptanceCountdown time.Duration
 
 	cliSet map[string]bool
 	// fileSet tracks which ConfigKeys were explicitly set by config.toml,
@@ -331,9 +341,23 @@ func configBoolTrue(value string) bool {
 	}
 }
 
+// sectionHeader returns the table name when line is a TOML table header
+// (e.g. "[acceptance]"), and "" otherwise.
+func sectionHeader(line string) string {
+	if !strings.HasPrefix(line, "[") || !strings.HasSuffix(line, "]") {
+		return ""
+	}
+	return strings.TrimSpace(line[1 : len(line)-1])
+}
+
 // LoadConfigFile reads a TOML-like config file (key = value per line) and
 // applies values to the Config using the Flags registry. CLI-set values
 // (tracked via cliSet) take precedence and are not overwritten.
+//
+// Table headers ("[acceptance]") scope the keys that follow: a key inside a
+// table resolves as "<table>.<key>", matching the dotted ConfigKey in the
+// Flags registry. Top-level keys are unqualified, so existing flat config
+// files are unaffected.
 func (c *Config) LoadConfigFile(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -344,10 +368,16 @@ func (c *Config) LoadConfigFile(path string) error {
 	}
 	defer f.Close()
 
+	section := ""
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if name := sectionHeader(line); name != "" {
+			section = name
 			continue
 		}
 
@@ -357,6 +387,9 @@ func (c *Config) LoadConfigFile(path string) error {
 		}
 
 		key := strings.TrimSpace(line[:eqIdx])
+		if section != "" {
+			key = section + "." + key
+		}
 		value := strings.TrimSpace(line[eqIdx+1:])
 
 		if commentIdx := strings.Index(value, "#"); commentIdx >= 0 {
@@ -401,28 +434,53 @@ func InitConfig(path string) error {
 		key string
 		val string
 	}
-	var regular, commented []entry
+	// Keys are grouped by TOML table: a dotted ConfigKey ("acceptance.command")
+	// is written under a "[acceptance]" header as "command", while undotted keys
+	// stay at the top level. LoadConfigFile re-qualifies them on read, so the
+	// generated file round-trips.
+	regular := map[string][]entry{}
+	commented := map[string][]entry{}
+	var tables []string
+	add := func(into map[string][]entry, configKey, val string) {
+		table, key := "", configKey
+		if dot := strings.Index(configKey, "."); dot >= 0 {
+			table, key = configKey[:dot], configKey[dot+1:]
+		}
+		if table != "" && !slices.Contains(tables, table) {
+			tables = append(tables, table)
+		}
+		into[table] = append(into[table], entry{key, val})
+	}
 	for _, f := range Flags {
 		if f.ConfigKey == "" {
 			continue
 		}
 		if f.Kind == KindBool {
-			regular = append(regular, entry{f.ConfigKey, "false"})
+			add(regular, f.ConfigKey, "false")
 		} else if f.Default != "" {
-			regular = append(regular, entry{f.ConfigKey, f.Default})
+			add(regular, f.ConfigKey, f.Default)
 		} else if f.CommentInInit {
-			commented = append(commented, entry{f.ConfigKey, ""})
+			add(commented, f.ConfigKey, "")
 		}
 	}
-	sort.Slice(regular, func(i, j int) bool { return regular[i].key < regular[j].key })
-	sort.Slice(commented, func(i, j int) bool { return commented[i].key < commented[j].key })
+	sort.Strings(tables)
 
 	var b strings.Builder
-	for _, e := range regular {
-		fmt.Fprintf(&b, "%s = %s\n", e.key, e.val)
+	writeTable := func(table string) {
+		byKey := func(a, c entry) int { return strings.Compare(a.key, c.key) }
+		slices.SortFunc(regular[table], byKey)
+		slices.SortFunc(commented[table], byKey)
+		for _, e := range regular[table] {
+			fmt.Fprintf(&b, "%s = %s\n", e.key, e.val)
+		}
+		for _, e := range commented[table] {
+			fmt.Fprintf(&b, "# %s = \n", e.key)
+		}
 	}
-	for _, e := range commented {
-		fmt.Fprintf(&b, "# %s = \n", e.key)
+	writeTable("")
+	for _, table := range tables {
+		fmt.Fprintf(&b, "\n[%s]\n", table)
+		writeTable(table)
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

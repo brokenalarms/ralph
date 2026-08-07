@@ -293,6 +293,8 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		CascadeSkipLimit:         cfg.CascadeSkipLimit,
 		TestTimeout:              cfg.TestTimeout,
 		CompileCheckTimeout:      cfg.CompileCheckTimeout,
+		AcceptanceCommand:        cfg.AcceptanceCommand,
+		AcceptanceCountdown:      cfg.AcceptanceCountdown,
 		ConnectivityCheckTimeout: cfg.ConnectivityCheckTimeout,
 		InternetRestoreInterval:  cfg.InternetRestoreInterval,
 	}, loop.Modules{
