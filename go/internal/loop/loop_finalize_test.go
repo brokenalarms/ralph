@@ -24,9 +24,9 @@ type shipResult struct {
 	merged          bool
 	ciFailure       bool
 	stacked         bool
-	ciInfraFailure  bool                 // InfrastructureFailure flag on ShipResult
-	ciFailureDetail *git.CIFailureError  // populated when the loop needs to route through tryFixCI
-	pushedBranch    string               // PushedBranch flag: non-empty when Phase 1 push succeeded on this branch
+	ciInfraFailure  bool                // InfrastructureFailure flag on ShipResult
+	ciFailureDetail *git.CIFailureError // populated when the loop needs to route through tryFixCI
+	pushedBranch    string              // PushedBranch flag: non-empty when Phase 1 push succeeded on this branch
 }
 
 // finalizeSetup bundles a Loop and pre-built params for finalize tests.
@@ -43,7 +43,10 @@ type finalizeSetup struct {
 // same result for both calls, and the loop's phase-2 logic only inspects
 // fields (PRNumber, Merged, CIFailure, Stacked) whose values describe the
 // end state and apply equally to both calls.
-func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *testutil.TrackingBackend, ship shipResult) finalizeSetup {
+//
+// Optional cfgOpts adjust the loop Config before construction, for tests that
+// exercise a ship-path feature (e.g. the acceptance gate) on the same world.
+func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *testutil.TrackingBackend, ship shipResult, cfgOpts ...func(*Config)) finalizeSetup {
 	t.Helper()
 	_, st := setupTestDir(t)
 	gm := git.NewStub(git.StubRepoConfig{
@@ -66,6 +69,9 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 		AutoMerge: autoMerge,
 		Dirs:      workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 	}
+	for _, opt := range cfgOpts {
+		opt(&cfg)
+	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
@@ -73,7 +79,7 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:  passingVerifyHook(),
 	})
 	return finalizeSetup{
 		loop: l,
@@ -281,7 +287,7 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:  passingVerifyHook(),
 	})
 
 	p := completeTaskParams{
