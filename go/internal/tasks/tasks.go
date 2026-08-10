@@ -3,11 +3,6 @@ package tasks
 
 import "time"
 
-// MetadataAcceptanceSkipped is the bead metadata key recording that a user
-// cancelled the ship-time acceptance gate. Its value is the unix timestamp of
-// the cancel, so the task manager can see which ships went acceptance-unverified.
-const MetadataAcceptanceSkipped = "acceptance_skipped"
-
 // TaskInfo holds the result of a GetNextTaskInfo call.
 type TaskInfo struct {
 	ID       string

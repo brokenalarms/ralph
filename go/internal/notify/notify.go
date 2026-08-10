@@ -1,7 +1,6 @@
 package notify
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -16,16 +15,6 @@ var commandRunner = func(name string, args ...string) error {
 	return exec.Command(name, args...).Run()
 }
 
-// dialogRunner executes a blocking dialog command and returns its combined
-// output. Unlike commandRunner it needs the output, because the user's answer
-// comes back on stdout ("button returned:…, gave up:…") and a cancel comes
-// back as a non-zero exit with "-128" on stderr. Tests replace this to drive
-// both outcomes without a real dialog.
-var dialogRunner = func(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).CombinedOutput()
-	return string(out), err
-}
-
 // stalenessThreshold is the maximum age of an event before its notification is silently dropped.
 // Notifications older than this are stale (e.g. queued while the terminal was backgrounded) and
 // would arrive confusingly after the fact. Default is 60s per user requirement.
@@ -34,21 +23,12 @@ var stalenessThreshold = 60 * time.Second
 var (
 	terminalNotifierPath string
 	terminalNotifierOnce sync.Once
-	osascriptPath        string
-	osascriptOnce        sync.Once
 )
 
 // SetCommandRunner overrides the notification command executor. Returns previous runner for cleanup.
 func SetCommandRunner(r func(string, ...string) error) func(string, ...string) error {
 	prev := commandRunner
 	commandRunner = r
-	return prev
-}
-
-// SetDialogRunner overrides the blocking-dialog executor. Returns previous runner for cleanup.
-func SetDialogRunner(r func(string, ...string) (string, error)) func(string, ...string) (string, error) {
-	prev := dialogRunner
-	dialogRunner = r
 	return prev
 }
 
@@ -67,26 +47,6 @@ func SetTerminalNotifierPath(p string) string {
 	prev := terminalNotifierPath
 	terminalNotifierPath = p
 	return prev
-}
-
-// SetOsascriptPath overrides the resolved osascript binary path. Empty string
-// means no dialog backend is available. Returns previous value for cleanup.
-func SetOsascriptPath(p string) string {
-	osascriptOnce.Do(func() {})
-	prev := osascriptPath
-	osascriptPath = p
-	return prev
-}
-
-// resolveOsascript returns the osascript binary path, resolving via LookPath
-// once. Empty on any platform without it — the dialog backend is unavailable
-// there, which callers treat as "no user to ask".
-func resolveOsascript() string {
-	osascriptOnce.Do(func() {
-		p, _ := exec.LookPath("osascript")
-		osascriptPath = p
-	})
-	return osascriptPath
 }
 
 // resolveTerminalNotifier returns the terminal-notifier binary path, resolving via LookPath once.
@@ -151,54 +111,6 @@ func sendNotification(title, body string, eventAt time.Time) {
 	default:
 		log.Printf("notify: no notification backend available for %s", runtime.GOOS)
 	}
-}
-
-// osascriptCancelled reports whether an osascript dialog invocation ended in a
-// user cancel. AppleScript signals cancel as error -128 on a non-zero exit;
-// some environments instead return the button name on stdout. Anything else —
-// including a dialog backend that failed to launch — is not a cancel, so the
-// caller's default-run semantics are preserved.
-func osascriptCancelled(out string, err error) bool {
-	if strings.Contains(out, "button returned:"+dialogCancelButton) {
-		return true
-	}
-	return err != nil && (strings.Contains(out, "-128") || strings.Contains(out, "User canceled"))
-}
-
-const (
-	dialogCancelButton    = "Cancel"
-	dialogRunButton       = "Run now"
-	acceptanceDialogTitle = "Ralph acceptance"
-)
-
-// AcceptanceCountdown puts up a countdown dialog before the ship-time
-// acceptance command runs, and reports whether the user cancelled it.
-//
-// The default is to RUN: when the countdown expires with no response — or when
-// no dialog backend is available at all — this returns false and the caller
-// proceeds, so unattended operation is preserved. Only an explicit cancel (the
-// Cancel button or Escape) returns true.
-func AcceptanceCountdown(command string, countdown time.Duration) bool {
-	if resolveOsascript() == "" {
-		return false
-	}
-	seconds := int(countdown.Seconds())
-	if seconds < 1 {
-		seconds = 1
-	}
-	body := fmt.Sprintf("Running acceptance in %ds — cancel to skip\n\n%s", seconds, command)
-	script := fmt.Sprintf(`display dialog "%s" with title "%s" buttons {"%s", "%s"} default button "%s" giving up after %d`,
-		escapeForAppleScript(body), escapeForAppleScript(acceptanceDialogTitle),
-		dialogCancelButton, dialogRunButton, dialogRunButton, seconds)
-
-	out, err := dialogRunner("osascript", "-e", script)
-	if osascriptCancelled(out, err) {
-		return true
-	}
-	if err != nil {
-		log.Printf("notify: acceptance countdown dialog failed (%v) — defaulting to run", err)
-	}
-	return false
 }
 
 func TaskCompleted(taskID, title, summary string, eventAt time.Time) {
