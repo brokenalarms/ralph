@@ -181,13 +181,6 @@ type Config struct {
 	TestTimeout         time.Duration
 	CompileCheckTimeout time.Duration
 
-	// AcceptanceCommand is the ship-time acceptance suite, run once
-	// immediately before push/PR creation. Empty disables the gate.
-	AcceptanceCommand string
-	// AcceptanceCountdown is how long the cancellable countdown dialog stays
-	// up before the acceptance command runs unattended.
-	AcceptanceCountdown time.Duration
-
 	// Network timeouts.
 	ConnectivityCheckTimeout time.Duration
 	InternetRestoreInterval  time.Duration
@@ -312,9 +305,6 @@ func New(cfg Config, mods Modules) *Loop {
 	}
 	if cfg.CompileCheckTimeout == 0 {
 		cfg.CompileCheckTimeout = 60 * time.Second
-	}
-	if cfg.AcceptanceCountdown <= 0 {
-		cfg.AcceptanceCountdown = defaultAcceptanceCountdown
 	}
 
 	runner := mods.Runner

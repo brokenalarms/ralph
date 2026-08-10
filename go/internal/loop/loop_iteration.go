@@ -280,22 +280,6 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 		return completeTaskOut{action: signalComplete}
 	}
 
-	// The acceptance gate is the last thing between verified work and the
-	// remote. It runs here — once, before doShip pushes and opens the PR —
-	// so a failing acceptance suite can still route the bead back through
-	// the fix path, and so doShip's own CI/review retry iterations never
-	// re-trigger a machine-seizing suite.
-	if failure := l.runAcceptanceGate(ctx, p.taskID); failure != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Acceptance failed: %s", failure.Reason)
-		l.recordAttempt(AttemptEvent{
-			Summary:  "Acceptance command failed before push: " + failure.Reason,
-			DiffStat: p.diffStat,
-			Analysis: "acceptance_failed: " + failure.Details,
-		})
-		l.releaseClaimForRetry(p.taskID)
-		return completeTaskOut{action: signalRetry}
-	}
-
 	out := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch, shipErr :=
 		out.prNumber, out.prResultURL, out.merged, out.ciFailure, out.ciInfraFailure, out.stacked, out.pushedBranch, out.shipErr

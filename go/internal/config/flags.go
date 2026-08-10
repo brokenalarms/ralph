@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type FlagKind int
@@ -363,33 +362,6 @@ var Flags = []FlagDef{
 			return nil
 		},
 		Read: func(cfg *Config) string { return cfg.Verify },
-	},
-	// The [acceptance] table configures the cancellable ship-time gate. It has
-	// no CLI flag: a machine-seizing acceptance suite is a property of the
-	// project, not of an individual run. An absent or empty command disables
-	// the gate entirely.
-	{
-		ConfigKey:     "acceptance.command",
-		Kind:          KindString,
-		CommentInInit: true,
-		Apply: func(cfg *Config, val string) error {
-			cfg.AcceptanceCommand = val
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.AcceptanceCommand },
-	},
-	{
-		ConfigKey: "acceptance.countdown_seconds", Default: "10",
-		Kind: KindInt,
-		Apply: func(cfg *Config, val string) error {
-			n, err := strconv.Atoi(val)
-			if err != nil {
-				return err
-			}
-			cfg.AcceptanceCountdown = time.Duration(n) * time.Second
-			return nil
-		},
-		Read: func(cfg *Config) string { return strconv.Itoa(int(cfg.AcceptanceCountdown.Seconds())) },
 	},
 	{
 		Long:      "--notify",
