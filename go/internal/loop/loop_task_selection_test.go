@@ -118,6 +118,31 @@ func TestSelectNextTask_MaxIterationsReached(t *testing.T) {
 	}
 }
 
+// selectNextTask never reports max_iterations_reached when maxIterations is 0
+// (unlimited) — a run past the old default of 50 must keep going.
+func TestSelectNextTask_MaxIterationsZeroIsUnlimited(t *testing.T) {
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
+	l, _ := newTestLoopForSelection(t, backend)
+	// newTestLoopForSelection seeds state via setupTestDir's st.Init(5); clear
+	// the positive state override so ReadMaxIterations falls back to the
+	// unlimited default passed below instead of the fixture's 5.
+	l.state.Write("max_iterations", "0")
+
+	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  51,
+		maxIterations: 0,
+		completedIDs:  map[string]bool{},
+	})
+
+	if action != actionProceed {
+		t.Fatalf("expected actionProceed with unlimited maxIterations, got %v", action)
+	}
+	status, _ := l.state.Read("status")
+	if status == "max_iterations_reached" {
+		t.Errorf("expected status to not be max_iterations_reached, got %q", status)
+	}
+}
+
 // selectNextTask returns actionDone when no tasks remain and wait=false.
 func TestSelectNextTask_NoTasksNoWait(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 0, Total: 1}

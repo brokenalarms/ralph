@@ -210,7 +210,11 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		log.Emit(logging.Opts{}, "Worktree: %s", dirs.WorkDir)
 	}
 	log.Emit(logging.Opts{}, "Task backend: %s", backend.Label())
-	log.Emit(logging.Opts{}, "Max iterations: %d", cfg.MaxIterations)
+	if cfg.MaxIterations > 0 {
+		log.Emit(logging.Opts{}, "Max iterations: %d", cfg.MaxIterations)
+	} else {
+		log.Emit(logging.Opts{}, "Max iterations: unlimited")
+	}
 
 	st.Write("started_at", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
 	st.ClearPushedBranches()

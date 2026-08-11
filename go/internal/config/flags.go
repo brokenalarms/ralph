@@ -91,7 +91,7 @@ var MergeFlags = []FlagDef{noCIWaitFlag, adminMergeOnCIInfraFailureFlag}
 var Flags = []FlagDef{
 	{
 		Short: "-n", Long: "--max", MetaVar: "<N>",
-		Help: "Max iterations", Default: "50",
+		Help: "Max iterations (0 = unlimited; counts iterations of this process run)", Default: "0",
 		EnvVar: "RALPH_MAX_ITERATIONS", ConfigKey: "max_iterations",
 		Kind: KindInt,
 		Apply: func(cfg *Config, val string) error {
