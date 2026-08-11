@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,6 +154,63 @@ func TestMergePR_HTTP405_ReturnsBlocked(t *testing.T) {
 	}
 	if result.Merged || result.Conflict {
 		t.Errorf("expected no Merged/Conflict flags for HTTP 405, got %+v", result)
+	}
+}
+
+// A 405 whose API message names merge conflicts is a conflict, not a
+// branch-protection block — GitHub uses 405 for both, and only the message
+// distinguishes them. Classifying it Blocked routes executeMerge into the
+// CI-wait/blind-retry path where the identical merge PUT fails identically;
+// Conflict routes it into MergeWithRetry's ResolveConflict rebase pipeline.
+func TestMergePR_HTTP405_MergeConflictMessage_ReturnsConflict(t *testing.T) {
+	output := "HTTP/2.0 405 Method Not Allowed\r\n\r\n{\"message\":\"Pull Request has Merge Conflicts\"}"
+	result := classifyMergeStatus(output, fmt.Errorf("exit status 1"))
+	if !result.Conflict {
+		t.Errorf("expected Conflict=true for 405 with merge-conflict message, got %+v", result)
+	}
+	if result.Merged || result.Blocked {
+		t.Errorf("expected no Merged/Blocked flags for 405 with merge-conflict message, got %+v", result)
+	}
+}
+
+// conflict405GitHub overrides MergePR to return exactly what classifyMergeStatus
+// produces for GitHub's real conflict-405 response, so the executeMerge routing
+// test below exercises the raw-output → typed-error composition.
+type conflict405GitHub struct {
+	gitHub
+}
+
+func (g conflict405GitHub) MergePR(ctx context.Context, prNumber int, repoURL string, opts MergeOpts) MergeResult {
+	output := "HTTP/2.0 405 Method Not Allowed\r\n\r\n{\"message\":\"Pull Request has merge conflicts\"}"
+	return classifyMergeStatus(output, fmt.Errorf("exit status 1"))
+}
+
+// executeMerge fed a conflict-405 response returns MergeConflictError — the
+// signal MergeWithRetry needs to run ResolveConflict — rather than entering
+// the Blocked/CI-wait path where a blind retry fails identically.
+func TestExecuteMerge_Conflict405_ReturnsMergeConflictError(t *testing.T) {
+	stub := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 42,
+			Branch: "ralph/test-feature",
+			State:  PRStateOpen,
+		}},
+	})
+	gh := conflict405GitHub{gitHub: stub}
+
+	_, merged, err := executeMerge(context.Background(), gh, ExecuteMergeOpts{
+		PRNumber:       42,
+		RepoURL:        "https://github.com/owner/repo",
+		WorktreeBranch: "ralph/test-feature",
+		DefaultBranch:  "main",
+	}, nil)
+	if merged {
+		t.Fatal("expected merged=false for conflict-405")
+	}
+	var conflictErr *MergeConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Errorf("expected MergeConflictError for conflict-405, got %T: %v", err, err)
 	}
 }
 
