@@ -254,8 +254,11 @@ func (st *Store) WriteConfig(maxIterations int) {
 }
 
 // SaveCLIConfig writes CLI config key-value pairs into state.json under a
-// "cli_config" key. This allows evolve restart to reconstruct args from the
-// semantic config rather than replaying raw CLI args.
+// "cli_config" key. Written on every loop startup (overwriting the previous
+// run's entry) and read back by `ralph resume` to reconstruct the run's
+// flags. Holds only explicit deviations from registry defaults (see
+// config.ConfigToState), so a resume under a newer binary inherits that
+// binary's defaults for everything unrecorded.
 func (st *Store) SaveCLIConfig(cfg map[string]string) error {
 	s, err := st.Load()
 	if err != nil {
@@ -269,17 +272,6 @@ func (st *Store) SaveCLIConfig(cfg map[string]string) error {
 		s.Overflow = make(map[string]json.RawMessage)
 	}
 	s.Overflow["cli_config"] = json.RawMessage(data)
-	return st.Save(s)
-}
-
-// ClearCLIConfig removes cli_config from state.json so stale flags don't
-// persist across manual restarts.
-func (st *Store) ClearCLIConfig() error {
-	s, err := st.Load()
-	if err != nil {
-		return err
-	}
-	delete(s.Overflow, "cli_config")
 	return st.Save(s)
 }
 

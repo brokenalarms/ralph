@@ -62,8 +62,8 @@ type Connectivity interface {
 }
 
 // IterationHook fires once at the start of every loop iteration. Production
-// uses it to regenerate the resume script so the user can resume from the
-// most recent state. Tests can omit it (nil = no-op).
+// wires nothing here; it is an observability seam for tests that assert
+// iteration-start ordering (nil = no-op).
 type IterationHook interface {
 	OnIterationStart()
 }

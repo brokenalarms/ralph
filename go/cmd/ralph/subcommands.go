@@ -95,6 +95,9 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 	case "loop":
 		return handleLoop(sub, log)
 
+	case "resume":
+		return handleResume(sub, log)
+
 	case "merge":
 		return handleMerge(sub, log)
 
@@ -191,6 +194,50 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	}
 
 	return runMain(cfg, dirs, scriptPath, sub.Args, log)
+}
+
+// handleResume re-runs the loop with the flags recorded from the last run.
+// The compiled binary is the source of truth for resume: state.json's
+// cli_config holds only explicit deviations from registry defaults (see
+// ConfigToState), and everything unrecorded takes the current binary's
+// default — so a version upgrade between run and resume picks up new
+// defaults automatically instead of freezing old ones. Explicit flags
+// passed to `ralph resume` are appended after the recorded ones, so they
+// win when config.Parse applies args in order.
+func handleResume(sub config.Subcommand, log *logging.Logger) int {
+	if hasHelpFlag(sub.Args) {
+		printResumeUsage()
+		return 0
+	}
+
+	absDir, _ := filepath.Abs(sub.Dir)
+	if !git.IsGitRepo(absDir) {
+		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", absDir)
+		return 1
+	}
+	repoRoot, err := git.RepoRoot(absDir)
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
+		return 1
+	}
+
+	saved, err := state.NewStore(filepath.Join(repoRoot, ".ralph")).LoadCLIConfig()
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Could not read saved run configuration: %v", err)
+	}
+	if len(saved) == 0 {
+		log.Emit(logging.Opts{}, "No saved run configuration — starting with defaults")
+	} else {
+		log.Emit(logging.Opts{}, "Resuming with recorded flags: %s", strings.Join(config.ArgsFromState(saved), " "))
+	}
+
+	return handleLoop(config.Subcommand{Name: "loop", Dir: sub.Dir, Args: resumeArgs(saved, sub.Args)}, log)
+}
+
+// resumeArgs reconstructs loop args from the recorded cli_config map and
+// appends explicit overrides after them so the overrides take precedence.
+func resumeArgs(saved map[string]string, overrides []string) []string {
+	return append(config.ArgsFromState(saved), overrides...)
 }
 
 func hasHelpFlag(args []string) bool {
@@ -456,6 +503,7 @@ func printUsage() {
 
 %sCOMMANDS:%s
   ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
+  ralph resume [options]       Re-run the loop with the flags recorded from the last run
   ralph attach [directory]     Attach to a running loop's tmux session (3-pane: loop + stream + plan)
   ralph merge <top-pr>         Rebase and merge a stacked PR chain bottom-up
   ralph task                   Interactive task triage and spec session
@@ -493,6 +541,12 @@ func printReviewUsage() {
 	fmt.Printf("%sUSAGE:%s\n  ralph review [directory] [--model <model>]\n\n", logging.Bold, logging.Reset)
 	fmt.Printf("Launches an interactive Claude session for reviewing reflections, auditing\ntests, and identifying refactoring opportunities.\n\n")
 	fmt.Printf("%sOPTIONS:%s\n  --model <model>    Model ceiling for the session — alias (opus, sonnet, haiku) for latest, or pinned ID (e.g. claude-sonnet-4-6)\n", logging.Bold, logging.Reset)
+}
+
+func printResumeUsage() {
+	fmt.Printf("%sralph resume%s - Re-run the loop with the flags recorded from the last run\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sUSAGE:%s\n  ralph resume [options]\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("Reads the explicit flags recorded in .ralph/state.json from the last\n`ralph loop` invocation and starts the loop with them. Flags never set\nexplicitly take the current binary's defaults. Any options given here\noverride the recorded ones.\n")
 }
 
 func printAttachUsage() {

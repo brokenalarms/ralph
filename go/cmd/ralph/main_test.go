@@ -136,101 +136,75 @@ func TestInitTaskBackend_ErrorsWhenBDUnavailable(t *testing.T) {
 	}
 }
 
-// Verifies the resume script contains the correct flags from the config,
-// proving that interrupted sessions can be resumed with the same parameters.
-func TestGenerateResumeScript(t *testing.T) {
+// Proves the `ralph resume` reconstruction round-trip: flags recorded from a
+// run (deviations-only, via ConfigToState → SaveCLIConfig) come back through
+// LoadCLIConfig → resumeArgs → Parse as the same config, while flags that
+// were never recorded take the current binary's defaults — the property that
+// keeps a resume from freezing an old binary's defaults (the resume.sh
+// failure mode this replaced).
+func TestResumeArgs_RoundTripAppliesCurrentDefaults(t *testing.T) {
 	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(dir)
 
-	cfg := config.Config{
-		ProjectDir:    dir,
-		MaxIterations: 20,
-		AutoMerge:     true,
+	cfg := config.Defaults()
+	cfg.MaxIterations = 30
+	cfg.AutoMerge = true
+	cfg.Evolve = true
+
+	if err := st.SaveCLIConfig(config.ConfigToState(&cfg)); err != nil {
+		t.Fatalf("SaveCLIConfig: %v", err)
 	}
 
-	log := logging.New(nil)
-	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
-
-	resumePath := filepath.Join(ralphDir, "resume.sh")
-	data, err := os.ReadFile(resumePath)
+	saved, err := st.LoadCLIConfig()
 	if err != nil {
-		t.Fatalf("resume script should exist: %v", err)
+		t.Fatalf("LoadCLIConfig: %v", err)
+	}
+	// max_iterations was never recorded as a default — only deviations persist.
+	if _, ok := saved["verbose"]; ok {
+		t.Error("default-valued flag must not be recorded in cli_config")
 	}
 
-	content := string(data)
-	if !strings.Contains(content, "--max 20") {
-		t.Error("resume script should contain --max 20")
+	resumed, err := config.Parse(resumeArgs(saved, nil))
+	if err != nil {
+		t.Fatalf("Parse(resumeArgs): %v", err)
 	}
-	if !strings.Contains(content, "--auto-merge") {
-		t.Error("resume script should contain --auto-merge")
+	if resumed.MaxIterations != 30 || !resumed.AutoMerge || !resumed.Evolve {
+		t.Errorf("recorded deviations should survive the round-trip, got %+v", resumed)
+	}
+	// A flag absent from cli_config takes the current binary's default.
+	defaults := config.Defaults()
+	if resumed.Verbose != defaults.Verbose {
+		t.Errorf("unrecorded flag should take current default %v, got %v", defaults.Verbose, resumed.Verbose)
 	}
 }
 
-// Verifies the resume script includes --evolve when enabled.
-func TestGenerateResumeScript_Evolve(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
+// Explicit flags passed to `ralph resume` are appended after the recorded
+// ones, so config.Parse's in-order application makes them win.
+func TestResumeArgs_ExplicitFlagsOverrideRecorded(t *testing.T) {
+	saved := map[string]string{"max": "30", "auto-merge": "true"}
 
-	cfg := config.Config{
-		ProjectDir:    dir,
-		MaxIterations: 50,
-		AutoMerge:     true,
-		Evolve:        true,
-		CallsPerHour:  80,
+	resumed, err := config.Parse(resumeArgs(saved, []string{"--max", "7"}))
+	if err != nil {
+		t.Fatalf("Parse(resumeArgs with override): %v", err)
 	}
-
-	log := logging.New(nil)
-	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
-
-	data, _ := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
-	content := string(data)
-	if !strings.Contains(content, "--evolve") {
-		t.Error("resume script should contain --evolve")
+	if resumed.MaxIterations != 7 {
+		t.Errorf("explicit --max 7 should override recorded 30, got %d", resumed.MaxIterations)
 	}
-	if !strings.Contains(content, "--auto-merge") {
-		t.Error("resume script should contain --auto-merge")
+	if !resumed.AutoMerge {
+		t.Error("non-overridden recorded flag should still apply")
 	}
 }
 
-// Verifies the resume script includes all non-default flags from the config,
-// specifically --evolve and --base-branch which were previously missing.
-func TestGenerateResumeScript_AllFlags(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	cfg := config.Config{
-		ProjectDir:    dir,
-		MaxIterations: 30,
-		AutoMerge:     true,
-		Evolve:        true,
-		BaseBranch:    "main",
-		Wait:          true,
-		Verbose:       true,
-	}
-
-	log := logging.New(nil)
-	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
-
-	data, err := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
+// An empty cli_config (fresh project, or a run recorded with all defaults)
+// degrades to pure current-binary defaults.
+func TestResumeArgs_EmptySavedConfigYieldsDefaults(t *testing.T) {
+	resumed, err := config.Parse(resumeArgs(nil, nil))
 	if err != nil {
-		t.Fatalf("resume script should exist: %v", err)
+		t.Fatalf("Parse(resumeArgs(nil)): %v", err)
 	}
-
-	content := string(data)
-	for _, flag := range []string{
-		"--max 30",
-		"--auto-merge",
-		"--evolve",
-		"--base-branch main",
-		"--wait",
-		"--verbose",
-	} {
-		if !strings.Contains(content, flag) {
-			t.Errorf("resume script should contain %q\ngot: %s", flag, content)
-		}
+	defaults := config.Defaults()
+	if resumed.MaxIterations != defaults.MaxIterations {
+		t.Errorf("MaxIterations = %d, want default %d", resumed.MaxIterations, defaults.MaxIterations)
 	}
 }
 
@@ -513,7 +487,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), true, log)
 
 	status, _ := st.Read("status")
 	if status != "stopped" {
@@ -537,7 +511,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, false, log)
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), false, log)
 
 	status, _ := st.Read("status")
 	if status != "completed" {
@@ -545,10 +519,10 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	}
 }
 
-// Proves: cleanup clears cli_config from state.json so stale flags from a
-// previous run don't leak into a manual restart. Evolve restart is unaffected
-// because syscall.Exec replaces the process before cleanup runs.
-func TestCleanup_ClearsCLIConfig(t *testing.T) {
+// Proves: cleanup leaves cli_config in state.json — `ralph resume` reads it
+// to reconstruct the run's flags, and the next `ralph loop` startup
+// overwrites it, so persistence (not clearing) is what keeps it fresh.
+func TestCleanup_PreservesCLIConfig(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -557,32 +531,26 @@ func TestCleanup_ClearsCLIConfig(t *testing.T) {
 	st.Init(5)
 	st.SaveCLIConfig(map[string]string{"evolve": "true", "max": "20"})
 
-	// Verify cli_config exists before cleanup.
-	cfg, _ := st.LoadCLIConfig()
-	if cfg == nil {
-		t.Fatal("cli_config should exist before cleanup")
-	}
-
 	gm := git.New(git.Config{WorkDir: dir, BaseBranch: "main"})
 	backend := &testutil.StubBackend{Total: 1}
 	log := logging.New(nil)
 	c := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(c, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
+	cleanup(c, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), true, log)
 
-	// cli_config must be cleared.
 	cfg, err := st.LoadCLIConfig()
 	if err != nil {
 		t.Fatalf("LoadCLIConfig after cleanup: %v", err)
 	}
-	if cfg != nil {
-		t.Errorf("expected cli_config cleared after cleanup, got %v", cfg)
+	if cfg["max"] != "20" || cfg["evolve"] != "true" {
+		t.Errorf("cli_config must survive cleanup for ralph resume, got %v", cfg)
 	}
 }
 
-// Proves: cli_config in state.json is never read back for execution — it is
-// a write-only audit record. LoadCLIConfig must not appear in the evolve
-// restart path in main.go. If someone re-adds it, this test catches it.
+// Proves: the evolve restart path never reconstructs args from cli_config —
+// it passes the original argv through. cli_config is read only by the
+// `ralph resume` subcommand. If someone re-adds reconstruction here, this
+// test catches it.
 func TestCLIConfig_NeverReadForExecution(t *testing.T) {
 	mainSrc, err := os.ReadFile("main.go")
 	if err != nil {
