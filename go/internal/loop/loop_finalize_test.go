@@ -27,6 +27,7 @@ type shipResult struct {
 	ciInfraFailure  bool                 // InfrastructureFailure flag on ShipResult
 	ciFailureDetail *git.CIFailureError  // populated when the loop needs to route through tryFixCI
 	pushedBranch    string               // PushedBranch flag: non-empty when Phase 1 push succeeded on this branch
+	conflictDetail  *git.UnresolvedConflictError // populated when the loop needs to route through tryFixConflict
 }
 
 // finalizeSetup bundles a Loop and pre-built params for finalize tests.
@@ -59,9 +60,10 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 			InfrastructureFailure: ship.ciInfraFailure,
 			CIFailureDetail:       ship.ciFailureDetail,
 			PushedBranch:          ship.pushedBranch,
+			ConflictDetail:        ship.conflictDetail,
 		},
 	})
-	autoMerge := ship.merged || ship.ciFailure || ship.stacked
+	autoMerge := ship.merged || ship.ciFailure || ship.stacked || ship.conflictDetail != nil
 	cfg := Config{
 		AutoMerge: autoMerge,
 		Dirs:      workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
@@ -175,8 +177,11 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	}
 }
 
-// completeTask closes the bead (not skips) when merge fails — work is verified
-// and the branch is findable by stack head detection for the next task.
+// completeTask closes the bead (not skips) when merge fails transiently —
+// no unresolved conflict, work is verified, and the branch is findable by
+// stack head detection for the next task. Contrast with
+// TestFinalizePR_UnresolvableConflict_SkipsInsteadOfCloses: only an
+// unresolvable conflict downgrades the close to a skip.
 func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
@@ -202,6 +207,48 @@ func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 	}
 	if len(backend.CloseReasons) == 0 || !strings.Contains(backend.CloseReasons[0], "merge pending") {
 		t.Errorf("close reason should indicate merge pending, got %v", backend.CloseReasons)
+	}
+}
+
+// An unresolvable merge conflict — auto-rebase failed and the conflict fix
+// agent could not resolve it — skips the bead with merge_failed instead of
+// closing it as merge-pending. Closing would abandon the PR to rot into
+// deeper conflict (tabi PR #1524) and advance dependents onto a main that
+// lacks this bead's changes; the skip surfaces the PR to triage.
+func TestFinalizePR_UnresolvableConflict_SkipsInsteadOfCloses(t *testing.T) {
+	dir, _ := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix bug", backend, shipResult{
+		prNumber:       99,
+		merged:         false,
+		prURL:          "https://github.com/owner/repo/pull/99",
+		conflictDetail: &git.UnresolvedConflictError{},
+	})
+
+	out := fs.loop.completeTask(context.Background(), fs.p)
+
+	if out.merged {
+		t.Error("should not be merged on unresolvable conflict")
+	}
+	backend.CloseMu.Lock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("CloseTask must not be called for an unresolvable conflict, got %v", backend.ClosedIDs)
+	}
+	backend.CloseMu.Unlock()
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	if len(backend.SkippedIDs) != 1 || backend.SkippedIDs[0] != "ralph-abc" {
+		t.Fatalf("expected SkipTask for ralph-abc, got %v", backend.SkippedIDs)
+	}
+	if backend.SkipReasons[0] != string(tasks.SkipMergeFailed) {
+		t.Errorf("expected skip reason %q, got %q", tasks.SkipMergeFailed, backend.SkipReasons[0])
+	}
+	if !strings.Contains(backend.SkipDetails[0], "pull/99") {
+		t.Errorf("skip detail should carry the PR reference, got %q", backend.SkipDetails[0])
 	}
 }
 

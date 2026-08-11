@@ -843,6 +843,12 @@ type shipOutcome struct {
 	stacked        bool
 	pushedBranch   string
 	shipErr        error
+	// conflictUnresolved is true when the merge failed on a conflict that
+	// neither the auto-rebase (ResolveConflict) nor the conflict fix agent
+	// (tryFixConflict) could resolve. Distinguishes "action required" from a
+	// transient merge failure, so completeTask skips the bead instead of
+	// closing it as merge-pending.
+	conflictUnresolved bool
 }
 
 // callShip invokes git.Ship and layers connectivity and transient-GitHub-error
@@ -1013,8 +1019,9 @@ func (l *Loop) shipPhase2Merge(ctx context.Context, taskID, title, workDir, rawL
 			if l.tryFixConflict(ctx, taskID, title, workDir, rawLogPath) {
 				continue
 			}
-			// Agent could not resolve — give up.
-			return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch}
+			// Agent could not resolve — give up. conflictUnresolved tells
+			// completeTask this needs manual resolution: skip, don't close.
+			return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch, conflictUnresolved: true}
 		}
 		return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, merged: mergeResult.Merged, ciFailure: mergeResult.CIFailure, stacked: mergeResult.Stacked, pushedBranch: pushedBranch}
 	}

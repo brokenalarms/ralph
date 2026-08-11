@@ -283,6 +283,7 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 	out := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch, shipErr :=
 		out.prNumber, out.prResultURL, out.merged, out.ciFailure, out.ciInfraFailure, out.stacked, out.pushedBranch, out.shipErr
+	conflictUnresolved := out.conflictUnresolved
 
 	// Record every successful push in chronological order so completedBranches()
 	// can build the correct stack for the next iteration. This captures both
@@ -362,6 +363,21 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 		if prRef == "" {
 			prRef = fmt.Sprintf("PR #%d", prNumber)
 		}
+
+		// Unresolvable merge conflict: neither the auto-rebase nor the
+		// conflict fix agent could resolve it, so further action is required
+		// — closing as "merge pending" would abandon the PR to rot into
+		// deeper conflict, and would advance dependents onto a main that
+		// lacks this bead's changes. Skip so triage surfaces the PR.
+		if conflictUnresolved && !stacked && !merged {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+				"Merge conflict unresolvable — skipping bead %s (%s needs manual conflict resolution)",
+				p.taskID, prRef)
+			l.skipTask(p.taskID, tasks.SkipMergeFailed, prRef)
+			l.git.TagTaskEnd(p.taskID)
+			return completeTaskOut{action: signalSkipped, prNumber: prNumber}
+		}
+
 		var closeReason string
 		if stacked {
 			closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
