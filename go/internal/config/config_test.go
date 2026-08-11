@@ -9,7 +9,7 @@ import (
 )
 
 // Verifies that Parse with no arguments returns defaults derived from the Flags
-// registry: cwd project dir, 50 iterations, 80 calls/hr, idle timeouts at 10m/5m.
+// registry: cwd project dir, unlimited iterations, 80 calls/hr, idle timeouts at 10m/5m.
 func TestDefaultValues(t *testing.T) {
 	// Clear env vars so defaults are deterministic.
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
@@ -21,8 +21,8 @@ func TestDefaultValues(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.MaxIterations != 50 {
-		t.Errorf("MaxIterations = %d, want 50", cfg.MaxIterations)
+	if cfg.MaxIterations != 0 {
+		t.Errorf("MaxIterations = %d, want 0 (unlimited)", cfg.MaxIterations)
 	}
 	if cfg.ProjectDir != "." {
 		t.Errorf("ProjectDir = %q, want \".\"", cfg.ProjectDir)

@@ -394,8 +394,12 @@ func (l *Logger) IterationBanner(o BannerOpts) {
 	if o.BaseBranch != "" {
 		baseTag = fmt.Sprintf(" | base: %s", o.BaseBranch)
 	}
-	l.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d done this run · %d remaining%s%s ---",
-		o.RunIteration, o.MaxIteration, o.DoneThisRun, o.Remaining, versionTag, baseTag)
+	maxTag := fmt.Sprintf("%d", o.MaxIteration)
+	if o.MaxIteration <= 0 {
+		maxTag = "unlimited"
+	}
+	l.PhaseColor(phaseColor, "--- Run iteration %d/%s | %d done this run · %d remaining%s%s ---",
+		o.RunIteration, maxTag, o.DoneThisRun, o.Remaining, versionTag, baseTag)
 
 	if o.Description != "" {
 		l.EmitDescription(o.Description)
