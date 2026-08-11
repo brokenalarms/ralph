@@ -118,7 +118,14 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to initialize state: %v", err)
 		return 1
 	}
-	if err := st.SaveCLIConfig(config.ConfigToState(&cfg)); err != nil {
+	cliState := config.ConfigToState(&cfg)
+	// Inside the tmux wrapper the inner process's cfg doesn't carry --tmux
+	// (the outer invocation consumed it), so record it from the session env
+	// or a resume would silently drop the tmux layout.
+	if cfg.UseTmux || os.Getenv("_RALPH_TMUX_SESSION") != "" {
+		cliState["tmux"] = "true"
+	}
+	if err := st.SaveCLIConfig(cliState); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to save CLI config to state: %v", err)
 		return 1
 	}
@@ -305,9 +312,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		TaskBackend: backend,
 		Logger:      log,
 		Verifier:    vrf,
-		IterationHook: &resumeScriptHook{
-			cfg: cfg, ralphDir: ralphDir, scriptPath: scriptPath, args: args, log: log,
-		},
 	})
 
 	if err := execLoop.Run(ctx); err != nil {
@@ -320,7 +324,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		}
 	}
 
-	cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
+	cleanup(cfg, gm, st, backend, ralphDir, planFile, interrupted, log)
 	return 0
 }
 
@@ -388,23 +392,6 @@ func initRalphDir(ctx context.Context, cfg *config.Config, ralphDir, stateFile s
 	return false, -1
 }
 
-// resumeScriptHook implements loop.IterationHook by regenerating the
-// resume script at the start of each loop iteration. The script captures
-// the current task / branch / state so the user can resume from the most
-// recent point.
-type resumeScriptHook struct {
-	cfg        config.Config
-	ralphDir   string
-	scriptPath string
-	args       []string
-	log        *logging.Logger
-}
-
-// OnIterationStart implements loop.IterationHook.
-func (h *resumeScriptHook) OnIterationStart() {
-	generateResumeScript(h.cfg, h.ralphDir, h.scriptPath, h.args, h.log)
-}
-
 // initTaskBackend initializes the bd task backend. BD is required — if
 // unavailable, ralph exits with an error.
 func initTaskBackend(cfg config.Config, promptsDir, ralphDir string, log *logging.Logger) (tasks.Backend, error) {
@@ -419,14 +406,11 @@ func initTaskBackend(cfg config.Config, promptsDir, ralphDir string, log *loggin
 	return bd, nil
 }
 
-// cleanup generates the resume script and prints a run summary.
-func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, interrupted bool, log *logging.Logger) {
+// cleanup prints the run summary. cli_config is left in state.json so
+// `ralph resume` can reconstruct the run's flags; the next `ralph loop`
+// startup overwrites it, which is what keeps it from going stale.
+func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, planFile string, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
-
-	// Clear cli_config so stale flags don't persist across manual restarts.
-	// Evolve restart preserves cli_config because syscall.Exec replaces the
-	// process before cleanup runs.
-	st.ClearCLIConfig()
 
 	if interrupted {
 		log.Emit(logging.Opts{Level: logging.Warn}, "Session interrupted — cleaning up")
@@ -434,37 +418,7 @@ func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backe
 		st.Write("status", "stopped")
 	}
 
-	generateResumeScript(cfg, ralphDir, scriptPath, args, log)
 	printSummary(cfg, gm, st, backend, ralphDir, planFile, log)
-}
-
-// generateResumeScript writes a shell script that re-runs ralph with the same
-// flags, allowing the user to easily resume after interruption. Flags are
-// derived from the config registry so new flags are included automatically.
-func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args []string, log *logging.Logger) {
-	resumePath := filepath.Join(ralphDir, "resume.sh")
-
-	stateMap := config.ConfigToState(&cfg)
-	if cfg.UseTmux || os.Getenv("_RALPH_TMUX_SESSION") != "" {
-		stateMap["tmux"] = "true"
-	}
-	extraArgs := config.ArgsFromState(stateMap)
-
-	extra := ""
-	if len(extraArgs) > 0 {
-		extra = " " + strings.Join(extraArgs, " ")
-	}
-
-	content := fmt.Sprintf(`#!/usr/bin/env bash
-# Ralph Loop - Resume Script
-# Generated at: %s
-cd "%s"
-exec "%s" loop%s
-`, time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		cfg.ProjectDir, scriptPath, extra)
-
-	os.WriteFile(resumePath, []byte(content), 0o755)
-	log.Emit(logging.Opts{}, "Resume script: %s", resumePath)
 }
 
 // printSummary displays the end-of-run summary.
@@ -494,7 +448,7 @@ func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.
 
 	hasRemaining, _ := backend.HasRemaining()
 	if hasRemaining {
-		log.Emit(logging.Opts{}, "Resume:     %s", filepath.Join(ralphDir, "resume.sh"))
+		log.Emit(logging.Opts{}, "Resume:     ralph resume")
 	}
 }
 

@@ -184,6 +184,8 @@ func ParseSubcommand(args []string) (Subcommand, bool) {
 		return Subcommand{Name: "task", Dir: ".", Args: args[1:]}, true
 	case "loop":
 		return Subcommand{Name: "loop", Dir: ".", Args: args[1:]}, true
+	case "resume":
+		return Subcommand{Name: "resume", Dir: ".", Args: args[1:]}, true
 	case "review":
 		return Subcommand{Name: "review", Dir: ".", Args: args[1:]}, true
 	case "merge":
