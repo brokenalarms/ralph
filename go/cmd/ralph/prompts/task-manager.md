@@ -89,6 +89,7 @@ for skipped beads that need diagnosis:
 | `idle_timeout_max_failures` | Context window exhausted repeatedly | Propose a split using the unwieldy-bead split flow |
 | `verification_rejected` | **Ralph defect** — see principle below | Diagnose via branch-diff-vs-AC, then route to a loop-bug bead or hands-on fix |
 | `push_failed` / `pr_creation_failed` / `close_failed` / `dependency_blocked_by` | Ralph or infra defect (see `skip_detail` for the branch/blocker list) | File a ralph bug bead |
+| `merge_failed` | Unresolvable merge conflict — auto-rebase and the conflict fix agent both failed (`skip_detail` = PR reference) | Verified work is on the open PR; resolve the conflict hands-on (rebase the PR branch onto main, keep both sides' intent), merge, then close the bead |
 | `would_strand_dependents` | Dependency-order problem | Propose re-ordering or adjusting deps |
 | `transport_error` / `analyzer` | Ralph or infra defect (see `skip_detail` for the underlying op/reason) | File a ralph bug bead |
 | `failed_start_limit_reached` | Agent process repeatedly failed to start | File a ralph bug bead |
