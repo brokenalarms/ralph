@@ -446,7 +446,10 @@ func (g *ghCLI) MergePR(ctx context.Context, prNumber int, repoURL string, opts 
 }
 
 // classifyMergeStatus maps gh api --include output to a structured MergeResult.
-// HTTP 200 = merged, 405 = blocked by branch protection, 409 = merge conflict.
+// HTTP 200 = merged, 409 = merge conflict. HTTP 405 covers both
+// branch-protection blocks and conflicting PRs ("Pull Request has merge
+// conflicts") — only the API message distinguishes them, so a 405 whose
+// message indicates conflicts classifies as Conflict, not Blocked.
 func classifyMergeStatus(output string, err error) MergeResult {
 	statusCode := parseHTTPStatus(output)
 	if err == nil || statusCode == 200 {
@@ -455,12 +458,21 @@ func classifyMergeStatus(output string, err error) MergeResult {
 	msg := parseAPIMessage(output)
 	switch statusCode {
 	case 405:
+		if isMergeConflictMessage(msg) {
+			return MergeResult{Conflict: true, Message: msg}
+		}
 		return MergeResult{Blocked: true, Message: msg}
 	case 409:
 		return MergeResult{Conflict: true, Message: msg}
 	default:
 		return MergeResult{Message: msg}
 	}
+}
+
+// isMergeConflictMessage reports whether a merge API error message indicates
+// merge conflicts rather than a branch-protection block.
+func isMergeConflictMessage(msg string) bool {
+	return strings.Contains(strings.ToLower(msg), "merge conflict")
 }
 
 // parseMergedSHA extracts the "sha" field from a GitHub squash-merge API
