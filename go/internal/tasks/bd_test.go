@@ -830,6 +830,40 @@ func TestBD_ProjectContext_AssemblesAllSections(t *testing.T) {
 	}
 }
 
+// Proves: ProjectContext's closed-beads query passes --sort closed (so the
+// "Recently closed beads" section is ordered newest-first by closed_at
+// instead of bd's default priority sort) and does not pass --reverse (which
+// would flip the order to oldest-first).
+func TestBD_ProjectContext_ClosedBeadsQuerySortsByClosedDate(t *testing.T) {
+	var closedArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "list --flat":
+			return "○ task-1 - Something", nil
+		case strings.Contains(joined, "list") && strings.Contains(joined, "closed"):
+			closedArgs = args
+			return "✓ task-0 - Bootstrap project", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if _, err := b.ProjectContext(); err != nil {
+		t.Fatal(err)
+	}
+
+	if closedArgs == nil {
+		t.Fatal("expected closed-beads query to run")
+	}
+	joined := strings.Join(closedArgs, " ")
+	if !strings.Contains(joined, "--sort") || !strings.Contains(joined, "closed") {
+		t.Errorf("expected closed-beads query args to contain --sort closed, got: %v", closedArgs)
+	}
+	if strings.Contains(joined, "--reverse") {
+		t.Errorf("closed-beads query args must not contain --reverse, got: %v", closedArgs)
+	}
+}
+
 // Proves: ProjectContext gracefully handles missing config.toml.
 func TestBD_ProjectContext_NoConfig(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {

@@ -803,7 +803,7 @@ func (b *BD) ProjectContext() (string, error) {
 		sections = append(sections, "## Open beads\n```\n"+out+"\n```")
 	}
 
-	if out, err := run.Run(ctx, b.ProjectDir, "list", "--status", "closed", "--limit", "20"); err == nil && out != "" {
+	if out, err := run.Run(ctx, b.ProjectDir, "list", "--status", "closed", "--sort", "closed", "--limit", "20"); err == nil && out != "" {
 		sections = append(sections, "## Recently closed beads\n```\n"+out+"\n```")
 	}
 
