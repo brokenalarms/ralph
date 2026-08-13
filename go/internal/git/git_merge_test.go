@@ -723,6 +723,12 @@ func TestPush_CompileCheckBlocksPush(t *testing.T) {
 	if !strings.Contains(err.Error(), "pre-push compile check failed") {
 		t.Errorf("expected compile check error, got: %v", err)
 	}
+	// The full 30-line compiler output must not be embedded in the returned
+	// error — every caller in the chain logs this error verbatim, so a
+	// multi-line error means the full output gets printed once per caller.
+	if n := strings.Count(err.Error(), "\n"); n > 1 {
+		t.Errorf("expected error with at most 1 newline (reason + single-line summary), got %d newlines: %v", n, err)
+	}
 
 	// Verify nothing was pushed to remote.
 	out := cmdOutput(t, "git", "-C", bare, "branch", "--list", "ralph/test-prepush")

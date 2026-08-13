@@ -77,7 +77,8 @@ func (r *repo) Push(ctx context.Context) error {
 	if r.compileCheckTimeout > 0 {
 		result := verify.CompileCheck(ctx, r.compileCheckTimeout, r.workDir)
 		if !result.Passed {
-			return fmt.Errorf("%s\n%s", result.Reason, result.Details)
+			r.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Debug}, "%s", result.Details)
+			return fmt.Errorf("%s\n%s", result.Reason, compileCheckSummary(result.Details))
 		}
 		r.logger.Emit(logging.Opts{Domain: logging.Build}, "Pre-push compile check passed")
 	}
@@ -129,6 +130,20 @@ func (r *repo) Push(ctx context.Context) error {
 		return r.gitCmdErrCtx(ctx, r.workDir, "push", "-u", "origin", r.worktreeBranch)
 	}
 	return nil
+}
+
+// compileCheckSummary condenses multi-line compiler output into a single
+// line: the first line plus a total line count. The full output is logged
+// separately by the caller (at debug level) — callers of Push log the
+// returned error verbatim, so embedding the full output here would print it
+// again on top of that debug emit.
+func compileCheckSummary(details string) string {
+	trimmed := strings.TrimRight(details, "\n")
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	return fmt.Sprintf("%s (%d lines total)", lines[0], len(lines))
 }
 
 // reopenClosedPR finds a closed (not merged) PR for the given branch and
@@ -400,9 +415,6 @@ func shipPR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string, o
 	if err := infra.hooks.Push(ctx); err != nil {
 		if ctx.Err() != nil {
 			return ShipResult{}, ctx.Err()
-		}
-		if infra.logger != nil {
-			infra.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v", err)
 		}
 		return ShipResult{}, fmt.Errorf("push failed: %w", err)
 	}

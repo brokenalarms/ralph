@@ -44,17 +44,17 @@ func PRLinkOpt(nwo string, prNumber int) *Link {
 
 // ANSI color codes.
 const (
-	Red     = "\033[0;31m"
-	Green   = "\033[0;32m"
-	Yellow  = "\033[0;33m"
+	Red        = "\033[0;31m"
+	Green      = "\033[0;32m"
+	Yellow     = "\033[0;33m"
 	Blue       = "\033[0;34m"
 	Magenta    = "\033[0;35m"
 	Cyan       = "\033[0;36m"
 	BrightBlue = "\033[0;94m"
-	Orange  = "\033[0;38;5;208m"
-	Dim     = "\033[2;37m"
-	Bold    = "\033[1m"
-	Reset   = "\033[0m"
+	Orange     = "\033[0;38;5;208m"
+	Dim        = "\033[2;37m"
+	Bold       = "\033[1m"
+	Reset      = "\033[0m"
 )
 
 // Actor identifies the source of a log message.
@@ -103,9 +103,10 @@ type Level int
 
 const (
 	Info    Level = iota // cyan
-	Success             // green
-	Warn                // yellow
-	Error               // red
+	Success              // green
+	Warn                 // yellow
+	Error                // red
+	Debug                // dim — low-priority detail, not surfaced by default callers
 )
 
 func (lv Level) color() string {
@@ -116,6 +117,8 @@ func (lv Level) color() string {
 		return Yellow
 	case Error:
 		return Red
+	case Debug:
+		return Dim
 	default:
 		return Cyan
 	}
@@ -263,7 +266,6 @@ func (l *Logger) AgentLog(domain Domain, format string, args ...any) {
 	content := fmt.Sprintf("%s %s", tag, fmt.Sprintf(format, args...))
 	l.write(l.Fmt.Format(content) + "\n")
 }
-
 
 // Phase writes a bold blue phase header.
 func (l *Logger) Phase(format string, args ...any) {
@@ -432,4 +434,3 @@ func (l *Logger) Separator(color, label string) {
 	l.write(l.Fmt.FormatLine(content) + "\n")
 	l.write("\n")
 }
-
