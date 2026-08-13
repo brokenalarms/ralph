@@ -855,12 +855,20 @@ func TestBD_ProjectContext_ClosedBeadsQuerySortsByClosedDate(t *testing.T) {
 	if closedArgs == nil {
 		t.Fatal("expected closed-beads query to run")
 	}
-	joined := strings.Join(closedArgs, " ")
-	if !strings.Contains(joined, "--sort") || !strings.Contains(joined, "closed") {
-		t.Errorf("expected closed-beads query args to contain --sort closed, got: %v", closedArgs)
+	sortedByClosed := false
+	for i, arg := range closedArgs {
+		if arg == "--sort" && i+1 < len(closedArgs) && closedArgs[i+1] == "closed" {
+			sortedByClosed = true
+			break
+		}
 	}
-	if strings.Contains(joined, "--reverse") {
-		t.Errorf("closed-beads query args must not contain --reverse, got: %v", closedArgs)
+	if !sortedByClosed {
+		t.Errorf("expected closed-beads query args to have --sort immediately followed by closed, got: %v", closedArgs)
+	}
+	for _, arg := range closedArgs {
+		if arg == "--reverse" {
+			t.Errorf("closed-beads query args must not contain --reverse, got: %v", closedArgs)
+		}
 	}
 }
 
