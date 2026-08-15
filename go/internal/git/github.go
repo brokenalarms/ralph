@@ -433,14 +433,21 @@ func (g *ghCLI) MergePR(ctx context.Context, prNumber int, repoURL string, opts 
 	if opts.Admin {
 		args = append(args, "-F", "bypass_restrictions=true")
 	}
-	stdout, _, err := g.runGHCombined(ctx, args)
+	stdout, stderr, elapsed, err := g.runGHCmdRaw(ctx, args)
 
 	result := classifyMergeStatus(string(stdout), err)
-	if result.Merged {
+	switch {
+	case result.Merged:
 		if opts.DeleteBranch {
 			g.deleteBranch(ctx, nwo, pr)
 		}
-		return result
+	case result.Conflict:
+		if g.logger != nil {
+			g.logger.Emit(logging.Opts{Domain: logging.Git},
+				"[gh] merge rejected: PR #%s has merge conflicts — deferring to rebase", pr)
+		}
+	default:
+		g.logGHFailure(args, stderr, stdout, elapsed, err)
 	}
 	return result
 }

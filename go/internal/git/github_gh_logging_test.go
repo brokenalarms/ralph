@@ -137,3 +137,79 @@ esac
 		t.Errorf("expected Warn-level log entry, got: %v", log.messages)
 	}
 }
+
+// MergePR emits one concise info line — not the full gh failure dump — when
+// the merge PUT 405s with "Pull Request has merge conflicts", since
+// classifyMergeStatus maps that to MergeResult{Conflict: true} and the loop
+// proceeds to rebase. This is a fully handled outcome, not a warning-worthy
+// failure.
+func TestMergePR_Conflict405_LogsConciseLine(t *testing.T) {
+	bin := t.TempDir()
+	ghPath := filepath.Join(bin, "gh")
+	script := `#!/bin/sh
+printf 'HTTP/2.0 405 Method Not Allowed\r\n'
+printf 'Access-Control-Allow-Origin: *\r\n'
+printf '\r\n'
+printf '{"message":"Pull Request has merge conflicts","documentation_url":"https://docs.github.com/rest"}'
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	log := &testLog{}
+	g := &ghCLI{logger: log}
+	result := g.MergePR(context.Background(), 9, "https://github.com/owner/repo.git", MergeOpts{})
+
+	if !result.Conflict {
+		t.Fatalf("expected Conflict=true, got %+v", result)
+	}
+	if !log.contains("PR #9") || !log.contains("merge conflicts") {
+		t.Errorf("expected concise merge-conflict log naming PR #9, got: %v", log.messages)
+	}
+	if log.contains("Access-Control-Allow-Origin") {
+		t.Errorf("expected no raw HTTP headers in log, got: %v", log.messages)
+	}
+	if log.contains("failed after") {
+		t.Errorf("expected no full gh failure dump in log, got: %v", log.messages)
+	}
+	if log.contains("WARN:") {
+		t.Errorf("expected no Warn-level log entry, got: %v", log.messages)
+	}
+}
+
+// MergePR still emits the full gh failure dump for merge failures other than
+// the conflict-405 — e.g. a genuine branch-protection block is a real
+// failure worth a warning.
+func TestMergePR_OtherFailure_LogsFullDump(t *testing.T) {
+	bin := t.TempDir()
+	ghPath := filepath.Join(bin, "gh")
+	script := `#!/bin/sh
+printf 'HTTP/2.0 405 Method Not Allowed\r\n'
+printf '\r\n'
+printf '{"message":"Pull Request is not mergeable","documentation_url":"https://docs.github.com/rest"}'
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	log := &testLog{}
+	g := &ghCLI{logger: log}
+	result := g.MergePR(context.Background(), 9, "https://github.com/owner/repo.git", MergeOpts{})
+
+	if !result.Blocked {
+		t.Fatalf("expected Blocked=true, got %+v", result)
+	}
+	if !log.contains("Pull Request is not mergeable") {
+		t.Errorf("expected full gh failure dump with response content, got: %v", log.messages)
+	}
+	if !log.contains("failed after") {
+		t.Errorf("expected full gh failure dump marker 'failed after', got: %v", log.messages)
+	}
+	if !log.contains("WARN:") {
+		t.Errorf("expected Warn-level log entry, got: %v", log.messages)
+	}
+}
