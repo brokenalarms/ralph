@@ -1,8 +1,8 @@
 # Loop ready-sort: default to bd's `hybrid`, delete the Go re-sort
 
-Status: **Decisions final; beaded and released.** Implemented via
+Status: **Implemented.** Delivered via
 **ralph-45w2** (Stage-2 passthrough + delete Go re-sort — merged, PR #745) and
-**ralph-8n36** (split `getNextIssue` into Stage-1 resume / Stage-2 — in flight).
+**ralph-8n36** (split `getNextIssue` into Stage-1 resume / Stage-2 — merged).
 Related prompt change: **ralph-fumr** (priority-assignment rubric + no
 hold-vs-release). This doc is now a design record, not a to-do.
 Author: ralph-task session 2026-06-30/07-01.
