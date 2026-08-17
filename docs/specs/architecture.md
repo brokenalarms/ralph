@@ -95,21 +95,60 @@ internal/
 
 ## Key Interfaces
 
-### GitHub (in git/github.go)
+### gitHub (in git/github.go)
 
 ```go
-type GitHub interface {
-    Available() bool
-    FindOpenPR(branch, repoURL string) (string, error)
-    CreatePR(opts CreatePROpts) error
-    MergePR(prNumber, repoURL string, opts MergeOpts) (string, error)
-    UpdateBranch(dir, nwo, prNumber string) (bool, error)
-    ListChecks(prNumber, repoURL string) ([]CICheckResult, error)
-    GetRunLog(prNumber, workDir string) string
-}
-
-type CreatePROpts struct {
-    Head, Base, Title, Body, Repo string
+// gitHub abstracts GitHub CLI operations. Unexported — the production
+// implementation (ghCLI) is always constructed by New(). Git-package
+// tests inject stubGitHub via newStubGitHub (same-package, unexported).
+type gitHub interface {
+	Available() bool
+	FindOpenPR(ctx context.Context, branch, repoURL string) (prNumber int, err error)
+	CreatePR(ctx context.Context, opts CreatePROpts) (prNumber int, err error)
+	MergePR(ctx context.Context, prNumber int, repoURL string, opts MergeOpts) MergeResult
+	ListChecks(ctx context.Context, prNumber int, repoURL string) ([]CICheckResult, error)
+	EditPR(ctx context.Context, prNumber int, repoURL, title, body string) error
+	// EditPRBase retargets a PR to the given base branch via PATCH /repos/{nwo}/pulls/{number}.
+	EditPRBase(ctx context.Context, prNumber int, repoURL, base string) error
+	GetRunLog(ctx context.Context, prNumber int, workDir string) string
+	FindPR(ctx context.Context, branch, repoURL string) (number int, title, url string, err error)
+	PRDiff(ctx context.Context, repoURL string, prNumber int) (string, error)
+	GetPR(ctx context.Context, nwo string, prNumber int) (*PRDetail, error)
+	ListOpenPRBranches(ctx context.Context, repoURL string) ([]string, error)
+	ReopenPR(ctx context.Context, prNumber int, repoURL string) error
+	CreatePRViaAPI(ctx context.Context, nwo string, opts CreatePROpts) (prNumber int, err error)
+	GetJobStepCount(ctx context.Context, nwo string, prNumber int) (int, error)
+	// GetRunningJobSteps resolves the workflow run for the PR's current head
+	// SHA (not the latest pull_request-event run repo-wide — see the NOTE on
+	// GetJobStepCount for why that is unsafe with parallel PRs in flight) and
+	// returns, for each job with a step currently in_progress, the job name,
+	// that step's name and 1-based index, and the job's total step count.
+	GetRunningJobSteps(ctx context.Context, nwo string, prNumber int) ([]JobStepStatus, error)
+	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
+	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
+	// DetectActiveReviewers queries the repo's installed GitHub Apps and cross-
+	// references against the Known reviewer registry. For Copilot it also checks
+	// rulesets to set the correct timeout. Returns the active reviewer list.
+	DetectActiveReviewers(ctx context.Context, nwo string) ([]Reviewer, error)
+	// PollReview polls for a review from the given bot username on the given PR,
+	// returning it with inline comments when found. Returns nil without error if
+	// the timeout expires before a review arrives.
+	PollReview(ctx context.Context, nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
+	// GetRequiredChecks returns the required status check context names for the
+	// given branch from branch protection rulesets. Returns an empty slice when
+	// no required checks are configured, which means all checks are evaluated.
+	GetRequiredChecks(ctx context.Context, nwo, branch string) ([]string, error)
+	// ReplyToReviewComment posts a reply to an inline review comment thread.
+	ReplyToReviewComment(ctx context.Context, nwo string, prNumber, commentID int, body string) error
+	// FetchReviewThreadIDs returns a map from REST comment database ID to GraphQL
+	// thread node ID for all review threads on the given PR. Used to resolve threads
+	// after addressing review feedback.
+	FetchReviewThreadIDs(ctx context.Context, nwo string, prNumber int, commentIDs []int) (map[int]string, error)
+	// ResolveReviewThread resolves a review thread by its GraphQL node ID.
+	ResolveReviewThread(ctx context.Context, threadID string) error
+	// Ping verifies that GitHub is reachable. Returns nil when reachable, an
+	// error otherwise (including timeout).
+	Ping(ctx context.Context) error
 }
 ```
 
