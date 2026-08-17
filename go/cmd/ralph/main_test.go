@@ -919,21 +919,26 @@ func TestGenerateSessionID_ValidV4UUID(t *testing.T) {
 	}
 }
 
-// Proves: printTaskResumeHint outputs a directory-aware resume command so the
-// user can copy and run it from any directory after a task-manager session ends.
+// Proves: printTaskResumeHint tells the user to resume through ralph, not
+// through a raw `claude --resume`. Only `ralph task --resume` rebuilds the
+// task-manager system prompt (the transcript alone restores no system
+// prompt) and re-anchors the session in its recorded worktree, so no `cd`
+// prefix is needed either.
 func TestPrintTaskResumeHint_ContainsResumeCommand(t *testing.T) {
 	var buf strings.Builder
-	workDir := "/some/worktree/path"
 	sessionID := "12345678-1234-4567-89ab-123456789abc"
 
-	printTaskResumeHint(&buf, workDir, sessionID)
+	printTaskResumeHint(&buf, sessionID)
 
 	out := buf.String()
-	if !strings.Contains(out, "cd "+workDir) {
-		t.Errorf("resume hint should contain 'cd %s', got:\n%s", workDir, out)
+	if !strings.Contains(out, "ralph task --resume "+sessionID) {
+		t.Errorf("resume hint should contain 'ralph task --resume %s', got:\n%s", sessionID, out)
 	}
-	if !strings.Contains(out, "claude --resume "+sessionID+" --permission-mode bypassPermissions") {
-		t.Errorf("resume hint should contain 'claude --resume %s --permission-mode bypassPermissions', got:\n%s", sessionID, out)
+	if strings.Contains(out, "cd ") {
+		t.Errorf("resume hint should not need a cd prefix — ralph resolves the worktree itself, got:\n%s", out)
+	}
+	if strings.Contains(out, "claude --resume") {
+		t.Errorf("resume hint should not hand the user a raw claude command, got:\n%s", out)
 	}
 }
 
@@ -946,7 +951,7 @@ func TestPromptKeepOrCleanupWorktree_Cleanup(t *testing.T) {
 		gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
 		var out strings.Builder
 
-		keep := promptKeepOrCleanupWorktree(&out, strings.NewReader(answer), gm)
+		keep := promptKeepOrCleanupWorktree(&out, strings.NewReader(answer), gm, "ralph/task/20260701-01")
 
 		if keep {
 			t.Errorf("answer %q: expected keep=false", answer)
@@ -973,7 +978,7 @@ func TestPromptKeepOrCleanupWorktree_Keep(t *testing.T) {
 		gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
 		var out strings.Builder
 
-		keep := promptKeepOrCleanupWorktree(&out, strings.NewReader(answer), gm)
+		keep := promptKeepOrCleanupWorktree(&out, strings.NewReader(answer), gm, "ralph/task/20260701-01")
 
 		if !keep {
 			t.Errorf("answer %q: expected keep=true", answer)
@@ -990,7 +995,7 @@ func TestPromptKeepOrCleanupWorktree_PromptWording(t *testing.T) {
 	gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
 	var out strings.Builder
 
-	promptKeepOrCleanupWorktree(&out, strings.NewReader("\n"), gm)
+	promptKeepOrCleanupWorktree(&out, strings.NewReader("\n"), gm, "ralph/task/20260701-01")
 
 	if !strings.Contains(out.String(), "Keep this task worktree for resume? [Y/n] ") {
 		t.Errorf("expected prompt with [Y/n] wording, got:\n%s", out.String())
@@ -1034,7 +1039,7 @@ func TestRunInteractiveSession_NonGitDirSkipsConfigClosures(t *testing.T) {
 			t.Fatal("buildPrompt should not be called for a non-git directory")
 			return "", nil
 		},
-		extraArgs: func() ([]string, error) {
+		extraArgs: func(gm git.Ops, ralphDir, workDir string) ([]string, error) {
 			t.Fatal("extraArgs should not be called for a non-git directory")
 			return nil, nil
 		},
