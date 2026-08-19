@@ -64,6 +64,30 @@ func TestSelectNextTask_ReturnsTask(t *testing.T) {
 	}
 }
 
+// selectNextTask clears a stale sessionSkippedIDs entry for the task it
+// selects, so a bead skipped earlier in the session and then re-released
+// (bd update <id> -a=ralph-loop) doesn't have completeTask's push guard
+// fire on its next, unrelated completion.
+func TestSelectNextTask_ClearsStaleSessionSkippedID(t *testing.T) {
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
+	l, _ := newTestLoopForSelection(t, backend)
+	l.sessionSkippedIDs = map[string]bool{"ralph-abc": true}
+
+	tc, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
+		completedIDs: map[string]bool{},
+	})
+
+	if action != actionProceed {
+		t.Fatalf("expected actionProceed, got %v", action)
+	}
+	if tc.id != "ralph-abc" {
+		t.Errorf("expected task ID ralph-abc, got %q", tc.id)
+	}
+	if l.sessionSkippedIDs["ralph-abc"] {
+		t.Error("expected stale sessionSkippedIDs entry for ralph-abc to be cleared on fresh selection")
+	}
+}
+
 // selectNextTask returns actionDone when context is cancelled.
 func TestSelectNextTask_ContextCancelled(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
