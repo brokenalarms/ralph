@@ -408,6 +408,7 @@ type StubRepoConfig struct {
 
 	// Per-method fault injection for simple methods.
 	InitErr                      error
+	CheckBranchNamespaceSquatErr error
 	SyncWorktreeBaseErr          error
 	BranchForTaskResult          string // override for BranchForTask; default derived from taskID
 	BranchForTaskErr             error
@@ -868,6 +869,10 @@ func (s *stubRepo) DeleteRemoteBranchByName(_ string) error {
 func (s *stubRepo) Init(_ context.Context) error          { return s.cfg.InitErr }
 func (s *stubRepo) InitTask(_ context.Context) error      { return s.cfg.InitErr }
 func (s *stubRepo) SetupWorktree(_ context.Context) error { return nil }
+
+func (s *stubRepo) CheckBranchNamespaceSquat(_ context.Context) error {
+	return s.cfg.CheckBranchNamespaceSquatErr
+}
 
 // RemoveWorktree records the call; there is no real worktree to remove.
 func (s *stubRepo) RemoveWorktree() { s.removeWorktreeCalls++ }

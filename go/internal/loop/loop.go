@@ -629,6 +629,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		return fmt.Errorf("Cannot reach GitHub (%v).\nPossible causes: VPN blocking GitHub, no internet, gh auth expired.\nFixes: disconnect VPN, check internet, or run \"gh auth login\" to refresh credentials.", err)
 	}
 
+	if err := l.git.CheckBranchNamespaceSquat(ctx); err != nil {
+		return fmt.Errorf("Cannot start: %v.\nGit refs are path-like, so a branch literally named \"ralph\" blocks every push of a ralph/<task> branch with a \"directory file conflict\" rejection.\nFix: back up the SHA to another branch name, then delete the squatting ref:\n  git push origin <sha-from-above>:refs/heads/ralph-backup\n  git push origin --delete ralph", err)
+	}
+
 	if err := l.limiter.Init(); err != nil {
 		return fmt.Errorf("rate limiter init: %w", err)
 	}

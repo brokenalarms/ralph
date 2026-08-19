@@ -21,6 +21,13 @@ type Ops interface {
 	// branch or other concurrent task managers.
 	InitTask(ctx context.Context) error
 
+	// CheckBranchNamespaceSquat checks origin for a bare branch ref
+	// squatting the ralph/ branch namespace root (refs/heads/ralph).
+	// Returns nil when absent; an error naming the ref and its SHA when
+	// present. Callers should run this once at loop startup, before any
+	// task selection — such a ref blocks every ralph/* push.
+	CheckBranchNamespaceSquat(ctx context.Context) error
+
 	// State accessors — replace direct field reads on *repo.
 	GetProjectDir() string
 	GetWorkDir() string

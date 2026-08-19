@@ -3,6 +3,7 @@ package loop
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -311,5 +312,56 @@ func TestInitWorktree_PlainBranchLineWhenOnWipBranch(t *testing.T) {
 	}
 	if strings.Contains(out, "previous-session branch") {
 		t.Errorf("did not expect previous-session framing when already on WIP branch, got: %s", out)
+	}
+}
+
+// Loop.Run fails the startup preflight — before any task is selected — when
+// origin has a bare branch ref squatting the ralph/ namespace root
+// (refs/heads/ralph). Such a ref blocks every ralph/<task> push with a git
+// "directory file conflict" rejection, so this must be caught loudly at
+// startup rather than surfacing as a cryptic push failure mid-iteration.
+func TestLoop_Run_FailsStartupPreflight_WhenBranchNamespaceSquatted(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	squatErr := fmt.Errorf("origin has a branch at refs/heads/ralph (sha deadbeef) squatting the ralph/ branch namespace")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:                   dir,
+		WorkDir:                      dir,
+		CheckBranchNamespaceSquatErr: squatErr,
+	})
+	// A task is ready to run — proves the preflight failure, not an empty
+	// backlog, is what stops the loop before task selection.
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "fix something"}
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
+		MaxIterations: 5,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner:       &stubRunner{result: claude.Result{}},
+	})
+
+	err := l.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected Run to return an error when origin has a squatting ralph ref")
+	}
+	if !strings.Contains(err.Error(), "refs/heads/ralph") {
+		t.Errorf("expected error to name the squatting ref, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "git push origin --delete ralph") {
+		t.Errorf("expected error to give the remediation command, got: %v", err)
+	}
+
+	// BranchForTask is only called once task selection and iteration begin —
+	// zero calls proves the preflight failure stopped the loop before that.
+	if calls := gm.(git.StubInspector).GetBranchForTaskCalls(); calls != 0 {
+		t.Errorf("expected no task branch setup after a failed preflight, got %d BranchForTask call(s)", calls)
 	}
 }
