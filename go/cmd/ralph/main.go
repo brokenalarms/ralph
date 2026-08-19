@@ -178,11 +178,12 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	})
 
 	// Leftover-PR check — must run before any branch setup (gm.Init below)
-	// so the prompt reflects the world as it stood at process start, and so
-	// a "no" or Ctrl-C answer never leaves partial branch/worktree state
-	// behind. Runs exactly once per loop start; nothing later in the
+	// so the prompt reflects the world as it stood at process start, so a
+	// "no" or Ctrl-C answer never leaves partial branch/worktree state
+	// behind, and so a lone leftover PR is merged before this run branches
+	// off anything. Runs exactly once per loop start; nothing later in the
 	// iteration loop calls this again.
-	adoptBranch, ok := checkLeftoverRalphPRs(ctx, gm, cfg.ProjectDir, stdinIsTTY(), os.Stdout, os.Stdin, log)
+	adoptBranch, ok := checkLeftoverRalphPRs(ctx, gm, cfg.ProjectDir, stdinIsTTY(), cfg.AdminMergeOnCIInfraFailure, os.Stdout, os.Stdin, log)
 	if !ok {
 		return 0
 	}

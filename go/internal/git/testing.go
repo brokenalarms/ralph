@@ -453,6 +453,8 @@ type StubInspector interface {
 	GetFlushUnpushedWorkCalls() int
 	GetReplyToAndResolveCommentsCalls() int
 	GetAdoptedStackBranch() string
+	GetMergeStackCalls() int
+	GetMergeStackTopPR() string
 }
 
 // stubRepo is an unexported fake of Ops. Tests receive it only through the
@@ -481,6 +483,8 @@ type stubRepo struct {
 	flushUnpushedWorkCalls         int
 	replyToAndResolveCommentsCalls int
 	adoptedStackBranch             string
+	mergeStackCalls                int
+	mergeStackTopPR                string
 }
 
 // GetBranchForTaskCalls returns the number of times BranchForTask has been
@@ -516,6 +520,13 @@ func (s *stubRepo) GetReplyToAndResolveCommentsCalls() int {
 // SetAdoptedStackBranch call. Used by tests to assert the leftover-PR
 // startup prompt adopted the correct branch.
 func (s *stubRepo) GetAdoptedStackBranch() string { return s.adoptedStackBranch }
+
+// GetMergeStackCalls returns the number of MergeStack calls, and
+// GetMergeStackTopPR the TopPR of the most recent one. Used by tests to
+// assert which PR a merge targeted — and, for a leftover stack of two or
+// more, that no merge was attempted at all.
+func (s *stubRepo) GetMergeStackCalls() int    { return s.mergeStackCalls }
+func (s *stubRepo) GetMergeStackTopPR() string { return s.mergeStackTopPR }
 
 // Compile-time check that *stubRepo satisfies Ops.
 var _ Ops = (*stubRepo)(nil)
@@ -827,7 +838,9 @@ func (s *stubRepo) FlushUnpushedWork(_ context.Context, _, _ string, _ bool) (bo
 // local main branch, but the stub has no local refs to update.
 func (s *stubRepo) PostMergeUpdateMain() {}
 
-func (s *stubRepo) MergeStack(_ context.Context, _ MergeStackOpts) (MergeStackResult, error) {
+func (s *stubRepo) MergeStack(_ context.Context, opts MergeStackOpts) (MergeStackResult, error) {
+	s.mergeStackCalls++
+	s.mergeStackTopPR = opts.TopPR
 	return s.cfg.MergeStackResult, s.cfg.MergeStackErr
 }
 

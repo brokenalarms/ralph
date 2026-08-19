@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/config"
@@ -47,14 +48,17 @@ func readLineFromReader(ctx context.Context, r io.Reader) (string, error) {
 
 // checkLeftoverRalphPRs detects ralph-authored PRs left open by prior runs
 // and, when any exist, resolves whether the new run should continue the
-// stack on top of the newest one or start fresh from origin/main.
+// stack on top of the newest one or start fresh from origin/main. A lone
+// leftover PR based on the default branch is merged first (see
+// retryLoneLeftoverMerge), leaving nothing to resolve.
 //
 // Runs exactly once, at loop startup, before any git branch setup
 // (gm.Init/SetupWorktree) — the caller must invoke this before gm.Init so
 // the "no branch setup happens before the answer" guarantee holds. This
-// function itself only ever calls the read-only gm.ListAllPRs and, on an
-// explicit "y" answer, gm.SetAdoptedStackBranch — neither touches the
-// worktree or creates a branch.
+// function never creates the loop's task branch or worktree: it calls the
+// read-only gm.ListAllPRs, the lone-PR gm.MergeStack retry (which works in
+// its own temp worktree), and, on an explicit "y" answer,
+// gm.SetAdoptedStackBranch.
 //
 // Returns adopt = the branch to continue the stack on ("" for fresh-from-main)
 // and ok = false when the user Ctrl-C'd the prompt, signaling the caller to
@@ -65,7 +69,7 @@ func readLineFromReader(ctx context.Context, r io.Reader) (string, error) {
 // warning, when stdin is not interactive — this also covers the common case
 // of ralph running under an orchestrator/supervisor with no attached
 // terminal.
-func checkLeftoverRalphPRs(ctx context.Context, gm git.Ops, projectDir string, interactive bool, w io.Writer, r io.Reader, log *logging.Logger) (adopt string, ok bool) {
+func checkLeftoverRalphPRs(ctx context.Context, gm git.Ops, projectDir string, interactive, adminMergeOnCIInfraFailure bool, w io.Writer, r io.Reader, log *logging.Logger) (adopt string, ok bool) {
 	allPRs, err := gm.ListAllPRs(ctx, projectDir)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Warn}, "Leftover PR check: failed to list PRs: %v", err)
@@ -73,6 +77,10 @@ func checkLeftoverRalphPRs(ctx context.Context, gm git.Ops, projectDir string, i
 	}
 	leftover := git.LeftoverRalphPRs(allPRs)
 	if len(leftover) == 0 {
+		return "", true
+	}
+
+	if retryLoneLeftoverMerge(ctx, gm, leftover, adminMergeOnCIInfraFailure, log) {
 		return "", true
 	}
 
@@ -105,4 +113,45 @@ func checkLeftoverRalphPRs(ctx context.Context, gm git.Ops, projectDir string, i
 	}
 	log.Emit(logging.Opts{Level: logging.Warn}, "Starting fresh from origin/main — %d leftover ralph PR(s) remain open and unmerged", len(leftover))
 	return "", true
+}
+
+// retryLoneLeftoverMerge re-attempts the merge of a single leftover PR based
+// directly on the default branch, returning true when it lands.
+//
+// Such a PR is one the loop already committed to merging: completeTask closes
+// the bead as "verified — merge pending" on the promise the PR will land, and
+// only a transient failure (a GitHub 503, say) leaves it open. Nothing else
+// ever revisits it — the bead is closed, so the loop never re-selects it — and
+// the stack then grows on an unmerged bottom until a human runs 'ralph merge'.
+// Retrying here re-runs the sanctioned CI-aware squash-merge rather than
+// adding a new merge path.
+//
+// Chains of two or more are deliberately left alone: merging the bottom of a
+// stack outside MergeStack's bottom-up walk strands its descendants, so the
+// adopt prompt and 'ralph merge' stay the only drain path for stacks.
+func retryLoneLeftoverMerge(ctx context.Context, gm git.Ops, leftover []git.PRInfo, adminMergeOnCIInfraFailure bool, log *logging.Logger) bool {
+	if len(leftover) != 1 {
+		return false
+	}
+	pr := leftover[0]
+	baseBranch := gm.DetectDefaultBranch()
+	if pr.Base != baseBranch {
+		return false
+	}
+
+	log.Emit(logging.Opts{}, "Leftover PR #%d (%s) is based on %s and was left unmerged by a prior run — retrying the merge", pr.Number, pr.Head, baseBranch)
+	result, err := gm.MergeStack(ctx, git.MergeStackOpts{
+		TopPR:                      strconv.Itoa(pr.Number),
+		AdminMergeOnCIInfraFailure: adminMergeOnCIInfraFailure,
+	})
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Leftover PR #%d merge retry failed: %v", pr.Number, err)
+		return false
+	}
+	if result.MergedCount == 0 {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Leftover PR #%d was not merged", pr.Number)
+		return false
+	}
+	log.Emit(logging.Opts{Level: logging.Success}, "Leftover PR #%d merged — starting fresh from %s", pr.Number, baseBranch)
+	return true
 }
