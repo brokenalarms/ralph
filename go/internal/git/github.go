@@ -178,6 +178,12 @@ type gitHub interface {
 	// returns, for each job with a step currently in_progress, the job name,
 	// that step's name and 1-based index, and the job's total step count.
 	GetRunningJobSteps(ctx context.Context, nwo string, prNumber int) ([]JobStepStatus, error)
+	// GetFailedJobAnnotations resolves the workflow run for the PR's current
+	// head SHA (the same resolution GetRunningJobSteps uses) and returns, for
+	// each failed job of that run, the job's failure-level check-run
+	// annotation messages. A job's id is also its check-run id, so the
+	// annotations come from the check-runs endpoint keyed by job id.
+	GetFailedJobAnnotations(ctx context.Context, nwo string, prNumber int) ([]JobAnnotations, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
 	// DetectActiveReviewers queries the repo's installed GitHub Apps and cross-
@@ -980,27 +986,39 @@ type JobStepStatus struct {
 	StepTotal int
 }
 
-func (g *ghCLI) GetRunningJobSteps(ctx context.Context, nwo string, prNumber int) ([]JobStepStatus, error) {
+// headRunID resolves the id of the workflow run for the PR's current head
+// SHA. Resolving by head SHA — rather than by the latest pull_request-event
+// run repo-wide, as GetJobStepCount does — is what keeps the lookup correct
+// while other PRs have runs in flight.
+func (g *ghCLI) headRunID(ctx context.Context, nwo string, prNumber int) (string, error) {
 	shaOut, err := g.runGHCmd(ctx, []string{"api",
 		fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber),
 		"--jq", ".head.sha"})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get PR head SHA: %w", err)
+		return "", fmt.Errorf("failed to get PR head SHA: %w", err)
 	}
 	headSHA := strings.TrimSpace(string(shaOut))
 	if headSHA == "" || headSHA == "null" {
-		return nil, fmt.Errorf("PR #%d has no head SHA", prNumber)
+		return "", fmt.Errorf("PR #%d has no head SHA", prNumber)
 	}
 
 	runOut, err := g.runGHCmd(ctx, []string{"api",
 		fmt.Sprintf("repos/%s/actions/runs?head_sha=%s&per_page=1", nwo, headSHA),
 		"--jq", ".workflow_runs[0].id"})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get runs for head SHA %s: %w", headSHA, err)
+		return "", fmt.Errorf("failed to get runs for head SHA %s: %w", headSHA, err)
 	}
 	runID := strings.TrimSpace(string(runOut))
 	if runID == "" || runID == "null" {
-		return nil, fmt.Errorf("no workflow run found for head SHA %s", headSHA)
+		return "", fmt.Errorf("no workflow run found for head SHA %s", headSHA)
+	}
+	return runID, nil
+}
+
+func (g *ghCLI) GetRunningJobSteps(ctx context.Context, nwo string, prNumber int) ([]JobStepStatus, error) {
+	runID, err := g.headRunID(ctx, nwo, prNumber)
+	if err != nil {
+		return nil, err
 	}
 
 	jobsOut, err := g.runGHCmd(ctx, []string{"api",
@@ -1035,6 +1053,54 @@ func (g *ghCLI) GetRunningJobSteps(ctx context.Context, nwo string, prNumber int
 				})
 			}
 		}
+	}
+	return result, nil
+}
+
+// JobAnnotations carries the failure-level check-run annotation messages
+// GitHub attached to a single failed GitHub Actions job.
+type JobAnnotations struct {
+	JobName  string
+	Messages []string
+}
+
+func (g *ghCLI) GetFailedJobAnnotations(ctx context.Context, nwo string, prNumber int) ([]JobAnnotations, error) {
+	runID, err := g.headRunID(ctx, nwo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	jobsOut, err := g.runGHCmd(ctx, []string{"api",
+		fmt.Sprintf("repos/%s/actions/runs/%s/jobs", nwo, runID),
+		"--jq", `[.jobs[] | select(.conclusion == "failure") | {id: .id, name: .name}]`})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get jobs: %w", err)
+	}
+
+	var jobs []struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(jobsOut, &jobs); err != nil {
+		return nil, fmt.Errorf("parsing jobs response %q: %w", strings.TrimSpace(string(jobsOut)), err)
+	}
+
+	result := make([]JobAnnotations, 0, len(jobs))
+	for _, job := range jobs {
+		// A job id doubles as its check-run id, so the annotations the
+		// Actions UI shows for the job are fetched from the check-runs
+		// endpoint keyed by that id.
+		annOut, err := g.runGHCmd(ctx, []string{"api",
+			fmt.Sprintf("repos/%s/check-runs/%d/annotations", nwo, job.ID),
+			"--jq", `[.[] | select(.annotation_level == "failure") | .message]`})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get annotations for job %d: %w", job.ID, err)
+		}
+		var messages []string
+		if err := json.Unmarshal(annOut, &messages); err != nil {
+			return nil, fmt.Errorf("parsing annotations response %q: %w", strings.TrimSpace(string(annOut)), err)
+		}
+		result = append(result, JobAnnotations{JobName: job.Name, Messages: messages})
 	}
 	return result, nil
 }

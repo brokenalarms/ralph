@@ -961,6 +961,24 @@ func (l *Loop) shipPhase2Merge(ctx context.Context, taskID, title, workDir, rawL
 		infraRetryBackoffs = []time.Duration{1 * time.Minute, 2 * time.Minute, 4 * time.Minute}
 	}
 	infraRetries := 0
+
+	// retriggerCI pushes an empty commit to start a fresh CI run and waits
+	// out the next backoff. Returns false when the wait was interrupted, in
+	// which case the ship loop must abandon the retry.
+	retriggerCI := func(reason string) bool {
+		delay := infraRetryBackoffs[infraRetries]
+		infraRetries++
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+			"%s — re-triggering CI and retrying in %s (%d/%d)",
+			reason, delay, infraRetries, len(infraRetryBackoffs))
+		l.git.EmptyCommit("trigger CI re-run")
+		if pushErr := l.git.Push(ctx); pushErr != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+				"Push for CI re-trigger failed: %v", pushErr)
+		}
+		return retry.Wait(ctx, delay, nil) == nil
+	}
+
 	var mergeResult git.ShipResult
 	for attempt := 0; attempt < maxShipRetries; attempt++ {
 		var mergeErr error
@@ -995,6 +1013,19 @@ func (l *Loop) shipPhase2Merge(ctx context.Context, taskID, title, workDir, rawL
 					"CI infrastructure failure (zero job steps) — closing bead, PR open for merge when CI recovers")
 				return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, ciFailure: true, ciInfraFailure: true, pushedBranch: pushedBranch}
 			}
+			// Step timeout (a setup step hit its timeout-minutes): CI ran, but
+			// no test result was produced and no code change can fix it. Take
+			// the re-trigger path directly — spawning a fix agent on the CI log
+			// of a timed-out step costs tokens and has nothing to act on. Once
+			// the re-trigger budget is spent and the timeout persists, fall
+			// through: a repeating timeout may be a code-caused hang the fix
+			// agent should see.
+			if mergeResult.StepTimeoutFailure && infraRetries < len(infraRetryBackoffs) {
+				if !retriggerCI("CI step timed out") {
+					return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch}
+				}
+				continue
+			}
 			// Real CI failure: spawn fix agent; if it pushed new commits, retry merge.
 			fixResult := l.tryFixCI(ctx, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
 			if fixResult == git.CIFixApplied {
@@ -1002,17 +1033,7 @@ func (l *Loop) shipPhase2Merge(ctx context.Context, taskID, title, workDir, rawL
 			}
 			// Transient CI failure — re-trigger CI and retry with backoff.
 			if fixResult == git.CIFixNoCommits && infraRetries < len(infraRetryBackoffs) {
-				delay := infraRetryBackoffs[infraRetries]
-				infraRetries++
-				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
-					"Transient CI failure — re-triggering and retrying in %s (%d/%d)",
-					delay, infraRetries, len(infraRetryBackoffs))
-				l.git.EmptyCommit("trigger CI re-run")
-				if pushErr := l.git.Push(ctx); pushErr != nil {
-					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
-						"Push for CI re-trigger failed: %v", pushErr)
-				}
-				if retry.Wait(ctx, delay, nil) != nil {
+				if !retriggerCI("Transient CI failure") {
 					return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch}
 				}
 				continue

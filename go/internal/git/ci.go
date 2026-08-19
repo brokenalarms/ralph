@@ -162,6 +162,55 @@ func (r *repo) isInfrastructureFailure(ctx context.Context, prNumber int) bool {
 	return steps == 0
 }
 
+// stepTimeoutAnnotation is the failure-level check-run annotation GitHub
+// Actions attaches to a job whose step exceeded its timeout-minutes, e.g.
+// "The action 'Install system tools' has timed out after 5 minutes." The
+// step's own conclusion is a plain "failure" (subsequent steps are
+// "skipped"), so the annotation is the only signal that distinguishes a
+// timeout from a real test failure.
+const stepTimeoutAnnotation = "has timed out after"
+
+// isStepTimeoutFailure reports whether every failed job of the PR's current
+// workflow run failed because one of its steps hit its timeout. A failed job
+// without such an annotation means real work failed, so the whole run is
+// classified as a real failure.
+//
+// Deliberately separate from isInfrastructureFailure: that classification
+// feeds mergeAsInfrastructureFailure, which can admin-merge past branch
+// protection. A code-caused hang produces the same timeout annotation as a
+// slow runner, so a step timeout must only ever re-trigger CI — never merge.
+func (r *repo) isStepTimeoutFailure(ctx context.Context, prNumber int) bool {
+	nwo := NWOFromRemote(r.RemoteURL())
+	if nwo == "" {
+		return false
+	}
+	gh := r.github
+	if gh == nil || !gh.Available() {
+		return false
+	}
+	jobs, err := gh.GetFailedJobAnnotations(ctx, nwo, prNumber)
+	if err != nil || len(jobs) == 0 {
+		return false
+	}
+	for _, job := range jobs {
+		if !hasStepTimeoutAnnotation(job.Messages) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasStepTimeoutAnnotation reports whether any of a job's failure-level
+// annotation messages is a step-timeout message.
+func hasStepTimeoutAnnotation(messages []string) bool {
+	for _, m := range messages {
+		if strings.Contains(m, stepTimeoutAnnotation) {
+			return true
+		}
+	}
+	return false
+}
+
 // RequiredFailedChecks returns failed checks that the fix agent should address.
 // When IsRequired is populated (branch protection was queried successfully),
 // only required failed checks are returned. When no check has IsRequired set

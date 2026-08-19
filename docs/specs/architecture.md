@@ -124,6 +124,12 @@ type gitHub interface {
 	// returns, for each job with a step currently in_progress, the job name,
 	// that step's name and 1-based index, and the job's total step count.
 	GetRunningJobSteps(ctx context.Context, nwo string, prNumber int) ([]JobStepStatus, error)
+	// GetFailedJobAnnotations resolves the workflow run for the PR's current
+	// head SHA (the same resolution GetRunningJobSteps uses) and returns, for
+	// each failed job of that run, the job's failure-level check-run
+	// annotation messages. A job's id is also its check-run id, so the
+	// annotations come from the check-runs endpoint keyed by job id.
+	GetFailedJobAnnotations(ctx context.Context, nwo string, prNumber int) ([]JobAnnotations, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
 	// DetectActiveReviewers queries the repo's installed GitHub Apps and cross-

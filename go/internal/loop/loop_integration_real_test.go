@@ -1036,6 +1036,144 @@ func TestIntegrationReal_CIFailureTriggersFixAgent(t *testing.T) {
 	}
 }
 
+// A CI failure whose every failed job carries a step-timeout annotation (a
+// setup step hitting timeout-minutes) is not something a fix agent can act
+// on — CI produced no test result at all. The loop must re-trigger CI first
+// and only spawn the fix agent once the re-trigger budget is spent, since a
+// timeout that survives a fresh run may be a code-caused hang.
+//
+// Observable, with a single re-trigger budgeted: the fix agent is spawned
+// exactly once, and by the time it is spawned the re-trigger commit is
+// already on the branch — proving the first timeout occurrence re-triggered
+// instead of paying for an agent.
+func TestIntegrationReal_CIStepTimeout_RetriggersBeforeFixAgent(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+	os.WriteFile(filepath.Join(promptsDir, "verify-ci.md"),
+		[]byte("fix CI: {{TASK_TITLE}} {{FAILED_CHECKS}} {{CI_LOG}} {{SIGNAL_COMPLETE}}"),
+		0o644)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "CI step timeout trigger",
+				NextID:       "ralph-cist1",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	// No pre-seeded PRs → Ship's CreatePR allocates PR #100. Non-zero job
+	// steps keep this off the infrastructure-failure path; the timeout
+	// annotation on the one failed job is what classifies it as a step
+	// timeout.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		Checks: map[int][]git.CICheckResult{
+			100: {
+				{Name: "tests", State: "FAILURE", Bucket: "fail", IsRequired: true},
+			},
+		},
+		RequiredChecks: []string{"tests"},
+		JobStepCount:   12,
+		FailedJobAnnotations: []git.JobAnnotations{
+			{JobName: "tests", Messages: []string{"The action 'Install system tools' has timed out after 5 minutes."}},
+		},
+	}
+
+	logger := logging.New(nil)
+	gm := git.NewForTest(git.Config{
+		ProjectDir:    setup.projectDir,
+		WorkDir:       setup.projectDir,
+		RalphDir:      setup.ralphDir,
+		BaseBranch:    "main",
+		Logger:        logger,
+		CIPollTimeout: 2 * time.Second,
+	}, ghCfg)
+	if err := gm.Init(context.Background()); err != nil {
+		t.Fatalf("gm.Init: %v", err)
+	}
+	workDir := gm.GetWorkDir()
+	gitCmd(t, workDir, "git", "config", "user.name", "test")
+	gitCmd(t, workDir, "git", "config", "user.email", "test@test")
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    workDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		// One re-trigger budgeted: the first timeout re-triggers, the second
+		// exhausts the budget and must reach the fix agent.
+		InfraRetryBackoffs: []time.Duration{0},
+	}
+
+	_, st := setupTestDir(t)
+
+	runner := &stubRunner{
+		onRun: func() {
+			os.WriteFile(filepath.Join(workDir, "cist.txt"), []byte("cist\n"), 0o644)
+			gitCmd(t, workDir, "git", "add", "cist.txt")
+			gitCmd(t, workDir, "git", "commit", "-m", "agent: cist work")
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	fixAgentInvocations := 0
+	retriggeredBeforeFixAgent := false
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAgentInvocations++
+				if fixAgentInvocations == 1 {
+					retriggeredBeforeFixAgent = strings.Contains(gitLog(t, workDir), "trigger CI re-run")
+				}
+				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "attempted"}}
+			},
+		}),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	if fixAgentInvocations != 1 {
+		t.Errorf("expected exactly 1 CI fix agent spawn (only after the re-trigger budget is spent), got %d", fixAgentInvocations)
+	}
+	if !retriggeredBeforeFixAgent {
+		t.Error("expected the CI re-trigger commit to be on the branch before the fix agent was spawned — the first step-timeout occurrence must re-trigger, not spawn an agent")
+	}
+}
+
+// gitLog returns the one-line commit log of dir's current branch.
+func gitLog(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "log", "--oneline")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log (in %s): %v\n%s", dir, err, out)
+	}
+	return string(out)
+}
+
 // TestIntegrationReal_MergeConflictThenRetrySucceeds is the spec's "real
 // conflict required" integration candidate. A PR is seeded with
 // Conflicted=true; the stub MergePR returns Conflict=true, mirroring real
