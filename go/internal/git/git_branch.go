@@ -109,11 +109,14 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 // returns false for diverged branches, so the stale branch is rejected and the
 // next task starts from main instead.
 //
-// Exception: when top == r.adoptedStackBranch (set via SetAdoptedStackBranch
-// after the user explicitly chose, at loop startup, to continue the stack on
-// a leftover open PR), the ahead-of-main guard is bypassed — a branch with an
-// open PR that diverged because main moved is the intentional keep-stack
-// case, not the stale squash-merge case the guard exists to reject. The
+// Exception: when top == r.adoptedStackBranch, or top is a descendant of
+// r.adoptedStackBranch (set via SetAdoptedStackBranch after the user
+// explicitly chose, at loop startup, to continue the stack on a leftover
+// open PR), the ahead-of-main guard is bypassed — a branch with an open PR
+// that diverged because main moved is the intentional keep-stack case, not
+// the stale squash-merge case the guard exists to reject. This covers PRs
+// stacked on top of the adopted branch under a different name, which
+// diverge from main the same way the adopted branch itself does. The
 // open-PR requirement still applies.
 func setStackHead(ctx context.Context, r *repo, completedBranches []string) {
 	r.prevBranch = ""
@@ -154,6 +157,17 @@ func setStackHead(ctx context.Context, r *repo, completedBranches []string) {
 			r.prevBranch = top
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s (adopted leftover PR — diverged from main, keeping stack per user choice)", top)
 			return
+		}
+		if r.adoptedStackBranch != "" {
+			if err := r.FetchBranch(r.adoptedStackBranch); err != nil {
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — FetchBranch(%s) error: %v", r.adoptedStackBranch, err)
+				return
+			}
+			if r.isAncestor(r.workDir, "origin/"+r.adoptedStackBranch, "origin/"+top) {
+				r.prevBranch = top
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s (descendant of adopted leftover PR %s — diverged from main, keeping stack per user choice)", top, r.adoptedStackBranch)
+				return
+			}
 		}
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — %s is not ahead of main", top)
 		return

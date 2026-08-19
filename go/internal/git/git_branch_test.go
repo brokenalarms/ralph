@@ -201,6 +201,71 @@ func TestSetStackHead_AdoptedBranch_StillRequiresOpenPR(t *testing.T) {
 	}
 }
 
+// setStackHead keeps the stack head when top is a descendant of the adopted
+// branch (not merely equal to it) and main has since advanced past the whole
+// stack. Reproduces the cablecar loop.2026-08-17 incident: PR #29/#30/#31
+// stacked on adopted branch 22j, then a docs commit landed directly on main,
+// diverging every descendant. The exact-match check alone rejects the top
+// descendant branch here even though it is still part of the intentionally
+// adopted stack — the ancestry check must catch it.
+func TestSetStackHead_DescendantOfAdoptedBranch_BypassesAheadOfMainGuard(t *testing.T) {
+	log := &testLog{}
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 30, Branch: "ralph/task-c"}, // open PR, diverged from main
+		},
+	})
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	// First merge-base call is BranchIsAheadOfMain(task-c): origin/main is not
+	// an ancestor of origin/task-c (diverged). Second is the new adopted-branch
+	// ancestry check: origin/task-a (adopted) IS an ancestor of origin/task-c.
+	runner.OnSequence("merge-base", []stubResponse{
+		{Output: "", Err: fmt.Errorf("not an ancestor")},
+		{Output: "", Err: nil},
+	})
+
+	r := newRepoForTest(Config{Logger: log}, gh, withRunner(runner))
+	r.SetAdoptedStackBranch("ralph/task-a")
+
+	setStackHead(context.Background(), r, []string{"ralph/task-a", "ralph/task-b", "ralph/task-c"})
+
+	if r.prevBranch != "ralph/task-c" {
+		t.Errorf("expected prevBranch=ralph/task-c (descendant of adopted branch kept), got %q", r.prevBranch)
+	}
+	if !log.contains("Stack head: ralph/task-c") {
+		t.Errorf("expected 'Stack head: ralph/task-c' log, got: %v", log.messages)
+	}
+}
+
+// setStackHead rejects an unrelated diverged branch when the adopted branch
+// is set but is NOT an ancestor of top — adoption of one branch must not
+// grant a blanket exemption to every other diverged branch.
+func TestSetStackHead_AdoptedBranchSet_UnrelatedDivergedTop_Rejected(t *testing.T) {
+	log := &testLog{}
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{
+			{Number: 40, Branch: "ralph/task-z"}, // open PR, diverged from main
+		},
+	})
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	// Both merge-base checks fail: task-z is not ahead of main, and the
+	// adopted branch is not an ancestor of task-z either — unrelated stacks.
+	runner.On("merge-base", "", fmt.Errorf("not an ancestor"))
+
+	r := newRepoForTest(Config{Logger: log}, gh, withRunner(runner))
+	r.SetAdoptedStackBranch("ralph/task-a")
+
+	setStackHead(context.Background(), r, []string{"ralph/task-z"})
+
+	if r.prevBranch != "" {
+		t.Errorf("prevBranch should be empty for an unrelated diverged branch, got %q", r.prevBranch)
+	}
+}
+
 // checkoutExistingBranch checks out an existing local branch when the remote has
 // none but the local branch has unpushed commits, instead of renaming/deleting it.
 func TestCheckoutExistingBranch_LocalBranchWithCommits_CheckedOut(t *testing.T) {
@@ -216,8 +281,8 @@ func TestCheckoutExistingBranch_LocalBranchWithCommits_CheckedOut(t *testing.T) 
 	// rev-parse --verify → need a sequence: first call is for origin/storedBranch (remote),
 	// second is for refs/heads/storedBranch (local).
 	runner.OnSequence("rev-parse", []stubResponse{
-		{Output: "", Err: fmt.Errorf("not found")},  // origin/ralph/ralph-abc-my-task (RemoteBranchHasCommits)
-		{Output: "abc123", Err: nil},                // refs/heads/ralph/ralph-abc-my-task (LocalBranchHasCommits)
+		{Output: "", Err: fmt.Errorf("not found")}, // origin/ralph/ralph-abc-my-task (RemoteBranchHasCommits)
+		{Output: "abc123", Err: nil},               // refs/heads/ralph/ralph-abc-my-task (LocalBranchHasCommits)
 	})
 	// rev-list for LocalBranchHasCommits: commits ahead of origin/<default>.
 	runner.On("rev-list", "3", nil)
