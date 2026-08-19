@@ -144,6 +144,25 @@ func (r *repo) SetKnownPRNumber(n int) {
 	r.knownPRNumber = n
 }
 
+// CheckBranchNamespaceSquat checks origin for a bare branch ref squatting
+// the ralph/ branch namespace root (refs/heads/ralph — branchPrefix with
+// its trailing slash trimmed). Git refs are path-like, so a branch
+// literally named "ralph" blocks every push of a ralph/<beadID>-<slug>
+// branch with a "directory file conflict" rejection. Returns nil when no
+// such ref exists; an error naming the ref and its SHA when it does.
+// Current code can never create this ref itself (normalizeBranch always
+// yields the ralph/ prefix), so a hit here is always a pre-existing fossil
+// ref that must be cleared by hand — there is no auto-delete/retry path.
+func (r *repo) CheckBranchNamespaceSquat(ctx context.Context) error {
+	squattingRef := "refs/heads/" + strings.TrimSuffix(branchPrefix, "/")
+	out, err := r.run().Run(ctx, r.projectDir, "ls-remote", "origin", squattingRef)
+	if err != nil || out == "" {
+		return nil
+	}
+	sha := strings.Fields(out)[0]
+	return fmt.Errorf("origin has a branch at %s (sha %s) squatting the ralph/ branch namespace", squattingRef, sha)
+}
+
 // Init runs the git pre-flight checks and worktree setup that must
 // complete before the orchestrator can use this repo. Bundles the
 // individual operations so callers don't have to know the right
