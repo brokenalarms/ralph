@@ -2162,3 +2162,95 @@ func TestTaskManagerPrompt_CreateUsesMetadataJSONNotSetMetadata(t *testing.T) {
 		t.Error("prompt still documents --set-metadata as a bd create flag")
 	}
 }
+
+// Proves: verify-ci.md prohibits weakening the failing check to make CI
+// pass (raising thresholds, updating/regenerating baselines or snapshots,
+// skipping/xfail-ing tests, deleting assertions) and instructs the agent to
+// signal completion with an explanation instead of editing a check it
+// believes is wrong.
+func TestVerifyCIPrompt_ProhibitsWeakeningChecks(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "verify-ci.md"))
+	if err != nil {
+		t.Fatalf("reading verify-ci.md: %v", err)
+	}
+	s := string(content)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Never weaken the failing check", "must explicitly prohibit weakening the failing check"},
+		{"threshold", "must name raising a threshold as prohibited"},
+		{"baseline", "must name updating/regenerating a baseline as prohibited"},
+		{"snapshot", "must name updating/regenerating a snapshot as prohibited"},
+		{"xfail", "must name skipping/xfail-ing a test as prohibited"},
+		{"delete an assertion", "must name deleting an assertion as prohibited"},
+		{"believe the check itself is wrong", "must instruct signaling completion instead of editing a wrong check"},
+	}
+	for _, tc := range required {
+		if !strings.Contains(s, tc.substr) {
+			t.Errorf("verify-ci.md missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: verify-ci.md instructs the agent to run `git diff origin/main...HEAD`
+// and treat the branch's own changes as the primary suspects for a CI failure.
+func TestVerifyCIPrompt_BranchDiffPrimarySuspect(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "verify-ci.md"))
+	if err != nil {
+		t.Fatalf("reading verify-ci.md: %v", err)
+	}
+	s := string(content)
+
+	if !strings.Contains(s, "git diff origin/main...HEAD") {
+		t.Error("verify-ci.md missing `git diff origin/main...HEAD` instruction")
+	}
+	if !strings.Contains(s, "primary suspects") {
+		t.Error("verify-ci.md must treat the branch's own changes as the primary suspects")
+	}
+}
+
+// Proves: verify-ci.md tells the agent how to diagnose a check that cannot
+// be reproduced locally (CI-only fixtures or timing) — from the CI error
+// output and branch diff, not by modifying the test.
+func TestVerifyCIPrompt_UnreproducibleCheckGuidance(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "verify-ci.md"))
+	if err != nil {
+		t.Fatalf("reading verify-ci.md: %v", err)
+	}
+	s := string(content)
+
+	if !strings.Contains(s, "CI-only fixtures") {
+		t.Error("verify-ci.md missing CI-only fixtures guidance")
+	}
+	if !strings.Contains(s, "do not modify the test") {
+		t.Error("verify-ci.md must instruct not modifying the test when it cannot be reproduced locally")
+	}
+}
+
+// Proves: verify-ci.md keeps all placeholders and the commit-before-signal
+// ordering instruction intact after the no-test-gaming and branch-diff
+// additions.
+func TestVerifyCIPrompt_PlaceholdersAndOrderingIntact(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "verify-ci.md"))
+	if err != nil {
+		t.Fatalf("reading verify-ci.md: %v", err)
+	}
+	s := string(content)
+
+	for _, placeholder := range []string{"{{TASK_TITLE}}", "{{FAILED_CHECKS}}", "{{CI_LOG}}", "{{SIGNAL_COMPLETE}}"} {
+		if !strings.Contains(s, placeholder) {
+			t.Errorf("verify-ci.md missing placeholder %s", placeholder)
+		}
+	}
+
+	if !strings.Contains(s, "must complete BEFORE") {
+		t.Error("verify-ci.md missing commit-before-signal ordering instruction")
+	}
+	commitIdx := strings.Index(s, "`git add` all changed files")
+	signalIdx := strings.Index(s, "Signal completion:")
+	if commitIdx < 0 || signalIdx < 0 || commitIdx > signalIdx {
+		t.Error("verify-ci.md commit step must appear before the signal step")
+	}
+}
