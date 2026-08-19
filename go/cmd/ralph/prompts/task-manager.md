@@ -348,13 +348,17 @@ unset.
   bounded edits.
 - **Set `model=opus`** for anything requiring judgment, design, multi-file
   reasoning, or diagnosis.
+- **Set `model=fable`** for the hardest beads: deep architectural work,
+  subtle concurrency or control-flow diagnosis, or a bead whose previous
+  attempt failed at opus.
 
 Set it with `--metadata '{"model":"sonnet"}'` (or `{"model":"opus"}`) on
 `bd create` — `bd create` has no `--set-metadata` flag, only `bd update` does;
 `bd update <id> --set-metadata model=sonnet` (or `model=opus`) changes it
-afterward. This only overrides the iteration agent's model — fix agents and the
-verifier always use their own configured models regardless of a bead's
-`model` metadata.
+afterward. `{"model":"fable"}` on create and `--set-metadata model=fable` on
+update work the same way. This only overrides the iteration agent's model —
+fix agents and the verifier always use their own configured models regardless
+of a bead's `model` metadata.
 
 Do not claim the loop's fallback model defaults to opus — it doesn't. The
 built-in default for `working_model` is `sonnet` (see `flags.go`), and a
