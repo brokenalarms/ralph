@@ -171,6 +171,13 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		return l.selectNextTaskInner(ctx, p, attempts+1, waited)
 	}
 
+	// A stale sessionSkippedIDs entry from an earlier skip in this session must
+	// not veto completeTask's push guard when the same bead is re-released
+	// (bd update <id> -a=ralph-loop) and re-selected here. A skip during THIS
+	// iteration's verification re-adds the id before completeTask checks it,
+	// so clearing it here only drops entries that outlived their skip.
+	delete(l.sessionSkippedIDs, taskID)
+
 	lastID, _ := l.state.Read("current_task_id")
 	lastTask, _ := l.state.Read("last_task")
 	changed := isNewTask(lastID, lastTask, taskID, nextTask)

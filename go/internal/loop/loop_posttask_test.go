@@ -13,6 +13,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -185,6 +186,79 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 	}
 }
 
+// Full re-release flow: a bead skipped earlier in the session (skipTask
+// tracks it in sessionSkippedIDs) is reassigned back to ralph-loop and
+// re-selected by selectNextTask in the same session. selectNextTask must
+// clear the stale sessionSkippedIDs entry so that completeTask's push guard
+// does not fire when the re-worked task completes.
+func TestLoop_ReReleasedTask_SelectedThenCompleted_PushProceeds(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-reup"}},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "after", Ship: git.ShipResult{PRNumber: 7}})
+	logger := logging.New(nil)
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook:  passingVerifyHook(),
+	})
+	l.runner = &stubRunner{}
+
+	// Simulate the bead having been skipped earlier this session (e.g. a
+	// push_failed skip on a prior iteration).
+	l.skipTask("ralph-reup", tasks.SkipPushFailed, "prior push failure")
+	if !l.sessionSkippedIDs["ralph-reup"] {
+		t.Fatal("precondition: expected ralph-reup to be tracked in sessionSkippedIDs after skipTask")
+	}
+
+	// Simulate the operator re-releasing the bead (bd update -a=ralph-loop):
+	// it is ready again and the loop re-selects it fresh this session.
+	tc, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
+		completedIDs: map[string]bool{},
+	})
+	if action != actionProceed {
+		t.Fatalf("expected actionProceed on re-selection, got %v", action)
+	}
+	if tc.id != "ralph-reup" {
+		t.Fatalf("expected re-selected task ralph-reup, got %q", tc.id)
+	}
+
+	// The re-worked task now completes. The push guard must not fire since
+	// this iteration's selection cleared the stale skip entry.
+	out := l.completeTask(context.Background(), completeTaskParams{
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     tc.id,
+		nextTask:   tc.title,
+		ralphDir:   ralphDir,
+	})
+
+	if out.action == signalSkipped {
+		t.Fatal("push guard fired for re-released task — stale sessionSkippedIDs entry was not cleared on re-selection")
+	}
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-reup" {
+		t.Errorf("expected ralph-reup to be closed after successful push, got %v", backend.ClosedIDs)
+	}
+}
 
 // completeTask completes normally when operations are fast, proving the
 // post-signal pipeline closes the task on the happy path.
