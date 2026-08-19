@@ -62,21 +62,37 @@ audit procedure until the user answers `yes`.
 **Skip-triage check (non-blocking):** After the closure audit prompt, check
 for skipped beads that need diagnosis:
 
-1. Run `bd list --assignee=ralph-task --label=skipped` to find beads that
-   the loop has reassigned after skipping.
-2. If any exist, read `.metadata.skip_reason` and `.metadata.skip_detail`
-   from `bd show <id> --json` for each bead. Legacy beads skipped before
-   metadata persistence was added have no `skip_reason` metadata — for
-   those, fall back to parsing the skip-reason comment; if no comment is
-   parseable either, report the reason as "unknown" rather than erroring.
-3. Classify each by skip reason and append a triage block:
+1. Run `bd list --assignee=ralph-task --json` and keep beads with a
+   non-empty `.metadata.skip_reason`. Assignee alone is not sufficient —
+   `ralph-task` also owns beads created for self-work or triage that were
+   never skipped — so the `skip_reason` metadata filter is what identifies
+   a currently-skipped bead. The only path back to `ralph-task` is a skip,
+   and `skipped_at`/`skip_reason`/`skip_detail`/`skip_count` are never
+   cleared, so this query is exact for beads skipped after this change
+   landed. Some `ralph-task`-assigned beads from before this change may
+   still carry a stale `skipped` label with no `skip_reason` metadata —
+   that label is no longer meaningful and must not be queried or relied on.
+2. Read `.metadata.skip_reason`, `.metadata.skip_detail`, and
+   `.metadata.skip_count` for each matching bead (already present in the
+   `bd list --json` output). Legacy beads skipped before metadata
+   persistence was added have no `skip_reason` metadata — for those, fall
+   back to parsing the skip-reason comment; if no comment is parseable
+   either, report the reason as "unknown" rather than erroring.
+3. Classify each by skip reason and append a triage block, surfacing
+   `skip_count`. A bead on its 3rd or later skip (`skip_count >= 3`) has
+   failed the same way repeatedly — flag it for a split or escalation
+   instead of a plain re-release:
 
    > **Skipped beads requiring triage (N beads):**
    >
-   > - **ralph-xyz** — _reason_ → _recommended action_
+   > - **ralph-xyz** (skipped Nx) — _reason_ → _recommended action_
+   > - **ralph-abc** (skipped 3x — recommend split/escalation) — _reason_ → _recommended action_
    > …
 
 4. If no skipped beads exist, remain silent — do not mention skip-triage.
+5. Un-skip a bead with exactly `bd update <id> -a=ralph-loop` — no label or
+   metadata cleanup is needed or performed; `skipped_at`/`skip_count` are
+   left in place as a historical record of the last skip.
 
 **Classification and routing:**
 

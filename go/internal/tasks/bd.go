@@ -678,7 +678,7 @@ func (b *BD) SkipTask(id string, reason SkipReason, detail string) error {
 	if id == "" {
 		return nil
 	}
-	if _, err := b.runner().Run(b.ctx(), b.ProjectDir, "update", id, "--status=open", "--assignee="+config.TaskAssignee, "--add-label=skipped"); err != nil {
+	if _, err := b.runner().Run(b.ctx(), b.ProjectDir, "update", id, "--status=open", "--assignee="+config.TaskAssignee); err != nil {
 		return err
 	}
 	if err := b.SetMetadata(id, "skip_reason", string(reason)); err != nil {
@@ -688,6 +688,14 @@ func (b *BD) SkipTask(id string, reason SkipReason, detail string) error {
 		if err := b.SetMetadata(id, "skip_detail", detail); err != nil {
 			return err
 		}
+	}
+	if err := b.SetMetadata(id, "skipped_at", strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
+		return err
+	}
+	skipCount, _ := b.GetMetadata(id, "skip_count")
+	count, _ := strconv.Atoi(skipCount)
+	if err := b.SetMetadata(id, "skip_count", strconv.Itoa(count+1)); err != nil {
+		return err
 	}
 	comment := string(reason)
 	if detail != "" {

@@ -57,13 +57,18 @@ type Backend interface {
 	// CloseTask marks a task as complete.
 	CloseTask(id string, reason string) error
 
-	// SkipTask reassigns the bead to config.TaskAssignee with status=open and
-	// label=skipped, removing it from the loop's bd ready --assignee=ralph-loop
-	// inbox. reason categorizes why the task was skipped; detail carries any
-	// free-form specifics (a branch name, blocker IDs, ...) kept separate from
-	// the category rather than concatenated into it. Both are recorded as a
-	// bead comment. Un-skip by reassigning back to ralph-loop via bd update
-	// <id> --assignee=ralph-loop.
+	// SkipTask reassigns the bead to config.TaskAssignee with status=open,
+	// removing it from the loop's bd ready --assignee=ralph-loop inbox.
+	// Assignee alone carries current skip state — no label is set. reason
+	// categorizes why the task was skipped; detail carries any free-form
+	// specifics (a branch name, blocker IDs, ...) kept separate from the
+	// category rather than concatenated into it. Both are recorded as a bead
+	// comment, and also stamped as skip_reason/skip_detail metadata alongside
+	// skipped_at (unix timestamp of this skip) and skip_count (incremented on
+	// every skip) — metadata records only the latest event plus the count;
+	// comments are the full skip history. Un-skip by reassigning back to
+	// ralph-loop via bd update <id> --assignee=ralph-loop; no label or
+	// metadata cleanup is needed.
 	SkipTask(id string, reason SkipReason, detail string) error
 
 	// SetResumeTaskID tells the backend to check this task first before
