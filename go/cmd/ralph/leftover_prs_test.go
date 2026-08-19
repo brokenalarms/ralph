@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -16,7 +17,7 @@ func TestCheckLeftoverRalphPRs_NoLeftover_NoPromptNoChange(t *testing.T) {
 	var out strings.Builder
 	log := logging.NewWithWriter(&out)
 
-	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, &out, strings.NewReader(""), log)
+	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader(""), log)
 
 	if !ok {
 		t.Fatal("expected ok=true when no leftover PRs")
@@ -46,7 +47,7 @@ func TestCheckLeftoverRalphPRs_NonInteractive_DefaultsFreshWithWarning(t *testin
 	log := logging.NewWithWriter(&logBuf)
 
 	// interactive=false — must not read r at all (nil-safe reader unused).
-	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", false, &out, strings.NewReader(""), log)
+	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", false, false, &out, strings.NewReader(""), log)
 
 	if !ok {
 		t.Fatal("expected ok=true (non-interactive never blocks)")
@@ -78,7 +79,7 @@ func TestCheckLeftoverRalphPRs_AnswerY_AdoptsNewestBranch(t *testing.T) {
 	var out strings.Builder
 	log := logging.NewWithWriter(&strings.Builder{})
 
-	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, &out, strings.NewReader("y\n"), log)
+	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader("y\n"), log)
 
 	if !ok {
 		t.Fatal("expected ok=true")
@@ -107,7 +108,7 @@ func TestCheckLeftoverRalphPRs_AnswerN_FreshFromMain(t *testing.T) {
 	var logBuf strings.Builder
 	log := logging.NewWithWriter(&logBuf)
 
-	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, &out, strings.NewReader("n\n"), log)
+	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader("n\n"), log)
 
 	if !ok {
 		t.Fatal("expected ok=true")
@@ -136,7 +137,7 @@ func TestCheckLeftoverRalphPRs_PromptStatesBothOutcomesBeforeAsking(t *testing.T
 	var out strings.Builder
 	log := logging.NewWithWriter(&strings.Builder{})
 
-	checkLeftoverRalphPRs(context.Background(), gm, "/project", true, &out, strings.NewReader("n\n"), log)
+	checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader("n\n"), log)
 
 	prompt := out.String()
 	if !strings.Contains(prompt, "y — continue the stack on top of #1241") {
@@ -174,7 +175,7 @@ func TestCheckLeftoverRalphPRs_CtrlC_ExitsCleanly(t *testing.T) {
 	var out strings.Builder
 	log := logging.NewWithWriter(&strings.Builder{})
 
-	adopt, ok := checkLeftoverRalphPRs(ctx, gm, "/project", true, &out, strings.NewReader("y\n"), log)
+	adopt, ok := checkLeftoverRalphPRs(ctx, gm, "/project", true, false, &out, strings.NewReader("y\n"), log)
 
 	if ok {
 		t.Fatal("expected ok=false on Ctrl-C")
@@ -207,7 +208,7 @@ func TestCheckLeftoverRalphPRs_NeverPerformsBranchSetup(t *testing.T) {
 		var out strings.Builder
 		log := logging.NewWithWriter(&strings.Builder{})
 
-		checkLeftoverRalphPRs(context.Background(), gm, "/project", true, &out, strings.NewReader(answer), log)
+		checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader(answer), log)
 
 		inspector := gm.(git.StubInspector)
 		if got := inspector.GetBranchForTaskCalls(); got != 0 {
@@ -216,5 +217,197 @@ func TestCheckLeftoverRalphPRs_NeverPerformsBranchSetup(t *testing.T) {
 		if got := inspector.GetRemoveWorktreeCalls(); got != 0 {
 			t.Errorf("answer %q: expected 0 RemoveWorktree calls, got %d", answer, got)
 		}
+	}
+}
+
+// A lone leftover ralph PR based directly on the default branch is one the
+// loop already committed to merging — the bead was closed "verified, merge
+// pending" and only a transient failure (e.g. a GitHub 503) left the PR
+// open. Startup retries that merge before offering adoption: the PR lands,
+// main is updated, no prompt is shown, and the run starts fresh from main.
+// The merge is attempted before any branch setup, so the retry can never
+// race a worktree built on the unmerged branch.
+func TestCheckLeftoverRalphPRs_LoneMergeablePR_MergedBeforeAnyPrompt(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		BaseBranch:       "main",
+		MergeStackResult: git.MergeStackResult{MergedCount: 1, TotalPRs: 1},
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs:       []git.StubPR{{Number: 1241, Branch: "ralph/tabi-uael", Base: "main", State: git.PRStateOpen}},
+		},
+	})
+	var out strings.Builder
+	log := logging.NewWithWriter(&strings.Builder{})
+
+	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader("y\n"), log)
+
+	if !ok {
+		t.Fatal("expected ok=true after a successful leftover merge")
+	}
+	if adopt != "" {
+		t.Errorf("expected fresh-from-main after the leftover merged, got adopt=%q", adopt)
+	}
+	if out.Len() != 0 {
+		t.Errorf("expected no adoption prompt after a successful merge, got: %q", out.String())
+	}
+	inspector := gm.(git.StubInspector)
+	if got := inspector.GetMergeStackCalls(); got != 1 {
+		t.Errorf("expected 1 merge attempt for the lone leftover PR, got %d", got)
+	}
+	if got := inspector.GetMergeStackTopPR(); got != "1241" {
+		t.Errorf("expected the leftover PR #1241 to be merged, got TopPR %q", got)
+	}
+	if got := inspector.GetAdoptedStackBranch(); got != "" {
+		t.Errorf("expected no branch adopted after the leftover merged, got %q", got)
+	}
+	if got := inspector.GetBranchForTaskCalls(); got != 0 {
+		t.Errorf("expected the merge to precede all branch setup, got %d BranchForTask calls", got)
+	}
+	if got := inspector.GetRemoveWorktreeCalls(); got != 0 {
+		t.Errorf("expected the merge to precede all worktree setup, got %d RemoveWorktree calls", got)
+	}
+}
+
+// When the retried merge fails (CI red, branch protection, another transient
+// GitHub error), the user still gets the existing adopt-or-fresh prompt —
+// the retry is a best-effort shortcut, never a new failure mode.
+func TestCheckLeftoverRalphPRs_LoneMergeFails_FallsBackToPrompt(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		BaseBranch:    "main",
+		MergeStackErr: errors.New("CI failed on PR #1241"),
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs:       []git.StubPR{{Number: 1241, Branch: "ralph/tabi-uael", Base: "main", State: git.PRStateOpen}},
+		},
+	})
+	var out strings.Builder
+	log := logging.NewWithWriter(&strings.Builder{})
+
+	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader("y\n"), log)
+
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got := gm.(git.StubInspector).GetMergeStackCalls(); got != 1 {
+		t.Errorf("expected the merge to have been attempted once, got %d", got)
+	}
+	if adopt != "ralph/tabi-uael" {
+		t.Errorf("expected the prompt's 'y' answer to still adopt the branch, got %q", adopt)
+	}
+	if !strings.Contains(out.String(), "Continue the stack? (y/n)") {
+		t.Errorf("expected the adoption prompt after a failed merge, got: %q", out.String())
+	}
+}
+
+// A merge call that reports zero PRs merged (no error, nothing landed) is a
+// failure, not a success — the PR is still open, so the prompt must appear.
+func TestCheckLeftoverRalphPRs_LoneMergeMergedNothing_FallsBackToPrompt(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		BaseBranch:       "main",
+		MergeStackResult: git.MergeStackResult{MergedCount: 0, TotalPRs: 1},
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs:       []git.StubPR{{Number: 1241, Branch: "ralph/tabi-uael", Base: "main", State: git.PRStateOpen}},
+		},
+	})
+	var out strings.Builder
+	log := logging.NewWithWriter(&strings.Builder{})
+
+	adopt, _ := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader("n\n"), log)
+
+	if adopt != "" {
+		t.Errorf("expected 'n' to start fresh, got %q", adopt)
+	}
+	if !strings.Contains(out.String(), "Continue the stack? (y/n)") {
+		t.Errorf("expected the adoption prompt when nothing merged, got: %q", out.String())
+	}
+}
+
+// Two or more leftover PRs form a stack: merging the bottom one here would
+// strand the rest (the tabi #669 cascade). No merge is attempted — the
+// prompt, and 'ralph merge', remain the only drain path.
+func TestCheckLeftoverRalphPRs_StackOfTwo_NoMergeAttempted(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		BaseBranch:       "main",
+		MergeStackResult: git.MergeStackResult{MergedCount: 2, TotalPRs: 2},
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs: []git.StubPR{
+				{Number: 1240, Branch: "ralph/older-task", Base: "main", State: git.PRStateOpen},
+				{Number: 1241, Branch: "ralph/tabi-uael", Base: "ralph/older-task", State: git.PRStateOpen},
+			},
+		},
+	})
+	var out strings.Builder
+	log := logging.NewWithWriter(&strings.Builder{})
+
+	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader("y\n"), log)
+
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got := gm.(git.StubInspector).GetMergeStackCalls(); got != 0 {
+		t.Errorf("expected no merge attempt for a stack of 2, got %d", got)
+	}
+	if adopt != "ralph/tabi-uael" {
+		t.Errorf("expected the prompt to drive adoption unchanged, got %q", adopt)
+	}
+	if !strings.Contains(out.String(), "ralph merge 1241") {
+		t.Errorf("expected the prompt to still point at 'ralph merge' for the stack, got: %q", out.String())
+	}
+}
+
+// A lone leftover PR whose base is another branch is the top of a stack
+// whose bottom has already gone (branch deleted, PR closed) — merging it
+// would land work onto a base the loop never verified. Only PRs based
+// directly on the default branch are retried.
+func TestCheckLeftoverRalphPRs_LonePRNotBasedOnDefaultBranch_NoMergeAttempted(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		BaseBranch:       "main",
+		MergeStackResult: git.MergeStackResult{MergedCount: 1, TotalPRs: 1},
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs:       []git.StubPR{{Number: 1241, Branch: "ralph/tabi-uael", Base: "ralph/gone-task", State: git.PRStateOpen}},
+		},
+	})
+	var out strings.Builder
+	log := logging.NewWithWriter(&strings.Builder{})
+
+	checkLeftoverRalphPRs(context.Background(), gm, "/project", true, false, &out, strings.NewReader("n\n"), log)
+
+	if got := gm.(git.StubInspector).GetMergeStackCalls(); got != 0 {
+		t.Errorf("expected no merge attempt for a PR based off a non-default branch, got %d", got)
+	}
+	if !strings.Contains(out.String(), "Continue the stack? (y/n)") {
+		t.Errorf("expected the adoption prompt, got: %q", out.String())
+	}
+}
+
+// Non-interactive startup (no TTY) also retries the lone leftover merge —
+// the supervisor case is exactly where a stranded PR would otherwise sit
+// unmerged forever, since no one is there to answer the prompt.
+func TestCheckLeftoverRalphPRs_NonInteractive_LoneMergeablePRMerged(t *testing.T) {
+	gm := git.NewStub(git.StubRepoConfig{
+		BaseBranch:       "main",
+		MergeStackResult: git.MergeStackResult{MergedCount: 1, TotalPRs: 1},
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs:       []git.StubPR{{Number: 1241, Branch: "ralph/tabi-uael", Base: "main", State: git.PRStateOpen}},
+		},
+	})
+	var out strings.Builder
+	var logBuf strings.Builder
+	log := logging.NewWithWriter(&logBuf)
+
+	adopt, ok := checkLeftoverRalphPRs(context.Background(), gm, "/project", false, false, &out, strings.NewReader(""), log)
+
+	if !ok || adopt != "" {
+		t.Fatalf("expected fresh-from-main after merge, got adopt=%q ok=%v", adopt, ok)
+	}
+	if got := gm.(git.StubInspector).GetMergeStackCalls(); got != 1 {
+		t.Errorf("expected the merge to be retried without a TTY, got %d attempts", got)
+	}
+	if strings.Contains(logBuf.String(), "remain open and unmerged") {
+		t.Errorf("expected no leftover warning after the PR merged, got: %q", logBuf.String())
 	}
 }
