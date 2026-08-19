@@ -815,6 +815,12 @@ func (r *repo) SetAdoptedStackBranch(branch string) {
 // and the ref can be dropped without data loss. Unlike `git branch -d`, this
 // ignores the upstream-tracking config (which is preserved across renames and
 // gives false negatives when a task branch inherits origin/main as upstream).
+//
+// Ralph squash-merges every PR, so a task branch's commits never become
+// ancestors of the base branch — the ancestry check alone always fails for
+// completed task branches. When ancestry fails, branchContentMergedInto is
+// tried as a fallback: it recognizes the squash-merge case by comparing
+// content instead of history.
 func (r *repo) branchSafeToDelete(branch string) bool {
 	defaultBranch := r.baseBranch
 	for _, ref := range []string{"origin/" + defaultBranch, defaultBranch} {
@@ -824,8 +830,30 @@ func (r *repo) branchSafeToDelete(branch string) bool {
 		if r.isAncestor(r.projectDir, branch, ref) {
 			return true
 		}
+		if r.branchContentMergedInto(branch, ref) {
+			return true
+		}
 	}
 	return false
+}
+
+// branchContentMergedInto reports whether branch's cumulative content is
+// already fully contained in ref, even though ref is not a git ancestor of
+// branch — the squash-merge case. It runs `git merge-tree --write-tree ref
+// branch` and compares the resulting tree OID to ref's own tree OID. A
+// conflicted merge, a non-zero exit (including from git versions lacking
+// --write-tree), or an empty tree OID is treated as inconclusive and returns
+// false — branchSafeToDelete never deletes on an inconclusive check.
+func (r *repo) branchContentMergedInto(branch, ref string) bool {
+	out, err := r.run().Run(context.Background(), r.projectDir, "merge-tree", "--write-tree", ref, branch)
+	if err != nil {
+		return false
+	}
+	tree := strings.TrimSpace(out)
+	if tree == "" {
+		return false
+	}
+	return tree == r.gitOutput(r.projectDir, "rev-parse", ref+"^{tree}")
 }
 
 // PrepareForNextTask creates a fresh wip branch anchored at baseRef so the

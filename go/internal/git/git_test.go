@@ -1095,6 +1095,183 @@ func TestPrepareForNextTask_PreservesUnmergedTaskBranch(t *testing.T) {
 	}
 }
 
+// PrepareForNextTask deletes a squash-merged task branch even though its
+// commits never became ancestors of the base branch — the case Ralph hits
+// on every completed task, since it squash-merges every PR. Real git
+// throughout: the branch is squash-merged into main exactly as a merged PR
+// lands, so the deletion has to follow from git's own view of the content.
+func TestPrepareForNextTask_DeletesSquashMergedBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	taskBranch := "ralph/ralph-sq1-squash-merged-task"
+	run(t, "git", "-C", project, "checkout", "-b", taskBranch)
+	writeAndCommit(t, project, "feature.txt", "part one\n", "feature part 1")
+	writeAndCommit(t, project, "feature.txt", "part one\npart two\n", "feature part 2")
+
+	run(t, "git", "-C", project, "checkout", "main")
+	run(t, "git", "-C", project, "merge", "--squash", taskBranch)
+	run(t, "git", "-C", project, "commit", "-m", "squashed feature (#1)")
+	run(t, "git", "-C", project, "push", "origin", "main")
+	run(t, "git", "-C", project, "checkout", taskBranch)
+
+	if isAncestorForTest(t, project, taskBranch, "origin/main") {
+		t.Fatal("setup is wrong: a squash-merged branch must not be an ancestor of origin/main")
+	}
+
+	log := &testLog{}
+	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withWorktreeBranch(taskBranch))
+
+	mgr.PrepareForNextTask("ralph-next2", "")
+
+	if mgr.worktreeBranch != WipBranchName() {
+		t.Errorf("WorktreeBranch = %q, want %q", mgr.worktreeBranch, WipBranchName())
+	}
+
+	if refExistsForTest(t, project, "refs/heads/"+taskBranch) {
+		t.Errorf("squash-merged branch %s should have been deleted", taskBranch)
+	}
+
+	wantMsg := fmt.Sprintf("Cleaned up previous-session branch %s — fully merged into %s", taskBranch, mgr.baseBranch)
+	if !log.contains(wantMsg) {
+		t.Errorf("expected log to contain %q, got messages: %v", wantMsg, log.messages)
+	}
+}
+
+// branchSafeToDelete decides deletion from git's own view of the branch:
+// ancestry when history proves the merge, and a merge-tree content comparison
+// when history cannot (squash merge). Anything main does not already
+// contain — an extra commit, or a divergent edit that conflicts — must be
+// preserved. Real git, so each case is the shape it claims to be.
+func TestBranchSafeToDelete_RealGit(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, project, branch string)
+		want  bool
+	}{
+		{
+			name: "merged by fast-forward, branch is an ancestor of main",
+			setup: func(t *testing.T, project, branch string) {
+				run(t, "git", "-C", project, "checkout", "-b", branch)
+				writeAndCommit(t, project, "feature.txt", "landed work\n", "feature work")
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", branch)
+				run(t, "git", "-C", project, "push", "origin", "main")
+			},
+			want: true,
+		},
+		{
+			name: "squash-merged, content landed but ancestry broken",
+			setup: func(t *testing.T, project, branch string) {
+				run(t, "git", "-C", project, "checkout", "-b", branch)
+				writeAndCommit(t, project, "feature.txt", "part one\n", "feature part 1")
+				writeAndCommit(t, project, "feature.txt", "part one\npart two\n", "feature part 2")
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", "--squash", branch)
+				run(t, "git", "-C", project, "commit", "-m", "squashed feature (#1)")
+				run(t, "git", "-C", project, "push", "origin", "main")
+			},
+			want: true,
+		},
+		{
+			name: "never merged, content absent from main",
+			setup: func(t *testing.T, project, branch string) {
+				run(t, "git", "-C", project, "checkout", "-b", branch)
+				writeAndCommit(t, project, "feature.txt", "unlanded work\n", "feature work")
+				run(t, "git", "-C", project, "checkout", "main")
+			},
+			want: false,
+		},
+		{
+			name: "squash-merged then extended with work that never landed",
+			setup: func(t *testing.T, project, branch string) {
+				run(t, "git", "-C", project, "checkout", "-b", branch)
+				writeAndCommit(t, project, "feature.txt", "shipped\n", "feature work")
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", "--squash", branch)
+				run(t, "git", "-C", project, "commit", "-m", "squashed feature (#1)")
+				run(t, "git", "-C", project, "push", "origin", "main")
+				run(t, "git", "-C", project, "checkout", branch)
+				writeAndCommit(t, project, "extra.txt", "written after the PR merged\n", "follow-up work")
+				run(t, "git", "-C", project, "checkout", "main")
+			},
+			want: false,
+		},
+		{
+			name: "diverged from main with a conflicting edit",
+			setup: func(t *testing.T, project, branch string) {
+				writeAndCommit(t, project, "shared.txt", "base\n", "shared base")
+				run(t, "git", "-C", project, "push", "origin", "main")
+				run(t, "git", "-C", project, "checkout", "-b", branch)
+				writeAndCommit(t, project, "shared.txt", "branch version\n", "branch edit")
+				run(t, "git", "-C", project, "checkout", "main")
+				writeAndCommit(t, project, "shared.txt", "main version\n", "main edit")
+				run(t, "git", "-C", project, "push", "origin", "main")
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			project, _ := initBareRepo(t)
+			branch := "ralph/ralph-abc-task"
+			tt.setup(t, project, branch)
+
+			mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}))
+
+			if got := mgr.branchSafeToDelete(branch); got != tt.want {
+				t.Errorf("branchSafeToDelete(%s) = %v, want %v", branch, got, tt.want)
+			}
+		})
+	}
+}
+
+// Ancestry is the cheap check and answers first: when it proves the merge,
+// the merge-tree fallback never runs.
+func TestBranchSafeToDelete_AncestrySkipsMergeTree(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("rev-parse --verify", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+
+	mgr := newRepoForTest(Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner))
+
+	if !mgr.branchSafeToDelete("ralph/task") {
+		t.Error("branch that is an ancestor of main should be safe to delete")
+	}
+	if runner.CalledWith("merge-tree") {
+		t.Error("merge-tree should not run when ancestry already proves the merge")
+	}
+}
+
+// An inconclusive merge-tree — a git old enough to lack --write-tree, or any
+// other failure — preserves the branch rather than guessing.
+func TestBranchSafeToDelete_MergeTreeUnsupportedPreserves(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("rev-parse --verify", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not an ancestor"))
+	runner.On("merge-tree", "", fmt.Errorf("error: unknown option `write-tree'"))
+
+	mgr := newRepoForTest(Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner))
+
+	if mgr.branchSafeToDelete("ralph/task") {
+		t.Error("branch should be preserved when merge-tree cannot answer")
+	}
+}
+
+func writeAndCommit(t *testing.T, dir, name, content, msg string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	run(t, "git", "-C", dir, "add", name)
+	run(t, "git", "-C", dir, "commit", "-m", msg)
+}
+
+func isAncestorForTest(t *testing.T, dir, ancestor, descendant string) bool {
+	t.Helper()
+	return exec.Command("git", "-C", dir, "merge-base", "--is-ancestor", ancestor, descendant).Run() == nil
+}
+
 // ResetToDefaultBranch preserves local commits instead of force-resetting.
 // When the worktree is on a branch with unpushed work (e.g. after loop
 // interruption), resume must not destroy those commits — EnsureUpToDate is
