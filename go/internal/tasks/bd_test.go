@@ -543,9 +543,9 @@ func TestBD_SkipTask_NoSkipDetailMetadataWhenDetailEmpty(t *testing.T) {
 	}
 }
 
-// Proves: bd SkipTask reassigns the bead to config.TaskAssignee and adds the
-// skipped label via --add-label so it leaves the loop's inbox with no separate
-// filter needed. --label is not a valid bd update flag and must not be used.
+// Proves: bd SkipTask reassigns the bead to config.TaskAssignee via
+// --status=open --assignee=..., with no label flag on that call — assignee
+// alone carries current skip state, so no label mutation is needed.
 func TestBD_SkipTask_ReassignsToTaskAssignee(t *testing.T) {
 	var updateArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
@@ -565,11 +565,123 @@ func TestBD_SkipTask_ReassignsToTaskAssignee(t *testing.T) {
 	if !strings.Contains(joined, "--assignee="+config.TaskAssignee) {
 		t.Errorf("SkipTask must reassign to %s, got update args: %v", config.TaskAssignee, updateArgs)
 	}
-	if !strings.Contains(joined, "--add-label=skipped") {
-		t.Errorf("SkipTask must use --add-label=skipped, got update args: %v", updateArgs)
+	if strings.Contains(joined, "label") {
+		t.Errorf("SkipTask reassignment call must not touch any label, got update args: %v", updateArgs)
 	}
-	if strings.Contains(joined, "--label=skipped") {
-		t.Errorf("SkipTask must not use --label=skipped (invalid flag), got update args: %v", updateArgs)
+}
+
+// Proves: bd SkipTask never mutates a label across any of its bd calls —
+// not the reassignment call, and not any of the --set-metadata calls.
+func TestBD_SkipTask_NoLabelMutationAcrossAnyCall(t *testing.T) {
+	var allCalls [][]string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		allCalls = append(allCalls, append([]string(nil), args...))
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", "transport_error", "some detail"); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range allCalls {
+		if strings.Contains(strings.Join(args, " "), "label") {
+			t.Errorf("SkipTask must not mutate any label, got call: %v", args)
+		}
+	}
+}
+
+// Proves: bd SkipTask stamps skipped_at with the current unix timestamp on
+// every skip.
+func TestBD_SkipTask_SetsSkippedAtMetadata(t *testing.T) {
+	var metadataArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "--set-metadata") && strings.Contains(joined, "skipped_at=") {
+			metadataArgs = args
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	before := time.Now().Unix()
+	if err := b.SkipTask("abc123", SkipPushFailed, ""); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now().Unix()
+	if metadataArgs == nil {
+		t.Fatal("expected a --set-metadata skipped_at=... call")
+	}
+	var stamped int64 = -1
+	for _, a := range metadataArgs {
+		if strings.HasPrefix(a, "skipped_at=") {
+			v, err := strconv.ParseInt(strings.TrimPrefix(a, "skipped_at="), 10, 64)
+			if err != nil {
+				t.Fatalf("skipped_at value not a unix timestamp: %v", a)
+			}
+			stamped = v
+		}
+	}
+	if stamped < before || stamped > after {
+		t.Errorf("skipped_at = %d, want between %d and %d", stamped, before, after)
+	}
+}
+
+// Proves: bd SkipTask stamps skip_count=1 metadata on a bead's first skip.
+func TestBD_SkipTask_SetsSkipCountMetadataOnFirstSkip(t *testing.T) {
+	var metadataArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "--set-metadata") && strings.Contains(joined, "skip_count=") {
+			metadataArgs = args
+		}
+		if len(args) > 0 && args[0] == "show" {
+			return "[]", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", SkipPushFailed, ""); err != nil {
+		t.Fatal(err)
+	}
+	if metadataArgs == nil {
+		t.Fatal("expected a --set-metadata skip_count=... call")
+	}
+	joined := strings.Join(metadataArgs, " ")
+	if !strings.Contains(joined, "skip_count=1") {
+		t.Errorf("expected skip_count=1 on first skip, got metadata args: %v", metadataArgs)
+	}
+}
+
+// Proves: bd SkipTask reads the bead's current skip_count metadata and
+// increments it, so a second skip of the same bead writes skip_count=2.
+func TestBD_SkipTask_SkipCountIncrementsAcrossRepeatedSkips(t *testing.T) {
+	currentSkipCount := "0"
+	var lastSkipCountArg string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "show" {
+			return fmt.Sprintf(`[{"id":"abc123","metadata":{"skip_count":%q}}]`, currentSkipCount), nil
+		}
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "--set-metadata") && strings.Contains(joined, "skip_count=") {
+			for _, a := range args {
+				if strings.HasPrefix(a, "skip_count=") {
+					lastSkipCountArg = strings.TrimPrefix(a, "skip_count=")
+				}
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", SkipPushFailed, ""); err != nil {
+		t.Fatal(err)
+	}
+	if lastSkipCountArg != "1" {
+		t.Fatalf("expected skip_count=1 after first skip, got %q", lastSkipCountArg)
+	}
+	currentSkipCount = lastSkipCountArg
+	if err := b.SkipTask("abc123", SkipPushFailed, ""); err != nil {
+		t.Fatal(err)
+	}
+	if lastSkipCountArg != "2" {
+		t.Errorf("expected skip_count=2 after second skip, got %q", lastSkipCountArg)
 	}
 }
 
