@@ -359,6 +359,13 @@ type ShipResult struct {
 	// PR open for merge when CI infrastructure recovers.
 	InfrastructureFailure bool
 
+	// StepTimeoutFailure is true when CIFailure is true and every failed job
+	// carries a step-timeout annotation — a setup step that exceeded its
+	// timeout-minutes rather than a test that failed. No code change can fix
+	// it, so the loop re-triggers CI instead of spawning a fix agent, until
+	// its re-trigger budget runs out.
+	StepTimeoutFailure bool
+
 	// ReviewFixNeeded is true when a reviewer returned actionable comments.
 	// The loop should run tryFixReviewComments and retry Ship.
 	ReviewFixNeeded bool
@@ -604,6 +611,9 @@ func (r *repo) classifyMergeOutcome(ctx context.Context, result ShipResult, merg
 		result.CIFailure = true
 		result.CIFailureDetail = ciFailure
 		result.InfrastructureFailure = r.isInfrastructureFailure(ctx, ciFailure.PRNumber)
+		if !result.InfrastructureFailure {
+			result.StepTimeoutFailure = r.isStepTimeoutFailure(ctx, ciFailure.PRNumber)
+		}
 		return result, nil
 	}
 	var conflictErr *UnresolvedConflictError

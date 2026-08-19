@@ -591,6 +591,116 @@ func TestShip_InfrastructureFailure_FalseWhenJobStepsExecuted(t *testing.T) {
 	}
 }
 
+// Ship sets ShipResult.StepTimeoutFailure=true when every failed job of the
+// PR's run carries a step-timeout annotation. The job ran (non-zero steps) so
+// it is not an infrastructure failure, but a setup step hit its
+// timeout-minutes and no test result was ever produced — the loop must
+// re-trigger CI rather than pay for a fix agent that has nothing to fix.
+func TestShip_StepTimeoutFailure_TrueWhenAllFailedJobsTimedOut(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+	runner.On("reset --hard", "", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 149,
+			Branch: "ralph/test/01-ship-step-timeout",
+			Base:   "main",
+			State:  PRStateOpen,
+		}},
+		Checks:       map[int][]CICheckResult{149: {{Name: "test", State: "FAILURE", Bucket: "fail", IsRequired: true}}},
+		JobStepCount: 12, // the job ran — not an infrastructure failure
+		FailedJobAnnotations: []JobAnnotations{
+			{JobName: "test", Messages: []string{"The action 'Install system tools' has timed out after 5 minutes."}},
+		},
+	})
+
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-ship-step-timeout"),
+	)
+
+	result, err := repo.Ship(context.Background(), ShipOpts{AutoMerge: true, PRNumber: 149})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.CIFailure {
+		t.Error("expected CIFailure=true")
+	}
+	if !result.StepTimeoutFailure {
+		t.Error("expected StepTimeoutFailure=true when every failed job carries a step-timeout annotation")
+	}
+	if result.InfrastructureFailure {
+		t.Error("expected InfrastructureFailure=false — a step timeout must never admin-merge past branch protection")
+	}
+}
+
+// Ship sets ShipResult.StepTimeoutFailure=false when any failed job lacks a
+// timeout annotation. One job timing out does not excuse another job's real
+// assertion failure — that run still needs the fix agent.
+func TestShip_StepTimeoutFailure_FalseWhenAJobReallyFailed(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+	runner.On("reset --hard", "", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 150,
+			Branch: "ralph/test/01-ship-mixed-failure",
+			Base:   "main",
+			State:  PRStateOpen,
+		}},
+		Checks:       map[int][]CICheckResult{150: {{Name: "test", State: "FAILURE", Bucket: "fail", IsRequired: true}}},
+		JobStepCount: 12,
+		FailedJobAnnotations: []JobAnnotations{
+			{JobName: "setup", Messages: []string{"The action 'Install system tools' has timed out after 5 minutes."}},
+			{JobName: "test", Messages: []string{"internal/auth/token_test.go#L42\nexpected 200, got 401"}},
+		},
+	})
+
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-ship-mixed-failure"),
+	)
+
+	result, err := repo.Ship(context.Background(), ShipOpts{AutoMerge: true, PRNumber: 150})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.CIFailure {
+		t.Error("expected CIFailure=true")
+	}
+	if result.StepTimeoutFailure {
+		t.Error("expected StepTimeoutFailure=false when a failed job has no timeout annotation")
+	}
+}
+
 // Ship logs that no review is pending and the loop is continuing to a
 // CI-gated merge when PollReview returns nil — it must not claim a timeout
 // occurred (PollReview returns immediately, without waiting, when the bot was

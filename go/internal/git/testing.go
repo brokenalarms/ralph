@@ -62,28 +62,33 @@ type StubGitHubConfig struct {
 	FetchThreadIDs   map[int]string
 	PRDiffOutput     string
 
+	// FailedJobAnnotations is the failure-level check-run annotation set
+	// GetFailedJobAnnotations reports per failed job of the PR's current run.
+	FailedJobAnnotations []JobAnnotations
+
 	// Fault injection — single error per method.
-	CreatePRErr           error
-	CreatePRViaAPIErr     error
-	EditPRErr             error
-	EditPRBaseErr         error
-	ReopenPRErr           error
-	ListChecksErr         error
-	FindOpenPRErr         error
-	FindPRErr             error
-	GetPRErr              error
-	ListAllPRsErr         error
-	ListOpenPRBranchesErr error
-	PRDiffErr             error
-	GetJobStepCountErr    error
-	GetRunningJobStepsErr error
-	DetectReviewersErr    error
-	PollReviewErr         error
-	RequiredChecksErr     error
-	ReplyToReviewErr      error
-	FetchThreadIDsErr     error
-	ResolveThreadErr      error
-	PingErr               error
+	CreatePRErr             error
+	CreatePRViaAPIErr       error
+	EditPRErr               error
+	EditPRBaseErr           error
+	ReopenPRErr             error
+	ListChecksErr           error
+	FindOpenPRErr           error
+	FindPRErr               error
+	GetPRErr                error
+	ListAllPRsErr           error
+	ListOpenPRBranchesErr   error
+	PRDiffErr               error
+	GetJobStepCountErr      error
+	GetRunningJobStepsErr   error
+	FailedJobAnnotationsErr error
+	DetectReviewersErr      error
+	PollReviewErr           error
+	RequiredChecksErr       error
+	ReplyToReviewErr        error
+	FetchThreadIDsErr       error
+	ResolveThreadErr        error
+	PingErr                 error
 }
 
 // stubGitHub is the unexported fake. Tests never see this type directly;
@@ -295,6 +300,10 @@ func (s *stubGitHub) GetJobStepCount(_ context.Context, _ string, _ int) (int, e
 
 func (s *stubGitHub) GetRunningJobSteps(_ context.Context, _ string, _ int) ([]JobStepStatus, error) {
 	return s.cfg.RunningJobSteps, s.cfg.GetRunningJobStepsErr
+}
+
+func (s *stubGitHub) GetFailedJobAnnotations(_ context.Context, _ string, _ int) ([]JobAnnotations, error) {
+	return s.cfg.FailedJobAnnotations, s.cfg.FailedJobAnnotationsErr
 }
 
 func (s *stubGitHub) ListAllPRs(_ context.Context, _ string) ([]PRInfo, error) {
