@@ -145,10 +145,16 @@ The orchestrator owns the entire push/PR/merge lifecycle. The agent writes code 
 
 Ralph assigns models per role, configured in `.ralph/config.toml` as bare tier aliases (`sonnet` / `haiku` / `opus`), never pinned model IDs:
 
-- **`working_model`** (default sonnet) — the main agent that works each iteration
-- **`verify_model`** (default haiku) — LLM verification, first attempt
-- **`verify_escalation_model`** (default sonnet) — LLM verification, subsequent attempts
-- **`fix_model`** (default opus) — repair agent used for test/compile/verify/CI/Copilot/conflict fixes, from its first attempt (no lower-tier warm-up)
+| Role | Config key | Default | What it runs | Escalation |
+|---|---|---|---|---|
+| Working agent | `working_model` | sonnet | The main agent working each iteration | Overridable per bead (see below) |
+| Verifier | `verify_model` | haiku | LLM diff-vs-acceptance-criteria review, first attempt | Escalates to `verify_escalation_model` on subsequent attempts |
+| Verifier (escalated) | `verify_escalation_model` | sonnet | LLM verification, attempts after the first | — |
+| Fix agent | `fix_model` | opus | Test/compile/verify/CI/Copilot/conflict repairs | Runs at `fix_model` from its first attempt, no lower-tier warm-up |
+
+**Per-bead assignment.** The task manager stamps model metadata on every bead it creates — `sonnet` for mechanical, well-specified work, `opus` for work requiring judgment, design, or diagnosis. `resolveAgentModel` in `go/internal/loop/loop.go` applies that override to the working agent only: fix agents and the verifier always use their configured `fix_model`/`verify_model`/`verify_escalation_model`, regardless of a bead's metadata. If a bead's model metadata doesn't match a recognized model family, the loop falls back to `working_model` and logs a warning.
+
+**Verification escalation.** The first verification attempt for a task uses `verify_model`; if the agent needs to retry, later attempts use `verify_escalation_model` instead (see the model selection in `go/internal/verifier/verifier.go`). Fix agents don't have this warm-up — they run at `fix_model` starting with their very first attempt.
 
 ### Verification pipeline
 
