@@ -285,6 +285,7 @@ type stubShipHooks struct {
 	HasUncommittedFn        func() bool
 	CommitAllFn             func(string)
 	BranchHasUnmergedWorkFn func(string) bool
+	PushedBranchNetEmptyFn  func() bool
 }
 
 func (s *stubShipHooks) Push(ctx context.Context) error {
@@ -312,6 +313,13 @@ func (s *stubShipHooks) BranchHasUnmergedWork(branch string) bool {
 		return true
 	}
 	return s.BranchHasUnmergedWorkFn(branch)
+}
+
+func (s *stubShipHooks) PushedBranchNetEmpty() bool {
+	if s.PushedBranchNetEmptyFn == nil {
+		return false
+	}
+	return s.PushedBranchNetEmptyFn()
 }
 
 // stubCIPoller implements ciPoller for tests that need to control the

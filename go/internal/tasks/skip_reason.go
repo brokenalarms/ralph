@@ -14,6 +14,7 @@ const (
 	SkipDependencyBlocked     SkipReason = "dependency_blocked_by"
 	SkipPushFailed            SkipReason = "push_failed"
 	SkipPRCreationFailed      SkipReason = "pr_creation_failed"
+	SkipNoNetChange           SkipReason = "no_net_change"
 	SkipMergeFailed           SkipReason = "merge_failed"
 	SkipTransportError        SkipReason = "transport_error"
 	SkipAnalyzer              SkipReason = "analyzer"

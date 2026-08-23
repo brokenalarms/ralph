@@ -281,8 +281,8 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 	}
 
 	out := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
-	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch, shipErr :=
-		out.prNumber, out.prResultURL, out.merged, out.ciFailure, out.ciInfraFailure, out.stacked, out.pushedBranch, out.shipErr
+	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch :=
+		out.prNumber, out.prResultURL, out.merged, out.ciFailure, out.ciInfraFailure, out.stacked, out.pushedBranch
 	conflictUnresolved := out.conflictUnresolved
 
 	// Record every successful push in chronological order so completedBranches()
@@ -333,7 +333,7 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 	}
 
 	if prNumber == 0 {
-		return l.handleNoPR(p, ct, shipErr, pushedBranch)
+		return l.handleNoPR(p, ct, out)
 	}
 
 	// CI is failing — decide whether to close or leave open based on failure type.
@@ -400,13 +400,18 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged, prNumber: prNumber}
 }
 
-// handleNoPR handles the three documented sub-cases when ship produced no PR
+// handleNoPR handles the four documented sub-cases when ship produced no PR
 // number:
 //
 //   - shipErr != nil && pushedBranch == "": push was attempted but failed
 //     (e.g. exit 128, network error). The agent's commits are in the local
 //     worktree only — origin was never reached. Skip so the next iteration
 //     can retry; closing would silently discard work that was never shipped.
+//
+//   - pushedBranch != "" && noNetChange: the push landed, but the branch's
+//     commits add up to no change against the base, so ship created no PR.
+//     Skip as a net no-op — reporting it as a PR-creation failure would send
+//     triage chasing an infra fault and retrying work that does nothing.
 //
 //   - pushedBranch != "" && shipErr != nil: the Phase 1 push succeeded but
 //     CreatePR failed (rate limit, 422, network). Commits are on the remote
@@ -416,7 +421,8 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 //   - shipErr == nil && pushedBranch == "": nothing was pushed. The agent
 //     signalled with no new commits and no prior-iteration commits to ship.
 //     Closing the bead is correct — work is verified complete.
-func (l *Loop) handleNoPR(p completeTaskParams, ct CompletedTask, shipErr error, pushedBranch string) completeTaskOut {
+func (l *Loop) handleNoPR(p completeTaskParams, ct CompletedTask, out shipOutcome) completeTaskOut {
+	shipErr, pushedBranch := out.shipErr, out.pushedBranch
 	if shipErr != nil && pushedBranch == "" {
 		branch := l.git.GetWorktreeBranch()
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
@@ -424,6 +430,16 @@ func (l *Loop) handleNoPR(p completeTaskParams, ct CompletedTask, shipErr error,
 			shipErr, p.taskID)
 		if p.taskID != "" {
 			l.skipTask(p.taskID, tasks.SkipPushFailed, branch)
+		}
+		return completeTaskOut{action: signalSkipped}
+	}
+
+	if pushedBranch != "" && out.noNetChange {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+			"Branch %s has no net change vs main — skipping bead %s (nothing to review or merge)",
+			pushedBranch, p.taskID)
+		if p.taskID != "" {
+			l.skipTask(p.taskID, tasks.SkipNoNetChange, pushedBranch)
 		}
 		return completeTaskOut{action: signalSkipped}
 	}

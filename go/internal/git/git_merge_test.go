@@ -523,6 +523,9 @@ func TestPush_SquashesMultipleCommits(t *testing.T) {
 	if countAfter != "1" {
 		t.Errorf("expected 1 commit on remote after squash-push, got %s", countAfter)
 	}
+	if repo.PushedBranchNetEmpty() {
+		t.Error("PushedBranchNetEmpty() = true after squashing a real diff, want false")
+	}
 
 	// Verify all 3 files exist (tree content preserved).
 	for i := 0; i < 3; i++ {
@@ -1209,5 +1212,257 @@ func TestExecuteMerge_PostMergeAncestorCheckFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "NOT an ancestor") {
 		t.Errorf("expected 'NOT an ancestor' in error, got: %v", err)
+	}
+}
+
+// squashTestRepo creates a worktree branch off origin/main with two commits
+// whose combined effect is decided by the caller, and returns the repo, the
+// worktree dir, and the base SHA the squash is measured against.
+func squashTestRepo(t *testing.T, branch string) (*repo, string, string) {
+	t.Helper()
+	project, _ := initBareRepoWithOrigin(t)
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", branch, wtDir)
+	run(t, "git", "-C", wtDir, "config", "user.name", "test")
+	run(t, "git", "-C", wtDir, "config", "user.email", "test@test")
+
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch(branch),
+	)
+	baseSHA := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "origin/main"))
+	return repo, wtDir, baseSHA
+}
+
+// An agent can leave a branch whose commits net out to nothing — it adds a
+// file and a later commit removes it again, or main already carries the
+// change. Squashing that branch would soft-reset to base and then fail to
+// commit, silently destroying the agent's commits. SquashToOneCommit must
+// detect the empty net diff up front, report ErrNoNetChange, and leave the
+// branch exactly as it found it.
+func TestSquashToOneCommit_NetEmptyPreservesBranch(t *testing.T) {
+	repo, wtDir, baseSHA := squashTestRepo(t, "ralph/net-empty")
+
+	writeFile(t, wtDir, "scratch.txt", "temporary\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "add scratch")
+	run(t, "git", "-C", wtDir, "rm", "-q", "scratch.txt")
+	run(t, "git", "-C", wtDir, "commit", "-m", "remove scratch")
+
+	headBefore := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "HEAD"))
+
+	err := repo.SquashToOneCommit(baseSHA, "squashed")
+	if !errors.Is(err, ErrNoNetChange) {
+		t.Fatalf("SquashToOneCommit on a net-empty branch = %v, want ErrNoNetChange", err)
+	}
+
+	headAfter := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "HEAD"))
+	if headAfter != headBefore {
+		t.Errorf("HEAD moved to %s (base is %s) — a net-empty squash must not mutate the branch; want %s", headAfter, baseSHA, headBefore)
+	}
+	if count := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-list", "--count", baseSHA+"..HEAD")); count != "2" {
+		t.Errorf("commits ahead of base = %s, want 2 — the agent's commits must survive", count)
+	}
+}
+
+// If the commit that rewrites the squashed history fails for any reason, the
+// soft reset has already moved HEAD to base. Without a restore the branch is
+// left pointing at base with every commit discarded and only the reflog to
+// recover from. SquashToOneCommit must put HEAD back where it was.
+func TestSquashToOneCommit_FailedCommitRestoresHead(t *testing.T) {
+	repo, wtDir, baseSHA := squashTestRepo(t, "ralph/squash-fail")
+
+	for i := 0; i < 2; i++ {
+		writeFile(t, wtDir, fmt.Sprintf("file%d.txt", i), fmt.Sprintf("content %d\n", i))
+		run(t, "git", "-C", wtDir, "add", "-A")
+		run(t, "git", "-C", wtDir, "commit", "-m", fmt.Sprintf("commit %d", i))
+	}
+
+	headBefore := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "HEAD"))
+
+	// An empty message makes `git commit` abort after the reset has run.
+	err := repo.SquashToOneCommit(baseSHA, "")
+	if err == nil {
+		t.Fatal("SquashToOneCommit with an empty message must fail")
+	}
+	if errors.Is(err, ErrNoNetChange) {
+		t.Fatalf("a branch with a real net diff must not report ErrNoNetChange, got %v", err)
+	}
+
+	headAfter := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "HEAD"))
+	if headAfter != headBefore {
+		t.Errorf("HEAD = %s after a failed squash, want the pre-squash HEAD %s (base is %s)", headAfter, headBefore, baseSHA)
+	}
+	if status := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "status", "--porcelain")); status != "" {
+		t.Errorf("worktree must be clean after a restored squash, got:\n%s", status)
+	}
+}
+
+// A branch with more than one commit and a real net diff still collapses to a
+// single commit — the net-empty guard must not disturb the normal path.
+func TestSquashToOneCommit_RealDiffStillSquashes(t *testing.T) {
+	repo, wtDir, baseSHA := squashTestRepo(t, "ralph/squash-real")
+
+	for i := 0; i < 3; i++ {
+		writeFile(t, wtDir, fmt.Sprintf("file%d.txt", i), fmt.Sprintf("content %d\n", i))
+		run(t, "git", "-C", wtDir, "add", "-A")
+		run(t, "git", "-C", wtDir, "commit", "-m", fmt.Sprintf("commit %d", i))
+	}
+
+	if err := repo.SquashToOneCommit(baseSHA, "squashed"); err != nil {
+		t.Fatalf("SquashToOneCommit: %v", err)
+	}
+	if count := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-list", "--count", baseSHA+"..HEAD")); count != "1" {
+		t.Errorf("commits ahead of base = %s, want 1", count)
+	}
+	for i := 0; i < 3; i++ {
+		file := fmt.Sprintf("file%d.txt", i)
+		if got := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "show", "HEAD:"+file)); got != fmt.Sprintf("content %d", i) {
+			t.Errorf("%s = %q after squash, want the committed content", file, got)
+		}
+	}
+}
+
+// A single commit is left alone: nothing to squash, and no sentinel.
+func TestSquashToOneCommit_SingleCommitIsNoOp(t *testing.T) {
+	repo, wtDir, baseSHA := squashTestRepo(t, "ralph/squash-single")
+
+	writeFile(t, wtDir, "only.txt", "only\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "only commit")
+	headBefore := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "HEAD"))
+
+	if err := repo.SquashToOneCommit(baseSHA, "squashed"); err != nil {
+		t.Fatalf("SquashToOneCommit on a single commit = %v, want nil", err)
+	}
+	if headAfter := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "HEAD")); headAfter != headBefore {
+		t.Errorf("HEAD = %s, want unchanged %s — a single commit must not be rewritten", headAfter, headBefore)
+	}
+}
+
+// Push must not strip a net-empty branch of its commits. The squash step
+// reports ErrNoNetChange, Push logs it and pushes the branch as it stands, so
+// the agent's work stays recoverable on the remote instead of being reset
+// away to base.
+func TestPush_NetEmptyBranchPreservesCommits(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/push-net-empty", wtDir)
+	run(t, "git", "-C", wtDir, "config", "user.name", "test")
+	run(t, "git", "-C", wtDir, "config", "user.email", "test@test")
+
+	writeFile(t, wtDir, "scratch.txt", "temporary\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "add scratch")
+	run(t, "git", "-C", wtDir, "rm", "-q", "scratch.txt")
+	run(t, "git", "-C", wtDir, "commit", "-m", "remove scratch")
+	headBefore := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "HEAD"))
+
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/push-net-empty"),
+	)
+
+	if err := repo.Push(context.Background()); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	if headAfter := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-parse", "HEAD")); headAfter != headBefore {
+		t.Errorf("local HEAD = %s after pushing a net-empty branch, want unchanged %s", headAfter, headBefore)
+	}
+	if count := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "rev-list", "--count", "main..ralph/push-net-empty")); count != "2" {
+		t.Errorf("remote branch has %s commits, want 2 — the commits must reach the remote intact", count)
+	}
+	if !repo.PushedBranchNetEmpty() {
+		t.Error("PushedBranchNetEmpty() = false after pushing a net-empty branch, want true so Ship skips the empty PR")
+	}
+}
+
+// A branch that pushed commits whose net diff against main is empty has no
+// work to review. shipPR must skip PR creation and report NoNetChange so the
+// loop can classify the bead as a net no-op rather than a PR-creation
+// infrastructure failure.
+func TestShipPR_NetEmptyBranchSkipsPRAndReportsNoNetChange(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
+
+	infra := shipInfra{
+		hooks: &stubShipHooks{
+			BranchHasUnmergedWorkFn: func(string) bool { return true },
+			PushedBranchNetEmptyFn:  func() bool { return true },
+		},
+		logger: discardLog{},
+	}
+
+	result, err := shipPR(context.Background(), gh, "/wt", "ralph/net-empty", "https://github.com/test/repo.git", ShipOpts{}, infra)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	prs, _ := gh.ListAllPRs(context.Background(), "")
+	if len(prs) != 0 {
+		t.Errorf("CreatePR must not be called for a net-empty branch; world has PRs: %+v", prs)
+	}
+	if !result.NoNetChange {
+		t.Error("NoNetChange = false, want true so the loop can distinguish a net no-op from a PR-creation failure")
+	}
+	if result.PushedBranch != "ralph/net-empty" {
+		t.Errorf("PushedBranch = %q, want the pushed branch — the commits are on the remote", result.PushedBranch)
+	}
+}
+
+// A branch with no commits ahead of main is equally a net no-op: no PR, and
+// NoNetChange set so triage does not retry it as a failed PR creation.
+func TestShipPR_NoCommitsAheadReportsNoNetChange(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
+
+	infra := shipInfra{
+		hooks: &stubShipHooks{
+			BranchHasUnmergedWorkFn: func(string) bool { return false },
+		},
+		logger: discardLog{},
+	}
+
+	result, err := shipPR(context.Background(), gh, "/wt", "ralph/no-commits", "https://github.com/test/repo.git", ShipOpts{}, infra)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.NoNetChange {
+		t.Error("NoNetChange = false, want true for a branch with no commits ahead of main")
+	}
+}
+
+// A branch with real work still creates its PR — the net-empty guard must not
+// suppress ordinary shipping.
+func TestShipPR_RealWorkStillCreatesPR(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 31,
+			Branch: "ralph/real-work",
+			Title:  "real work",
+			State:  PRStateOpen,
+		}},
+	})
+
+	infra := shipInfra{
+		hooks: &stubShipHooks{
+			BranchHasUnmergedWorkFn: func(string) bool { return true },
+			PushedBranchNetEmptyFn:  func() bool { return false },
+		},
+		logger: discardLog{},
+	}
+
+	result, err := shipPR(context.Background(), gh, "/wt", "ralph/real-work", "https://github.com/test/repo.git", ShipOpts{TaskID: "ralph-real", TaskTitle: "real work"}, infra)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.PRNumber != 31 {
+		t.Errorf("PRNumber = %d, want 31", result.PRNumber)
+	}
+	if result.NoNetChange {
+		t.Error("NoNetChange = true for a branch with real work, want false")
 	}
 }
