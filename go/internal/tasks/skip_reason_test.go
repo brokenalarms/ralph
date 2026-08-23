@@ -19,6 +19,7 @@ func TestSkipReason_ConstantsAreStableStrings(t *testing.T) {
 		{SkipDependencyBlocked, "dependency_blocked_by"},
 		{SkipPushFailed, "push_failed"},
 		{SkipPRCreationFailed, "pr_creation_failed"},
+		{SkipNoNetChange, "no_net_change"},
 		{SkipTransportError, "transport_error"},
 		{SkipAnalyzer, "analyzer"},
 		{SkipAlreadyCompleted, "already_completed_this_session"},

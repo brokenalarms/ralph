@@ -74,6 +74,9 @@ func (r *repo) Push(ctx context.Context) error {
 		return nil
 	}
 
+	// Each push re-evaluates whether the branch nets out to nothing.
+	r.pushNetEmpty = false
+
 	if r.compileCheckTimeout > 0 {
 		result := verify.CompileCheck(ctx, r.compileCheckTimeout, r.workDir)
 		if !result.Passed {
@@ -117,7 +120,15 @@ func (r *repo) Push(ctx context.Context) error {
 			if headSHA != baseSHA {
 				commitMsg := r.gitOutput(r.workDir, "log", "-1", "--format=%s")
 				if err := r.SquashToOneCommit(baseSHA, commitMsg); err != nil {
-					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Squash: %v", err)
+					if errors.Is(err, ErrNoNetChange) {
+						// Not a failure: the branch's commits are intact, they
+						// just add up to no change vs base. Push them as they
+						// are; shipPR skips PR creation for the no-op.
+						r.logger.Emit(logging.Opts{Domain: logging.Git}, "Squash skipped: branch %s has no net change vs %s — pushing commits unsquashed", r.worktreeBranch, baseBranch)
+						r.pushNetEmpty = true
+					} else {
+						r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Squash: %v", err)
+					}
 				}
 			}
 		}
@@ -380,6 +391,12 @@ type ShipResult struct {
 	// merge conflict. The loop should call tryFixConflict and retry Ship.
 	ConflictDetail *UnresolvedConflictError
 
+	// NoNetChange is true when the pushed branch carries no net change
+	// against the base branch — either no commits ahead at all, or commits
+	// whose combined diff is empty. No PR is created; the caller must
+	// classify the bead as a net no-op rather than a PR-creation failure.
+	NoNetChange bool
+
 	// PushedBranch is the worktree branch name set after a successful push
 	// in shipPR. An empty string means no push occurred (nothing to ship, or
 	// push failed). When this is non-empty but PRNumber == 0, the push
@@ -397,6 +414,7 @@ type shipHooks interface {
 	HasUncommittedChanges() bool
 	CommitAll(message string)
 	BranchHasUnmergedWork(branch string) bool
+	PushedBranchNetEmpty() bool
 }
 
 // shipInfra holds the infrastructure shipPR needs. Separated from ShipOpts
@@ -434,7 +452,17 @@ func shipPR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string, o
 		if infra.logger != nil {
 			infra.logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s has no commits ahead of main — skipping PR creation", branch)
 		}
-		return ShipResult{PushedBranch: pushedBranch}, nil
+		return ShipResult{PushedBranch: pushedBranch, NoNetChange: true}, nil
+	}
+
+	// Commits exist but add up to nothing (the agent's change was undone, or
+	// main already carries it). There is no diff to review, so a PR would be
+	// empty — report the no-op instead.
+	if infra.hooks.PushedBranchNetEmpty() {
+		if infra.logger != nil {
+			infra.logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s has commits but no net change vs main — skipping PR creation", branch)
+		}
+		return ShipResult{PushedBranch: pushedBranch, NoNetChange: true}, nil
 	}
 
 	baseBranch := opts.BaseBranch

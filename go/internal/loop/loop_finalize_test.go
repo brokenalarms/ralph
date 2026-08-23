@@ -27,6 +27,7 @@ type shipResult struct {
 	ciInfraFailure  bool                 // InfrastructureFailure flag on ShipResult
 	ciFailureDetail *git.CIFailureError  // populated when the loop needs to route through tryFixCI
 	pushedBranch    string               // PushedBranch flag: non-empty when Phase 1 push succeeded on this branch
+	noNetChange     bool                 // NoNetChange flag: branch pushed but its diff vs main is empty
 	conflictDetail  *git.UnresolvedConflictError // populated when the loop needs to route through tryFixConflict
 }
 
@@ -60,6 +61,7 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 			InfrastructureFailure: ship.ciInfraFailure,
 			CIFailureDetail:       ship.ciFailureDetail,
 			PushedBranch:          ship.pushedBranch,
+			NoNetChange:           ship.noNetChange,
 			ConflictDetail:        ship.conflictDetail,
 		},
 	})
@@ -856,5 +858,45 @@ func TestCloseOrSkip_DependencyBlockedFailure_SkipsWithBlockerDetail(t *testing.
 	}
 	if !found {
 		t.Errorf("expected ralph-close2 to be skipped, skipped=%v", backend.SkippedIDs)
+	}
+}
+
+// A branch whose commits net out to no change against main produces no PR,
+// but the push did land. Before the fix that case fell into the
+// pr_creation_failed path, reporting a net no-op as a PR-creation infra
+// failure and inviting triage to retry it. It must be skipped as
+// no_net_change instead, still carrying the branch name for triage.
+func TestFinalizePR_NetEmptyBranch_SkipsAsNoNetChangeNotPRFailure(t *testing.T) {
+	dir, _ := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	fs := buildFinalizeSetup(t, dir, "ralph-noop", "Task whose diff nets out empty", backend, shipResult{
+		prNumber:     0,
+		pushedBranch: "ralph/ralph-noop-net-empty",
+		noNetChange:  true,
+	})
+
+	fs.loop.completeTask(context.Background(), fs.p)
+
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	found := false
+	for i, id := range backend.SkippedIDs {
+		if id != "ralph-noop" {
+			continue
+		}
+		found = true
+		if reason := backend.SkipReasons[i]; reason != string(tasks.SkipNoNetChange) {
+			t.Errorf("skip reason = %q, want %q — a net no-op must not be reported as a PR-creation failure", reason, tasks.SkipNoNetChange)
+		}
+		if backend.SkipDetails[i] != "ralph/ralph-noop-net-empty" {
+			t.Errorf("skip detail = %q, want the pushed branch name", backend.SkipDetails[i])
+		}
+	}
+	if !found {
+		t.Errorf("bead ralph-noop must be skipped for a net-empty branch, skipped=%v", backend.SkippedIDs)
 	}
 }

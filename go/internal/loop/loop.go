@@ -847,6 +847,10 @@ type shipOutcome struct {
 	stacked        bool
 	pushedBranch   string
 	shipErr        error
+	// noNetChange is true when ship pushed the branch but found no net diff
+	// against the base, so no PR was created. Distinguishes a net no-op from
+	// a PR-creation failure when the bead is skipped.
+	noNetChange bool
 	// conflictUnresolved is true when the merge failed on a conflict that
 	// neither the auto-rebase (ResolveConflict) nor the conflict fix agent
 	// (tryFixConflict) could resolve. Distinguishes "action required" from a
@@ -1073,7 +1077,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 	}
 
 	if !l.cfg.AutoMerge || result.PRNumber == 0 {
-		return shipOutcome{prNumber: result.PRNumber, prResultURL: result.PRURL, pushedBranch: result.PushedBranch}
+		return shipOutcome{prNumber: result.PRNumber, prResultURL: result.PRURL, pushedBranch: result.PushedBranch, noNetChange: result.NoNetChange}
 	}
 
 	// Phase 2: Ship with merge enabled. Pass the PR number so Ship

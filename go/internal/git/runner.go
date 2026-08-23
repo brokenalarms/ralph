@@ -284,6 +284,14 @@ func (r *repo) BranchHasUnmergedWork(branch string) bool {
 	return r.hasCommitsAhead("origin/"+defaultBranch, "origin/"+branch)
 }
 
+// PushedBranchNetEmpty reports whether the last Push found the branch's
+// commits net out to the base tree — the squash step returned
+// ErrNoNetChange, so the branch was pushed unsquashed and there is no diff
+// to review. Ship uses this to skip creating an empty PR.
+func (r *repo) PushedBranchNetEmpty() bool {
+	return r.pushNetEmpty
+}
+
 func (r *repo) mRebaseInProgress() bool {
 	gitDir := r.gitOutput(r.workDir, "rev-parse", "--git-dir")
 	if gitDir == "" {

@@ -72,6 +72,11 @@ type repo struct {
 	// so that the two calls don't emit duplicate log lines.
 	stackHeadResolved bool
 
+	// pushNetEmpty records whether the last Push found the branch's commits
+	// net out to the base tree (the squash step reported ErrNoNetChange).
+	// shipPR reads it to skip creating a PR with an empty diff.
+	pushNetEmpty bool
+
 	knownPRNumber int
 	runner           Runner
 
@@ -942,9 +947,16 @@ func isFetchTransportErr(err error) bool {
 	return errors.As(err, &exitErr) && exitErr.ExitCode() == 128
 }
 
+// ErrNoNetChange reports that a branch's commits net out to the base tree —
+// the commits exist, but applying them all leaves the tree identical to base,
+// so there is nothing to squash, review, or merge.
+var ErrNoNetChange = errors.New("branch has no net change vs base")
+
 // SquashToOneCommit squashes all commits since baseSHA into a single commit
 // with the given message. No-op if there is already exactly one commit
-// ahead of base. Returns an error if there are no commits to squash.
+// ahead of base. Returns an error if there are no commits to squash, and
+// ErrNoNetChange — without mutating the branch — when the commits net out to
+// base's tree. The branch is left at its pre-squash HEAD if the rewrite fails.
 func (r *repo) SquashToOneCommit(baseSHA, message string) error {
 	count := r.revCount(r.workDir, baseSHA, "HEAD")
 	if count == 0 {
@@ -953,9 +965,33 @@ func (r *repo) SquashToOneCommit(baseSHA, message string) error {
 	if count == 1 {
 		return nil
 	}
+	// Commits that net out to the base tree cannot be squashed: the reset
+	// would succeed and the commit would then abort with nothing to commit,
+	// leaving the branch at base with its work discarded. Report it before
+	// touching the branch.
+	if r.treesEqual(baseSHA, "HEAD") {
+		return fmt.Errorf("%w: %d commits vs %s", ErrNoNetChange, count, baseSHA)
+	}
+	preSquash := r.gitOutput(r.workDir, "rev-parse", "HEAD")
 	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Squashing %d commits into one", count)
-	r.gitCmd(r.workDir, "reset", "--soft", baseSHA)
-	return r.gitCmdErr(r.workDir, "commit", "-m", message)
+	if err := r.gitCmdErr(r.workDir, "reset", "--soft", baseSHA); err != nil {
+		return fmt.Errorf("reset --soft %s: %w", baseSHA, err)
+	}
+	if err := r.gitCmdErr(r.workDir, "commit", "-m", message); err != nil {
+		// The reset already moved HEAD to base. Put it back so a failed
+		// squash never costs the branch its commits.
+		if preSquash != "" {
+			_ = r.gitCmdErr(r.workDir, "reset", "--soft", preSquash)
+		}
+		return err
+	}
+	return nil
+}
+
+// treesEqual reports whether the tree at ref is identical to the tree at
+// base — i.e. the commits between them add up to no change at all.
+func (r *repo) treesEqual(base, ref string) bool {
+	return r.gitCmdErr(r.workDir, "diff", "--quiet", base, ref) == nil
 }
 
 // RemoveWorktree force-removes the loop's worktree, deletes its branch, and
