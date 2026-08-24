@@ -4,10 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Homebrew dependencies ---
-BREW_DEPS=(bd gh tmux terminal-notifier)
+# Each entry is "<binary probed on PATH>:<Homebrew formula>". The two differ
+# for bd, whose formula is named "beads"; Homebrew has no formula named "bd".
+BREW_DEPS=(bd:beads gh:gh tmux:tmux terminal-notifier:terminal-notifier)
 missing=()
 for dep in "${BREW_DEPS[@]}"; do
-  command -v "$dep" &>/dev/null || missing+=("$dep")
+  command -v "${dep%%:*}" &>/dev/null || missing+=("${dep##*:}")
 done
 
 if [[ ${#missing[@]} -gt 0 ]]; then

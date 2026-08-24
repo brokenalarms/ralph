@@ -42,7 +42,7 @@ The loop window runs unattended while the task window gives you a live triage in
 
 ## How it works
 
-Ralph runs Claude Code repeatedly, one task per iteration. Each iteration gets a task from the backlog ([bd](https://github.com/brokenalarms/bd)), works it on an isolated git worktree, runs a verification pipeline, and the orchestrator pushes, creates a PR, and merges. Each task produces one commit that stacks linearly on the previous.
+Ralph runs Claude Code repeatedly, one task per iteration. Each iteration gets a task from the backlog ([bd](https://github.com/gastownhall/beads)), works it on an isolated git worktree, runs a verification pipeline, and the orchestrator pushes, creates a PR, and merges. Each task produces one commit that stacks linearly on the previous.
 
 ```
 ralph loop
@@ -218,7 +218,7 @@ make test     # runs the test suite
 
 ## Task backend
 
-Ralph uses [bd](https://github.com/brokenalarms/bd) as its task backend. The loop reads from the bd backlog, claims tasks, and closes them after successful merge. Use `ralph task` for interactive triage:
+Ralph uses [bd](https://github.com/gastownhall/beads) as its task backend. The loop reads from the bd backlog, claims tasks, and closes them after successful merge. Use `ralph task` for interactive triage:
 
 ```bash
 ralph task
