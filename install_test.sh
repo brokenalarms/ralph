@@ -15,6 +15,48 @@ echo "$deps_line" | grep -q 'gh' || fail "BREW_DEPS missing gh"
 echo "$deps_line" | grep -q 'tmux' || fail "BREW_DEPS missing tmux"
 echo "$deps_line" | grep -q 'jq' && fail "BREW_DEPS should not include jq"
 
+# --- Test: bd binary is probed but the beads Homebrew formula is installed ---
+# There is no Homebrew formula named "bd" (brew info bd -> no such formula);
+# the formula providing the bd binary is named "beads". Run the dependency
+# block for real against stubbed binaries so the probed-name -> formula-name
+# mapping is exercised rather than pattern-matched.
+dep_block=$(sed -n '/^# --- Homebrew dependencies ---$/,/^# --- Clone from template if new ---$/p' "$SCRIPT_DIR/install.sh" | sed '$d')
+[[ -n "$dep_block" ]] || fail "could not extract the Homebrew dependency block from install.sh"
+
+stub_root=$(mktemp -d)
+trap 'rm -rf "$stub_root"' EXIT
+brew_log="$stub_root/brew.log"
+mkdir -p "$stub_root/brew_bin" "$stub_root/others_bin" "$stub_root/bd_bin"
+cat >"$stub_root/brew_bin/brew" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$brew_log"
+EOF
+chmod +x "$stub_root/brew_bin/brew"
+for stub in others_bin/gh others_bin/tmux others_bin/terminal-notifier bd_bin/bd; do
+  printf '#!/bin/sh\n' >"$stub_root/$stub"
+  chmod +x "$stub_root/$stub"
+done
+
+# Echoes what the dependency block asked brew to install, given a stub PATH.
+brew_invocations_with_path() {
+  : >"$brew_log"
+  PATH="$1" "$BASH" -c "set -euo pipefail
+$dep_block" >/dev/null || echo "dependency block exited non-zero under bash $BASH_VERSION (PATH=$1)" >&2
+  cat "$brew_log"
+}
+
+installed=$(brew_invocations_with_path "$stub_root/brew_bin")
+[[ "$installed" == "install beads gh tmux terminal-notifier" ]] ||
+  fail "with nothing installed, expected 'install beads gh tmux terminal-notifier', got '$installed'"
+
+installed=$(brew_invocations_with_path "$stub_root/brew_bin:$stub_root/others_bin")
+[[ "$installed" == "install beads" ]] ||
+  fail "with only bd missing, expected 'install beads', got '$installed'"
+
+installed=$(brew_invocations_with_path "$stub_root/brew_bin:$stub_root/others_bin:$stub_root/bd_bin")
+[[ -z "$installed" ]] ||
+  fail "with the bd binary on PATH nothing should be installed, got '$installed'"
+
 # --- Test: clones from agent-skeleton template if repo is new ---
 # When installing fresh, the script should bootstrap from the agent-skeleton template.
 grep -q 'agent-skeleton' "$SCRIPT_DIR/install.sh" || fail "should clone from agent-skeleton template"
