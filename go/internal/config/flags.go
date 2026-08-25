@@ -517,6 +517,22 @@ var Flags = []FlagDef{
 		},
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxTestFixAttempts) },
 	},
+	{
+		Help:      "macOS QoS clamp for the loop process and everything it spawns (utility, background, maintenance, none)",
+		Default:   QoSClampUtility,
+		EnvVar:    "RALPH_QOS_CLAMP",
+		ConfigKey: "qos_clamp",
+		Kind:      KindString,
+		Apply: func(cfg *Config, val string) error {
+			v := strings.ToLower(strings.TrimSpace(val))
+			if !ValidQoSClamp(v) {
+				return fmt.Errorf("qos_clamp %q is not one of %s", val, strings.Join(QoSClamps, ", "))
+			}
+			cfg.QoSClamp = v
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.QoSClamp },
+	},
 	// Test/compile timeouts
 	{
 		Help: "Maximum duration for the ralph:verify test suite", Default: "5m",
