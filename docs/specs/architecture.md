@@ -132,6 +132,10 @@ type gitHub interface {
 	GetFailedJobAnnotations(ctx context.Context, nwo string, prNumber int) ([]JobAnnotations, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
+	// ListOpenPRs returns only open PRs — the cheap alternative to ListAllPRs
+	// for callers that don't need closed/merged history (e.g. the startup
+	// leftover-PR check).
+	ListOpenPRs(ctx context.Context, workDir string) ([]PRInfo, error)
 	// DetectActiveReviewers queries the repo's installed GitHub Apps and cross-
 	// references against the Known reviewer registry. For Copilot it also checks
 	// rulesets to set the correct timeout. Returns the active reviewer list.

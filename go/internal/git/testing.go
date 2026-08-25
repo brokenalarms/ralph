@@ -323,6 +323,20 @@ func (s *stubGitHub) ListAllPRs(_ context.Context, _ string) ([]PRInfo, error) {
 	return out, nil
 }
 
+func (s *stubGitHub) ListOpenPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
+	all, err := s.ListAllPRs(ctx, workDir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PRInfo, 0, len(all))
+	for _, pr := range all {
+		if pr.State == PRStateOpen {
+			out = append(out, pr)
+		}
+	}
+	return out, nil
+}
+
 func (s *stubGitHub) DetectActiveReviewers(_ context.Context, _ string) ([]Reviewer, error) {
 	return s.cfg.Reviewers, s.cfg.DetectReviewersErr
 }
@@ -912,6 +926,10 @@ func (s *stubRepo) GitHubAvailable() bool {
 
 func (s *stubRepo) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
 	return s.gh.ListAllPRs(ctx, workDir)
+}
+
+func (s *stubRepo) ListOpenPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
+	return s.gh.ListOpenPRs(ctx, workDir)
 }
 
 func (s *stubRepo) PingGitHub(ctx context.Context) error {
