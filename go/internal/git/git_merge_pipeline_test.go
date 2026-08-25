@@ -1639,6 +1639,19 @@ func TestAutoMerge_NoCIConfigured_TestsFail_BlocksMerge(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when local tests fail with no CI")
 	}
+	// The failure must be typed so the loop can classify it as a CI failure
+	// and leave the bead open, rather than treating it as a fatal merge error
+	// and closing the bead as "merge pending".
+	var localErr *LocalTestFailureError
+	if !errors.As(err, &localErr) {
+		t.Fatalf("expected *LocalTestFailureError, got %T: %v", err, err)
+	}
+	if localErr.PRNumber != 201 {
+		t.Errorf("LocalTestFailureError.PRNumber = %d, want 201", localErr.PRNumber)
+	}
+	if localErr.Reason == "" {
+		t.Error("LocalTestFailureError.Reason is empty — the loop logs it as the failure summary")
+	}
 	// The PR must remain open — failing tests must block the merge.
 	pr, _ := gh.GetPR(context.Background(), "", 201)
 	if pr == nil || pr.State != PRStateOpen {
@@ -1742,5 +1755,165 @@ func TestAutoMerge_NoCIConfigured_TestsPass_Merges(t *testing.T) {
 	pr, _ := gh.GetPR(context.Background(), "", 203)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 203 to be merged when tests pass, got state=%v", pr.State)
+	}
+}
+
+// probeCountingGitHub wraps a gitHub stub and counts the two GitHub probes
+// classifyMergeOutcome runs when it has to explain a CI failure:
+// GetJobStepCount (isInfrastructureFailure) and GetFailedJobAnnotations
+// (isStepTimeoutFailure).
+type probeCountingGitHub struct {
+	gitHub
+	jobStepCountCalls     int
+	failedAnnotationCalls int
+}
+
+func (p *probeCountingGitHub) GetJobStepCount(ctx context.Context, nwo string, prNumber int) (int, error) {
+	p.jobStepCountCalls++
+	return p.gitHub.GetJobStepCount(ctx, nwo, prNumber)
+}
+
+func (p *probeCountingGitHub) GetFailedJobAnnotations(ctx context.Context, nwo string, prNumber int) ([]JobAnnotations, error) {
+	p.failedAnnotationCalls++
+	return p.gitHub.GetFailedJobAnnotations(ctx, nwo, prNumber)
+}
+
+// newProbeCountingRepo builds a repo whose GitHub probes would both answer
+// "yes" if consulted: jobStepCount of 0 reads as an infrastructure failure,
+// and the annotation set reads as a step timeout. A classification that comes
+// back with InfrastructureFailure and StepTimeoutFailure false therefore
+// proves the probes were never run, not that they ran and said no.
+func newProbeCountingRepo(t *testing.T, jobStepCount int) (*repo, *probeCountingGitHub) {
+	t.Helper()
+	gh := &probeCountingGitHub{gitHub: newStubGitHub(StubGitHubConfig{
+		Available:    true,
+		JobStepCount: jobStepCount,
+		FailedJobAnnotations: []JobAnnotations{{
+			JobName:  "test",
+			Messages: []string{"The action 'Install system tools' " + stepTimeoutAnnotation + " 5 minutes."},
+		}},
+	})}
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	workDir := t.TempDir()
+	r := newRepoForTest(
+		Config{ProjectDir: workDir, WorkDir: workDir, BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+	return r, gh
+}
+
+// A failed pre-merge local test run must classify as a CI failure carrying the
+// typed detail, so the loop leaves the bead open instead of closing it as
+// merge-pending. There are no GitHub checks behind a local run, so neither
+// GitHub probe may be consulted.
+func TestClassifyMergeOutcome_LocalTestFailure(t *testing.T) {
+	r, gh := newProbeCountingRepo(t, 0)
+
+	localErr := &LocalTestFailureError{PRNumber: 87, Reason: "make ralph-verify failed", Details: "--- FAIL: ConnectDeadlineTests"}
+	result, err := r.classifyMergeOutcome(context.Background(), ShipResult{PRNumber: 87}, fmt.Errorf("merge aborted: %w", localErr))
+	if err != nil {
+		t.Fatalf("classifyMergeOutcome returned a fatal error for *LocalTestFailureError: %v", err)
+	}
+	if !result.CIFailure {
+		t.Error("ShipResult.CIFailure = false, want true — the loop branches on it to leave the bead open")
+	}
+	if result.LocalTestDetail != localErr {
+		t.Errorf("ShipResult.LocalTestDetail = %v, want the *LocalTestFailureError that was classified", result.LocalTestDetail)
+	}
+	if result.CIFailureDetail != nil {
+		t.Errorf("ShipResult.CIFailureDetail = %v, want nil — a local run produces no GitHub check failures", result.CIFailureDetail)
+	}
+	if result.InfrastructureFailure {
+		t.Error("ShipResult.InfrastructureFailure = true — isInfrastructureFailure must not run for a local test failure")
+	}
+	if result.StepTimeoutFailure {
+		t.Error("ShipResult.StepTimeoutFailure = true — isStepTimeoutFailure must not run for a local test failure")
+	}
+	if gh.jobStepCountCalls != 0 {
+		t.Errorf("GetJobStepCount called %d times, want 0 — no GitHub checks to probe", gh.jobStepCountCalls)
+	}
+	if gh.failedAnnotationCalls != 0 {
+		t.Errorf("GetFailedJobAnnotations called %d times, want 0 — no GitHub checks to probe", gh.failedAnnotationCalls)
+	}
+}
+
+// A GitHub CI failure keeps its existing classification: the detail is stored
+// and both probes still run to decide whether the failure was infrastructural.
+func TestClassifyMergeOutcome_CIFailureStillProbesGitHub(t *testing.T) {
+	r, gh := newProbeCountingRepo(t, 0)
+
+	ciErr := &CIFailureError{PRNumber: 42, Failures: []CICheckResult{{Name: "build", State: "FAILURE"}}}
+	result, err := r.classifyMergeOutcome(context.Background(), ShipResult{PRNumber: 42}, ciErr)
+	if err != nil {
+		t.Fatalf("classifyMergeOutcome returned a fatal error for *CIFailureError: %v", err)
+	}
+	if !result.CIFailure || result.CIFailureDetail != ciErr {
+		t.Errorf("CIFailure=%v CIFailureDetail=%v, want true and the classified error", result.CIFailure, result.CIFailureDetail)
+	}
+	if result.LocalTestDetail != nil {
+		t.Errorf("ShipResult.LocalTestDetail = %v, want nil for a GitHub CI failure", result.LocalTestDetail)
+	}
+	if !result.InfrastructureFailure {
+		t.Error("ShipResult.InfrastructureFailure = false — zero job steps must still classify as infrastructure")
+	}
+	if gh.jobStepCountCalls == 0 {
+		t.Error("GetJobStepCount was not called for a *CIFailureError")
+	}
+}
+
+// With job steps executed the failure is real, so the step-timeout probe runs.
+func TestClassifyMergeOutcome_CIFailureProbesStepTimeout(t *testing.T) {
+	r, gh := newProbeCountingRepo(t, 3)
+
+	result, err := r.classifyMergeOutcome(context.Background(), ShipResult{PRNumber: 42},
+		&CIFailureError{PRNumber: 42, Failures: []CICheckResult{{Name: "build", State: "FAILURE"}}})
+	if err != nil {
+		t.Fatalf("classifyMergeOutcome returned a fatal error for *CIFailureError: %v", err)
+	}
+	if result.InfrastructureFailure {
+		t.Error("ShipResult.InfrastructureFailure = true — steps executed, so the run is not infrastructural")
+	}
+	if !result.StepTimeoutFailure {
+		t.Error("ShipResult.StepTimeoutFailure = false — every failed job carried a step-timeout annotation")
+	}
+	if gh.failedAnnotationCalls == 0 {
+		t.Error("GetFailedJobAnnotations was not called for a non-infrastructural *CIFailureError")
+	}
+}
+
+// An unresolved conflict stores its detail without marking the ship a CI
+// failure, and probes nothing.
+func TestClassifyMergeOutcome_UnresolvedConflict(t *testing.T) {
+	r, gh := newProbeCountingRepo(t, 0)
+
+	conflictErr := &UnresolvedConflictError{PRNumber: 7}
+	result, err := r.classifyMergeOutcome(context.Background(), ShipResult{PRNumber: 7}, conflictErr)
+	if err != nil {
+		t.Fatalf("classifyMergeOutcome returned a fatal error for *UnresolvedConflictError: %v", err)
+	}
+	if result.ConflictDetail != conflictErr {
+		t.Errorf("ShipResult.ConflictDetail = %v, want the classified error", result.ConflictDetail)
+	}
+	if result.CIFailure || result.LocalTestDetail != nil {
+		t.Errorf("CIFailure=%v LocalTestDetail=%v, want false and nil for a conflict", result.CIFailure, result.LocalTestDetail)
+	}
+	if gh.jobStepCountCalls != 0 || gh.failedAnnotationCalls != 0 {
+		t.Errorf("probes called (%d, %d) for a conflict, want none", gh.jobStepCountCalls, gh.failedAnnotationCalls)
+	}
+}
+
+// Anything else stays fatal — Ship propagates it unchanged.
+func TestClassifyMergeOutcome_UnknownErrorPropagates(t *testing.T) {
+	r, _ := newProbeCountingRepo(t, 0)
+
+	fatal := errors.New("gh: rate limited")
+	result, err := r.classifyMergeOutcome(context.Background(), ShipResult{PRNumber: 9}, fatal)
+	if !errors.Is(err, fatal) {
+		t.Errorf("classifyMergeOutcome err = %v, want the original error propagated", err)
+	}
+	if result.CIFailure || result.LocalTestDetail != nil || result.ConflictDetail != nil {
+		t.Error("an unclassified error must not populate any typed outcome field")
 	}
 }

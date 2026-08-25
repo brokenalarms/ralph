@@ -387,6 +387,12 @@ type ShipResult struct {
 	// PendingReviewer is the bot username whose review needs addressing.
 	PendingReviewer string
 
+	// LocalTestDetail carries the pre-merge local test failure when CIFailure
+	// is true because the locally-detected suite failed rather than because
+	// GitHub checks did. Mutually exclusive with CIFailureDetail — there are
+	// no GitHub checks to fix in this case.
+	LocalTestDetail *LocalTestFailureError
+
 	// ConflictDetail is set when MergeWithRetry encountered an unresolvable
 	// merge conflict. The loop should call tryFixConflict and retry Ship.
 	ConflictDetail *UnresolvedConflictError
@@ -572,8 +578,9 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	}
 
 	// Attempt merge — no callbacks. Returns typed errors (CIFailureError,
-	// UnresolvedConflictError) with the data the loop needs; the loop decides
-	// whether to spawn a fix agent and calls Ship again to retry.
+	// LocalTestFailureError, UnresolvedConflictError) with the data the loop
+	// needs; the loop decides whether to spawn a fix agent and calls Ship
+	// again to retry.
 	r.SetKnownPRNumber(result.PRNumber)
 	defer r.SetKnownPRNumber(0)
 
@@ -631,8 +638,9 @@ func (r *repo) checkStacked(prDetail *PRDetail) (prBase string, stacked bool) {
 
 // classifyMergeOutcome demuxes the error MergeWithRetry returns into the
 // ShipResult fields the loop uses to decide whether to spawn a fix agent.
-// Returns mergeErr unchanged when it is neither a CIFailureError nor an
-// UnresolvedConflictError, so Ship propagates it as a fatal error.
+// Returns mergeErr unchanged when it is none of CIFailureError,
+// LocalTestFailureError or UnresolvedConflictError, so Ship propagates it as
+// a fatal error.
 func (r *repo) classifyMergeOutcome(ctx context.Context, result ShipResult, mergeErr error) (ShipResult, error) {
 	var ciFailure *CIFailureError
 	if errors.As(mergeErr, &ciFailure) {
@@ -642,6 +650,16 @@ func (r *repo) classifyMergeOutcome(ctx context.Context, result ShipResult, merg
 		if !result.InfrastructureFailure {
 			result.StepTimeoutFailure = r.isStepTimeoutFailure(ctx, ciFailure.PRNumber)
 		}
+		return result, nil
+	}
+	// A failed local test run has no GitHub checks behind it, so the
+	// infrastructure and step-timeout probes have nothing to inspect and are
+	// deliberately skipped — the tree is red for a reason a fix agent, not a
+	// CI re-trigger, would have to address.
+	var localTestErr *LocalTestFailureError
+	if errors.As(mergeErr, &localTestErr) {
+		result.CIFailure = true
+		result.LocalTestDetail = localTestErr
 		return result, nil
 	}
 	var conflictErr *UnresolvedConflictError
@@ -681,7 +699,7 @@ func (r *repo) prTitle(taskID, taskDesc string) string {
 // runLocalTestsBeforeMerge runs the project test suite when no CI is configured,
 // gating the merge on local test results. Returns nil when tests pass or when no
 // test command is detected — absence of tests is treated as a pass, not a failure.
-func (r *repo) runLocalTestsBeforeMerge(ctx context.Context) error {
+func (r *repo) runLocalTestsBeforeMerge(ctx context.Context, prNumber int) error {
 	timeout := r.testTimeout
 	if timeout == 0 {
 		timeout = 5 * time.Minute
@@ -692,7 +710,7 @@ func (r *repo) runLocalTestsBeforeMerge(ctx context.Context) error {
 		return nil
 	}
 	if !result.Passed {
-		return fmt.Errorf("local tests failed before merge: %s\n%s", result.Reason, result.Details)
+		return &LocalTestFailureError{PRNumber: prNumber, Reason: result.Reason, Details: result.Details}
 	}
 	r.logger.Emit(logging.Opts{Domain: logging.CI}, "Local tests passed — proceeding to merge")
 	return nil
@@ -747,7 +765,7 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		fastChecks, fastStatus, _ := r.AwaitCI(ctx, prNumber, repoURL, time.Time{})
 		if fastStatus == CIPassed {
 			if len(fastChecks) == 0 {
-				if localErr := r.runLocalTestsBeforeMerge(ctx); localErr != nil {
+				if localErr := r.runLocalTestsBeforeMerge(ctx, prNumber); localErr != nil {
 					return false, localErr
 				}
 			}
@@ -838,7 +856,7 @@ func (r *repo) gateOnCI(ctx context.Context, prNumber int, repoURL string, prLin
 	}
 	if status == CIPassed {
 		if len(checks) == 0 {
-			if localErr := r.runLocalTestsBeforeMerge(ctx); localErr != nil {
+			if localErr := r.runLocalTestsBeforeMerge(ctx, prNumber); localErr != nil {
 				return false, localErr
 			}
 		}

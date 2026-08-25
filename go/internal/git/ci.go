@@ -65,6 +65,25 @@ func (e *CIFailureError) Error() string {
 	return fmt.Sprintf("CI checks failed on PR #%d: %s", e.PRNumber, strings.Join(names, ", "))
 }
 
+// LocalTestFailureError is returned when the pre-merge local test run fails.
+// It stands in for CIFailureError on projects with no GitHub checks: the tree
+// is red, so the PR must not merge and the bead must not be closed as
+// merge-pending. Typed rather than a formatted string so classifyMergeOutcome
+// can demux it into a ShipResult the loop branches on.
+type LocalTestFailureError struct {
+	PRNumber int
+	Reason   string
+	Details  string
+}
+
+func (e *LocalTestFailureError) Error() string {
+	msg := fmt.Sprintf("local tests failed before merge on PR #%d: %s", e.PRNumber, e.Reason)
+	if e.Details != "" {
+		msg += "\n" + e.Details
+	}
+	return msg
+}
+
 // DefaultCIPollInterval is the initial time between CI status checks.
 // Each subsequent poll doubles this interval up to MaxCIPollInterval.
 const DefaultCIPollInterval = 1 * time.Second
