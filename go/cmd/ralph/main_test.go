@@ -922,8 +922,8 @@ func TestGenerateSessionID_ValidV4UUID(t *testing.T) {
 // Proves: printTaskResumeHint tells the user to resume through ralph, not
 // through a raw `claude --resume`. Only `ralph task --resume` rebuilds the
 // task-manager system prompt (the transcript alone restores no system
-// prompt) and re-anchors the session in its recorded worktree, so no `cd`
-// prefix is needed either.
+// prompt) and gives the session a worktree of its own, so no `cd` prefix is
+// needed either.
 func TestPrintTaskResumeHint_ContainsResumeCommand(t *testing.T) {
 	var buf strings.Builder
 	sessionID := "12345678-1234-4567-89ab-123456789abc"
@@ -939,66 +939,6 @@ func TestPrintTaskResumeHint_ContainsResumeCommand(t *testing.T) {
 	}
 	if strings.Contains(out, "claude --resume") {
 		t.Errorf("resume hint should not hand the user a raw claude command, got:\n%s", out)
-	}
-}
-
-// Proves: on `ralph task` exit, answering "n" (or "no", case-insensitive)
-// cleans up the task worktree — removing it via the registration-aware
-// RemoveWorktreeForBranch (never a raw os.RemoveAll) — and signals the caller
-// to skip the resume hint.
-func TestPromptKeepOrCleanupWorktree_Cleanup(t *testing.T) {
-	for _, answer := range []string{"n\n", "N\n", "no\n", "NO\n"} {
-		gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
-		var out strings.Builder
-
-		keep := promptKeepOrCleanupWorktree(&out, strings.NewReader(answer), gm, "ralph/task/20260701-01")
-
-		if keep {
-			t.Errorf("answer %q: expected keep=false", answer)
-		}
-		inspector := gm.(git.StubInspector)
-		if got := inspector.GetRemoveWorktreeForBranchCalls(); got != 1 {
-			t.Errorf("answer %q: expected RemoveWorktreeForBranch to be called once, got %d", answer, got)
-		}
-		if got := inspector.GetRemovedWorktreeForBranch(); got != "ralph/task/20260701-01" {
-			t.Errorf("answer %q: expected cleanup of branch 'ralph/task/20260701-01', got %q", answer, got)
-		}
-		if !strings.Contains(out.String(), "cleaned up") {
-			t.Errorf("answer %q: expected a cleanup confirmation message, got:\n%s", answer, out.String())
-		}
-	}
-}
-
-// Proves: on `ralph task` exit, keeping the worktree (explicit "y"/"yes",
-// empty input, EOF from a non-TTY stdin, or any other non-"n" answer)
-// preserves the worktree and branch — RemoveWorktreeForBranch must never be
-// called — and signals the caller to print the resume hint.
-func TestPromptKeepOrCleanupWorktree_Keep(t *testing.T) {
-	for _, answer := range []string{"y\n", "yes\n", "\n", "", "k\n", "c\n"} {
-		gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
-		var out strings.Builder
-
-		keep := promptKeepOrCleanupWorktree(&out, strings.NewReader(answer), gm, "ralph/task/20260701-01")
-
-		if !keep {
-			t.Errorf("answer %q: expected keep=true", answer)
-		}
-		if got := gm.(git.StubInspector).GetRemoveWorktreeForBranchCalls(); got != 0 {
-			t.Errorf("answer %q: expected RemoveWorktreeForBranch not called, got %d calls", answer, got)
-		}
-	}
-}
-
-// Proves: the worktree-cleanup prompt uses the conventional Y/n wording, not
-// the previous nonstandard K/c keys.
-func TestPromptKeepOrCleanupWorktree_PromptWording(t *testing.T) {
-	gm := git.NewStub(git.StubRepoConfig{WorktreeBranch: "ralph/task/20260701-01"})
-	var out strings.Builder
-
-	promptKeepOrCleanupWorktree(&out, strings.NewReader("\n"), gm, "ralph/task/20260701-01")
-
-	if !strings.Contains(out.String(), "Keep this task worktree for resume? [Y/n] ") {
-		t.Errorf("expected prompt with [Y/n] wording, got:\n%s", out.String())
 	}
 }
 
@@ -1052,37 +992,6 @@ func TestRunInteractiveSession_NonGitDirSkipsConfigClosures(t *testing.T) {
 
 	if code != 1 {
 		t.Errorf("expected exit code 1 for a non-git directory, got %d", code)
-	}
-}
-
-// Proves: handleTask does not delete the worktree on exit, so the printed
-// resume command remains valid. handleReview keeps its cleanup (regression guard).
-func TestHandleTask_NoWorktreeRemovalOnExit(t *testing.T) {
-	src, err := os.ReadFile("subcommands.go")
-	if err != nil {
-		t.Fatalf("could not read subcommands.go: %v", err)
-	}
-	content := string(src)
-
-	taskStart := strings.Index(content, "\nfunc handleTask(")
-	unskipStart := strings.Index(content, "\nfunc handleUnskip(")
-	if taskStart == -1 || unskipStart == -1 {
-		t.Fatal("expected functions not found in subcommands.go")
-	}
-	handleTaskBody := content[taskStart:unskipStart]
-	if strings.Contains(handleTaskBody, "RemoveWorktree") {
-		t.Error("handleTask must not call RemoveWorktree — worktree deletion must be deferred to Claude's exit prompt")
-	}
-
-	// Regression guard: handleReview must keep its worktree cleanup defer.
-	reviewStart := strings.Index(content, "\nfunc handleReview(")
-	postReviewStart := strings.Index(content, "\nfunc postReviewCleanup(")
-	if reviewStart == -1 || postReviewStart == -1 {
-		t.Fatal("expected functions not found in subcommands.go")
-	}
-	handleReviewBody := content[reviewStart:postReviewStart]
-	if !strings.Contains(handleReviewBody, "RemoveWorktree") {
-		t.Error("handleReview must still contain RemoveWorktree cleanup — regression in review path")
 	}
 }
 
