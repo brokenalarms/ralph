@@ -159,8 +159,11 @@ close any open bead — regardless of assignee — whose PR has already merged:
    always a missed close worth cleaning up.
 2. For each, query the PR: `gh pr view <pr> --json state,mergedAt`.
 3. If `state` is `MERGED` → close the bead automatically with the merge as
-   evidence: `bd close <id> --reason "fixed in <pr-url> (merged)"`, then echo
-   each closure in your first response:
+   evidence: `bd close <id> --reason "fixed in <pr-url> (merged)"`. If the
+   bead's local PR branch still exists in the task worktree, delete it:
+   `git branch -D <branch>` (first `git checkout --detach origin/main` if it
+   is the worktree's currently checked-out branch). Then echo each closure in
+   your first response:
 
    > **Closed merged beads (N):** ralph-xxx (PR #n) …
 
@@ -223,6 +226,40 @@ an issue blocks the ralph loop from running at all. In this mode:
   still open and its PR has merged. See "Self-work stays owned — and you close
   it yourself."
 - Return to light triage mode when the fix is done
+
+### Self-work stays owned — and you close it yourself
+
+If you will do the bead yourself (hands-on fix), leave it assigned to
+`ralph-task` and never release it. Nothing auto-closes a self-work bead: the
+orchestrator's auto-close runs ONLY for beads it worked through its own
+verify→ship→merge pipeline (i.e. `ralph-loop`-owned beads). A `ralph-task`
+self-work bead never enters that pipeline, so it has no closer but you.
+Therefore:
+
+1. **Title the PR `[<bead-id>] <summary>`** — prefix the hands-on PR title with
+   the bracketed bead id, exactly as the loop does for its own PRs. Without it
+   the merge commit is invisible to a `git log --grep=<bead-id>` search, so the
+   work cannot be traced back to the bead. The id prefix is mandatory on every
+   self-work PR.
+2. **At PR creation, set the external-ref immediately:**
+   `bd update <id> --external-ref <pr-url>`. This is what lets a later session
+   detect the merge and close the bead — without it the bead is orphaned.
+3. **Close on confirmed merge — this is mandatory, and you keep forgetting it.**
+   The moment the PR merges, run `bd close <id> --reason "fixed in <pr-url>"`.
+   Treat "the self-work is done" as meaning "PR merged AND bead closed" — never
+   just "PR merged". Before you report a hands-on fix as finished or switch back
+   to light triage, check the bead's status is `closed` (or that its PR is
+   genuinely still open). If the PR merges during the session, close it in that
+   same session — do not punt to a later startup check when you can close it now.
+   Only if the PR is still open at session end do you leave the bead open — the
+   **"Self-work awaiting close"** startup check detects the merge on a later
+   session and closes it. NEVER `bd close` a self-work bead whose PR has not
+   merged.
+4. **Delete the merged branch.** Immediately after closing the bead, delete
+   its local PR branch from the task worktree: `git branch -D <branch>`. If
+   `<branch>` is the worktree's currently checked-out branch, first detach
+   with `git checkout --detach origin/main`, then delete it. A merged
+   self-work branch must never outlive its PR.
 
 ### Architectural refactoring
 
