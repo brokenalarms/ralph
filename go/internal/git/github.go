@@ -186,6 +186,10 @@ type gitHub interface {
 	GetFailedJobAnnotations(ctx context.Context, nwo string, prNumber int) ([]JobAnnotations, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
+	// ListOpenPRs returns only open PRs — the cheap alternative to ListAllPRs
+	// for callers that don't need closed/merged history (e.g. the startup
+	// leftover-PR check).
+	ListOpenPRs(ctx context.Context, workDir string) ([]PRInfo, error)
 	// DetectActiveReviewers queries the repo's installed GitHub Apps and cross-
 	// references against the Known reviewer registry. For Copilot it also checks
 	// rulesets to set the correct timeout. Returns the active reviewer list.
@@ -1328,7 +1332,23 @@ func (g *ghCLI) fetchReviewComments(ctx context.Context, nwo string, prNumber, r
 	return comments, nil
 }
 
+// ListAllPRs returns all PRs (open and closed) for chain-walking during
+// stack merge — collectStack needs closed PRs to detect ghost bases (see the
+// comment in collectStackFromPRs).
 func (g *ghCLI) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
+	return g.listPRs(ctx, workDir, "state=all&per_page=100")
+}
+
+// ListOpenPRs returns only open PRs. Prefer this over ListAllPRs wherever
+// closed/merged PRs aren't needed — on a repo with a long PR history,
+// state=all downloads and discards everything the repo has ever had.
+func (g *ghCLI) ListOpenPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
+	return g.listPRs(ctx, workDir, "state=open&per_page=100")
+}
+
+// listPRs fetches PRs from repos/<nwo>/pulls with the given query string
+// (e.g. "state=all&per_page=100") and decodes them into PRInfo.
+func (g *ghCLI) listPRs(ctx context.Context, workDir, query string) ([]PRInfo, error) {
 	remoteOut, err := exec.Command("git", "-C", workDir, "remote", "get-url", "origin").Output()
 	if err != nil {
 		return nil, fmt.Errorf("get remote URL: %w", err)
@@ -1337,7 +1357,7 @@ func (g *ghCLI) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error
 	if nwo == "" {
 		return nil, fmt.Errorf("cannot determine owner/repo from remote URL")
 	}
-	endpoint := fmt.Sprintf("repos/%s/pulls?state=all", nwo)
+	endpoint := fmt.Sprintf("repos/%s/pulls?%s", nwo, query)
 	out, err := g.runGHCmd(ctx, []string{"api", "--paginate", "--jq", ".[]", endpoint})
 	if err != nil {
 		return nil, fmt.Errorf("gh api pulls: %w", err)

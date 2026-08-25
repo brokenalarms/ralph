@@ -739,6 +739,9 @@ func TestListAllPRs_UsesGhAPI(t *testing.T) {
 	if !strings.Contains(invocation, "state=all") {
 		t.Errorf("expected state=all param, got: %q", invocation)
 	}
+	if !strings.Contains(invocation, "per_page=100") {
+		t.Errorf("expected per_page=100 param, got: %q", invocation)
+	}
 	if !strings.Contains(invocation, "--paginate") {
 		t.Errorf("expected --paginate flag for pagination, got: %q", invocation)
 	}
@@ -753,6 +756,60 @@ func TestListAllPRs_UsesGhAPI(t *testing.T) {
 	}
 	if prs[2].State != PRStateMerged {
 		t.Errorf("PR #12: expected state MERGED (merged_at set), got %q", prs[2].State)
+	}
+}
+
+// ListOpenPRs uses gh api repos/{nwo}/pulls?state=open&per_page=100 — the
+// cheap alternative to ListAllPRs for callers (the startup leftover-PR
+// check) that only need open PRs, so closed/merged history is never
+// downloaded.
+func TestListOpenPRs_UsesGhAPI(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	pullsNDJSON := `{"number":10,"head":{"ref":"feat-a"},"base":{"ref":"main"},"state":"open","merged_at":null}`
+	gitPath := filepath.Join(bin, "git")
+	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ghPath := filepath.Join(bin, "gh")
+	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nprintf '" + pullsNDJSON + "\\n'\n"
+	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	prs, err := g.ListOpenPRs(context.Background(), bin)
+	if err != nil {
+		t.Fatalf("ListOpenPRs returned error: %v", err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(prs))
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+	if strings.Contains(invocation, "pr list") {
+		t.Errorf("ListOpenPRs must not use 'gh pr list', got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "api") {
+		t.Errorf("expected 'gh api' invocation, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "repos/owner/repo/pulls") {
+		t.Errorf("expected repos/owner/repo/pulls endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "state=open") {
+		t.Errorf("expected state=open param, got: %q", invocation)
+	}
+	if strings.Contains(invocation, "state=all") {
+		t.Errorf("expected no state=all param, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "per_page=100") {
+		t.Errorf("expected per_page=100 param, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "--paginate") {
+		t.Errorf("expected --paginate flag for pagination, got: %q", invocation)
 	}
 }
 

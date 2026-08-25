@@ -56,7 +56,7 @@ func readLineFromReader(ctx context.Context, r io.Reader) (string, error) {
 // (gm.Init/SetupWorktree) — the caller must invoke this before gm.Init so
 // the "no branch setup happens before the answer" guarantee holds. This
 // function never creates the loop's task branch or worktree: it calls the
-// read-only gm.ListAllPRs, the lone-PR gm.MergeStack retry (which works in
+// read-only gm.ListOpenPRs, the lone-PR gm.MergeStack retry (which works in
 // its own temp worktree), and, on an explicit "y" answer,
 // gm.SetAdoptedStackBranch.
 //
@@ -70,12 +70,12 @@ func readLineFromReader(ctx context.Context, r io.Reader) (string, error) {
 // of ralph running under an orchestrator/supervisor with no attached
 // terminal.
 func checkLeftoverRalphPRs(ctx context.Context, gm git.Ops, projectDir string, interactive, adminMergeOnCIInfraFailure bool, w io.Writer, r io.Reader, log *logging.Logger) (adopt string, ok bool) {
-	allPRs, err := gm.ListAllPRs(ctx, projectDir)
+	openPRs, err := gm.ListOpenPRs(ctx, projectDir)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Warn}, "Leftover PR check: failed to list PRs: %v", err)
 		return "", true
 	}
-	leftover := git.LeftoverRalphPRs(allPRs)
+	leftover := git.LeftoverRalphPRs(openPRs)
 	if len(leftover) == 0 {
 		return "", true
 	}

@@ -55,7 +55,7 @@ Before any git branch setup (before `gm.Init`/`SetupWorktree`), `main.go`
 calls `checkLeftoverRalphPRs` (`go/cmd/ralph/leftover_prs.go`) exactly once
 per loop start.
 
-1. List all PRs (`gm.ListAllPRs`) and filter to ralph-authored ones still
+1. List open PRs (`gm.ListOpenPRs`) and filter to ralph-authored ones still
    open from a prior run (`git.LeftoverRalphPRs`). None found → proceed with
    no prompt.
 2. **Lone-leftover merge retry**: if exactly one leftover PR exists and its

@@ -149,6 +149,7 @@ type Ops interface {
 	// GitHub availability and PR listing.
 	GitHubAvailable() bool
 	ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error)
+	ListOpenPRs(ctx context.Context, workDir string) ([]PRInfo, error)
 	// PingGitHub verifies that GitHub is reachable. Returns nil when
 	// reachable, an error otherwise (including timeout). Callers use this
 	// for a startup connectivity check before any task execution.
@@ -336,6 +337,11 @@ func (r *repo) GitHubAvailable() bool {
 // ListAllPRs returns all PRs (open and closed) for the repo.
 func (r *repo) ListAllPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
 	return r.github.ListAllPRs(ctx, workDir)
+}
+
+// ListOpenPRs returns only open PRs for the repo.
+func (r *repo) ListOpenPRs(ctx context.Context, workDir string) ([]PRInfo, error) {
+	return r.github.ListOpenPRs(ctx, workDir)
 }
 
 // PingGitHub verifies that GitHub is reachable.
