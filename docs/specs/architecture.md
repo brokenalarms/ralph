@@ -29,6 +29,21 @@ architectural or refactoring tasks.
 6. **Single source of truth.** Flag definitions, log prefixes, prompt templates —
    each defined in one place. No duplication across code and config.
 
+7. **Typed outcomes across module boundaries; strings only at API barriers.**
+   Any outcome a caller branches on crosses a package boundary as a typed
+   value — an `errors.As`-able error type, an `errors.Is`-able package-level
+   sentinel, or a field on a result struct — never as a formatted string.
+   `fmt.Errorf` is for wrapping an underlying error with context (`%w`) or
+   for terminal failures no caller distinguishes. String parsing happens
+   only at process/API barriers (`internal/git/github.go`,
+   `internal/tasks/bd.go`, agent output in `internal/agent`); string
+   formatting happens only at the presentation edge (logging,
+   notifications, UI). A demux that maps boundary errors onto result fields
+   (e.g. `classifyMergeOutcome` in `internal/git/git_merge.go`) must handle
+   every typed outcome the boundary can emit, and its fallthrough must be
+   conservative: an unclassified outcome may never be treated as success or
+   as a close condition.
+
 ## Package Structure
 
 ```
@@ -213,3 +228,8 @@ Each tag has a fixed color. Defined once in logging/logging.go.
 - No flag definitions in multiple places — single source
 - No planning phase when using bd backend
 - No `[beads]` tag for orchestrator messages — that's `[loop]`
+- No inline `fmt.Errorf`/`errors.New` without `%w` in a return statement on
+  the merge/CI decision path (`internal/git/git_merge.go`,
+  `internal/git/ci.go`) — every merge-blocking outcome is a named error type
+  or package-level sentinel, so `classifyMergeOutcome` can branch on it.
+  Enforced by `TestMergePathErrorsAreTyped` in `go/internal/arch_boundary_test.go`.
