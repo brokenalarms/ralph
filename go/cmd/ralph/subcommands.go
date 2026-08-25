@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -266,13 +265,6 @@ type interactiveSessionConfig struct {
 	// prompt (e.g. --session-id), given the session's git module, the
 	// project's .ralph directory and the session worktree. May be nil.
 	extraArgs func(gm git.Ops, ralphDir, workDir string) ([]string, error)
-	// resolveWorkDir returns an existing worktree to anchor the session in,
-	// bypassing worktree creation. `ralph task --resume` supplies it so a
-	// resumed session runs in the worktree its original session recorded,
-	// and so a missing worktree fails loudly instead of silently stranding
-	// the session in a fresh one. When nil, the session creates its own
-	// worktree via git.Ops.InitTask.
-	resolveWorkDir func(ralphDir string) (string, error)
 	// postWorktreeSetup runs after the session worktree is created (workDir
 	// known) and before the Interactive launch. Task sessions use it to
 	// install the main-checkout guard hook into the worktree. May be nil.
@@ -319,30 +311,18 @@ func runInteractiveSession(sub config.Subcommand, log *logging.Logger, cfg inter
 
 	// Spawn the session inside an isolated worktree — never the project
 	// root. Agents must not run with cwd == projectDir.
-	var workDir string
-	if cfg.resolveWorkDir != nil {
-		workDir, err = cfg.resolveWorkDir(ralphDir)
-		if err != nil {
-			log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
-			return 1
-		}
-	}
-
 	gm := git.New(git.Config{
 		ProjectDir: projectDir,
-		WorkDir:    workDir,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
 		Logger:     log,
 	})
 
-	if cfg.resolveWorkDir == nil {
-		if err := gm.InitTask(context.Background()); err != nil {
-			log.Emit(logging.Opts{Level: logging.Error}, "Worktree setup failed: %v", err)
-			return 1
-		}
-		workDir = gm.GetWorkDir()
+	if err := gm.InitTask(context.Background()); err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "Worktree setup failed: %v", err)
+		return 1
 	}
+	workDir := gm.GetWorkDir()
 
 	if cfg.postWorktreeSetup != nil {
 		if err := cfg.postWorktreeSetup(projectDir, workDir); err != nil {
@@ -492,11 +472,13 @@ func taskSessionArgs(sessionFlag, sessionID string) []string {
 // handleTask launches an interactive Claude session with the task manager
 // prompt. Runs standalone — no tmux required.
 //
-// With --resume <session-id> it reopens a previous task session in the
-// worktree that session recorded, rebuilding the task-manager system prompt
-// from scratch. The system prompt is per-invocation, not part of the restored
-// transcript, so a session reopened with a bare `claude --resume` comes back
-// as a plain Claude session with no knowledge of ralph's conventions.
+// With --resume <session-id> it reopens a previous task session in a freshly
+// created worktree, rebuilding the task-manager system prompt from scratch.
+// The system prompt is per-invocation, not part of the restored transcript,
+// so a session reopened with a bare `claude --resume` comes back as a plain
+// Claude session with no knowledge of ralph's conventions. Transcript lookup
+// is not cwd-bound, so a resumed session needs a worktree — to keep it out of
+// the main checkout — but not the one it originally ran in.
 func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	resumeID, args, err := parseTaskResumeFlag(sub.Args)
 	if err != nil {
@@ -506,9 +488,10 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	}
 	sub.Args = args
 
-	// sessionID and sessionBranch describe the session the exit prompt acts
-	// on: generated at launch for a fresh session, read from the recorded
-	// session for a resume.
+	// sessionID and sessionBranch describe the session the exit cleanup acts
+	// on: the id is generated at launch for a fresh session and supplied by
+	// --resume otherwise, and the branch is whichever one this invocation's
+	// worktree was created on.
 	sessionID := resumeID
 	var sessionBranch string
 
@@ -524,6 +507,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 			return systemPrompt, nil
 		},
 		extraArgs: func(gm git.Ops, ralphDir, workDir string) ([]string, error) {
+			sessionBranch = gm.GetWorktreeBranch()
 			if resumeID != "" {
 				return taskResumeExtraArgs(resumeID), nil
 			}
@@ -532,11 +516,6 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 				return nil, fmt.Errorf("failed to generate session ID: %w", err)
 			}
 			sessionID = id
-			sessionBranch = gm.GetWorktreeBranch()
-			session := taskSession{WorkDir: workDir, Branch: sessionBranch}
-			if err := writeTaskSession(ralphDir, id, session); err != nil {
-				log.Emit(logging.Opts{Level: logging.Warn}, "Could not record task session for resume: %v", err)
-			}
 			return taskExtraArgs(id), nil
 		},
 		postWorktreeSetup: func(projectDir, workDir string) error {
@@ -547,23 +526,8 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 			return writeTaskGuardSettings(workDir, projectDir, exe)
 		},
 		onExit: func(gm git.Ops, projectDir, workDir string) {
-			if promptKeepOrCleanupWorktree(os.Stdout, os.Stdin, gm, sessionBranch) {
-				printTaskResumeHint(os.Stdout, sessionID)
-				return
-			}
-			removeTaskSession(filepath.Join(projectDir, ".ralph"), sessionID)
+			cleanupTaskWorktree(os.Stdout, gm, workDir, sessionBranch, sessionID)
 		},
-	}
-
-	if resumeID != "" {
-		cfg.resolveWorkDir = func(ralphDir string) (string, error) {
-			session, err := readTaskSession(ralphDir, resumeID)
-			if err != nil {
-				return "", err
-			}
-			sessionBranch = session.Branch
-			return session.WorkDir, nil
-		}
 	}
 
 	return runInteractiveSession(sub, log, cfg)
@@ -764,79 +728,6 @@ func generateSessionID() (string, error) {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32]), nil
 }
 
-// taskSessionsDirName is the .ralph subdirectory holding one record per
-// launched `ralph task` session, keyed by the session id given to the CLI.
-const taskSessionsDirName = "task-sessions"
-
-// taskSession is what `ralph task --resume` needs to reopen a session where
-// it left off: the worktree it ran in and the branch checked out there, so
-// the exit prompt can still clean both up.
-type taskSession struct {
-	WorkDir string `json:"work_dir"`
-	Branch  string `json:"branch"`
-}
-
-// taskSessionPath rejects any session id that is not plain hex-and-dashes —
-// the id reaches this code from the command line, and it is used as a file
-// name.
-func taskSessionPath(ralphDir, sessionID string) (string, error) {
-	if sessionID == "" {
-		return "", fmt.Errorf("empty task session id")
-	}
-	for _, c := range sessionID {
-		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
-		if !isHex && c != '-' {
-			return "", fmt.Errorf("invalid task session id %q — expected a session UUID", sessionID)
-		}
-	}
-	return filepath.Join(ralphDir, taskSessionsDirName, sessionID+".json"), nil
-}
-
-func writeTaskSession(ralphDir, sessionID string, session taskSession) error {
-	path, err := taskSessionPath(ralphDir, sessionID)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating task session dir: %w", err)
-	}
-	data, err := json.Marshal(session)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
-}
-
-// readTaskSession resolves the worktree recorded for sessionID at launch.
-// Both a missing record and a vanished worktree (the user answered "n" to
-// "Keep this task worktree for resume?") are errors: a resumed session must
-// come up in the worktree it was working in, never in a freshly created one.
-func readTaskSession(ralphDir, sessionID string) (taskSession, error) {
-	path, err := taskSessionPath(ralphDir, sessionID)
-	if err != nil {
-		return taskSession{}, err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return taskSession{}, fmt.Errorf("no worktree recorded for task session %s — only sessions started by `ralph task` can be resumed", sessionID)
-	}
-	var session taskSession
-	if err := json.Unmarshal(data, &session); err != nil {
-		return taskSession{}, fmt.Errorf("task session record %s is unreadable: %w", path, err)
-	}
-	info, err := os.Stat(session.WorkDir)
-	if err != nil || !info.IsDir() {
-		return taskSession{}, fmt.Errorf("worktree %s for task session %s no longer exists — it was cleaned up when that session exited", session.WorkDir, sessionID)
-	}
-	return session, nil
-}
-
-func removeTaskSession(ralphDir, sessionID string) {
-	if path, err := taskSessionPath(ralphDir, sessionID); err == nil {
-		os.Remove(path)
-	}
-}
-
 // printTaskResumeHint writes a visually dominant boxed resume command to w.
 // It names `ralph task --resume` rather than a raw `claude --resume`: the
 // system prompt is per-invocation and is not restored with the transcript,
@@ -850,23 +741,22 @@ func printTaskResumeHint(w io.Writer, sessionID string) {
 	fmt.Fprintf(w, "%s%s└%s┘%s\n\n", logging.Cyan, logging.Bold, line, logging.Reset)
 }
 
-// promptKeepOrCleanupWorktree asks the user whether to keep the task worktree
-// for resume, defaulting to Keep on empty/EOF input — which also covers the
-// non-TTY case, since a closed or non-interactive stdin reads as EOF. Only an
-// explicit "n"/"no" answer triggers cleanup: it removes the worktree and its
-// ralph/task/YYYYMMDD-NN branch via gm.RemoveWorktreeForBranch
-// (registration-aware, never a raw os.RemoveAll) and returns false so the
-// caller skips the resume hint. The branch is passed in rather than read from
-// gm, because a resumed session adopts an existing worktree instead of
-// creating one and so learns its branch from the session record.
-func promptKeepOrCleanupWorktree(w io.Writer, r io.Reader, gm git.Ops, branch string) bool {
-	fmt.Fprint(w, "Keep this task worktree for resume? [Y/n] ")
-	line, _ := bufio.NewReader(r).ReadString('\n')
-	answer := strings.ToLower(strings.TrimSpace(line))
-	if answer != "n" && answer != "no" {
-		return true
+// cleanupTaskWorktree decides the fate of a finished `ralph task` worktree
+// without asking. A worktree holding nothing that is not already on the
+// remote — no uncommitted changes and no commits ahead of origin/main — is
+// removed via the registration-aware RemoveWorktreeForBranch (never a raw
+// os.RemoveAll). Anything else is kept and its path and branch printed, so
+// hands-on edits and unpushed commits survive. Asking instead of deciding is
+// what leaked worktrees: a session ended by Ctrl-C, a closed pane or a killed
+// tmux reads as EOF on stdin, which the prompt took as "keep".
+//
+// The resume command is printed either way — `ralph task --resume` starts a
+// fresh worktree, so it no longer depends on this one surviving.
+func cleanupTaskWorktree(w io.Writer, gm git.Ops, workDir, branch, sessionID string) {
+	if !gm.HasUncommittedChanges() && gm.LogOneline("origin/main", "HEAD") == "" {
+		gm.RemoveWorktreeForBranch(branch)
+	} else {
+		fmt.Fprintf(w, "Kept worktree %s (branch %s) — it has uncommitted or unpushed work.\n", workDir, branch)
 	}
-	gm.RemoveWorktreeForBranch(branch)
-	fmt.Fprintln(w, "Task worktree cleaned up.")
-	return false
+	printTaskResumeHint(w, sessionID)
 }

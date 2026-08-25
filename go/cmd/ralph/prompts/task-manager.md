@@ -440,7 +440,15 @@ working tree at `{{PROJECT_DIR}}`. All code edits happen in `{{WORKTREE_DIR}}`
 
 - Create branches, commit, and push from `{{WORKTREE_DIR}}`
 - `bd` commands work from the worktree (auto-discovers `.beads/` by walking up)
-- If no commits are made during the session, the worktree is cleaned up on exit
+- On exit the worktree is removed automatically when it holds nothing that is
+  not already on the remote — no uncommitted changes and no commits ahead of
+  `origin/main`. Otherwise it is kept and its path and branch are printed, so
+  uncommitted edits and unpushed commits are never destroyed. Nothing is
+  asked; the decision is made from the worktree's state.
+- `ralph task --resume <session-id>` always starts in a fresh worktree. It
+  restores the transcript, not the directory — transcript lookup is not tied
+  to the working directory, so a resumed session gets a new worktree purely to
+  stay out of the main checkout.
 
 **The session's own working root never changes.** Do not use `EnterWorktree`
 or any equivalent worktree-switching tool on the session itself — this

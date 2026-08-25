@@ -71,97 +71,17 @@ func TestParseTaskResumeFlag(t *testing.T) {
 	}
 }
 
-// Proves: the worktree a task session runs in survives the session, so a
-// later `ralph task --resume` can re-anchor there instead of creating a new
-// worktree and stranding the resumed session away from its work.
-func TestTaskSession_RoundTrip(t *testing.T) {
-	ralphDir := t.TempDir()
-	workDir := filepath.Join(t.TempDir(), "worktree")
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	const sessionID = "12345678-1234-4567-89ab-123456789abc"
-
-	if err := writeTaskSession(ralphDir, sessionID, taskSession{WorkDir: workDir, Branch: "ralph/task/20260701-01"}); err != nil {
-		t.Fatalf("writeTaskSession: %v", err)
-	}
-
-	got, err := readTaskSession(ralphDir, sessionID)
-	if err != nil {
-		t.Fatalf("readTaskSession: %v", err)
-	}
-	if got.WorkDir != workDir {
-		t.Errorf("WorkDir = %q, want %q", got.WorkDir, workDir)
-	}
-	if got.Branch != "ralph/task/20260701-01" {
-		t.Errorf("Branch = %q, want %q", got.Branch, "ralph/task/20260701-01")
-	}
-}
-
-// Proves: resuming a session ralph never launched fails with a clear error
-// instead of falling through to fresh-worktree creation.
-func TestReadTaskSession_UnknownSessionErrors(t *testing.T) {
-	_, err := readTaskSession(t.TempDir(), "12345678-1234-4567-89ab-123456789abc")
-	if err == nil {
-		t.Fatal("readTaskSession should error when no record exists")
-	}
-	if !strings.Contains(err.Error(), "no worktree recorded") {
-		t.Errorf("error should explain that no worktree was recorded, got: %v", err)
-	}
-}
-
-// Proves: when the user answered "n" to "Keep this task worktree for
-// resume?", a later resume of that session reports the missing worktree
-// rather than silently starting over somewhere else.
-func TestReadTaskSession_MissingWorktreeErrors(t *testing.T) {
-	ralphDir := t.TempDir()
-	const sessionID = "12345678-1234-4567-89ab-123456789abc"
-	gone := filepath.Join(t.TempDir(), "removed-worktree")
-
-	if err := writeTaskSession(ralphDir, sessionID, taskSession{WorkDir: gone}); err != nil {
-		t.Fatalf("writeTaskSession: %v", err)
-	}
-
-	_, err := readTaskSession(ralphDir, sessionID)
-	if err == nil {
-		t.Fatal("readTaskSession should error when the recorded worktree is gone")
-	}
-	if !strings.Contains(err.Error(), gone) {
-		t.Errorf("error should name the missing worktree %q, got: %v", gone, err)
-	}
-}
-
-// Proves: a session id from the command line cannot escape the session
-// record directory — it is used as a file name, so anything but a UUID-shaped
-// value is refused.
-func TestTaskSessionPath_RejectsPathTraversal(t *testing.T) {
-	for _, id := range []string{"", "../../etc/passwd", "abc/def", "not a uuid"} {
-		if _, err := taskSessionPath(t.TempDir(), id); err == nil {
-			t.Errorf("taskSessionPath should reject session id %q", id)
-		}
-	}
-}
-
-// Proves the whole `ralph task --resume <session-id>` launch: it reuses the
-// worktree recorded at launch, rebuilds the task-manager system prompt from
-// current bead state (the transcript restores no system prompt, which is why
-// a raw `claude --resume` came back as a plain Claude session), and hands the
-// CLI --resume plus bypassPermissions — never --session-id.
-func TestHandleTask_ResumeLaunchesInRecordedWorktreeWithRebuiltPrompt(t *testing.T) {
-	projectDir := t.TempDir()
-	runCmd(t, "git", "-C", projectDir, "init")
-	runCmd(t, "git", "-C", projectDir, "commit", "--allow-empty", "-m", "init")
-
+// Proves the whole `ralph task --resume <session-id>` launch: it creates a
+// fresh worktree (transcript lookup is not cwd-bound, so the resumed session
+// needs a worktree to stay out of the main checkout, not the original one),
+// rebuilds the task-manager system prompt from current bead state (the
+// transcript restores no system prompt, which is why a raw `claude --resume`
+// came back as a plain Claude session), and hands the CLI --resume plus
+// bypassPermissions — never --session-id.
+func TestHandleTask_ResumeLaunchesInFreshWorktreeWithRebuiltPrompt(t *testing.T) {
+	projectDir := newRepoWithOrigin(t)
 	ralphDir := filepath.Join(projectDir, ".ralph")
-	workDir := filepath.Join(ralphDir, "worktrees", "ralph-task-20260701-01")
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	const sessionID = "12345678-1234-4567-89ab-123456789abc"
-	if err := writeTaskSession(ralphDir, sessionID, taskSession{WorkDir: workDir, Branch: "ralph/task/20260701-01"}); err != nil {
-		t.Fatal(err)
-	}
 
 	// The bd shim's output is what preloadTaskContext collects, so finding
 	// the marker in the system prompt proves the preload ran at resume time.
@@ -211,45 +131,54 @@ esac
 	if strings.Contains(out, "ARG=--session-id") {
 		t.Errorf("resumed launch must not pass --session-id, got:\n%s", out)
 	}
-	if !strings.Contains(out, "CWD=") || !strings.Contains(out, filepath.Base(workDir)) {
-		t.Errorf("resumed session should run in the recorded worktree %q, got:\n%s", workDir, out)
+
+	cwd := launchCWD(t, out)
+	worktreesDir := resolved(t, filepath.Join(ralphDir, "worktrees"))
+	if !strings.HasPrefix(cwd, worktreesDir+string(filepath.Separator)) {
+		t.Errorf("resumed session should run in a worktree under %s, ran in %s", worktreesDir, cwd)
+	}
+	if cwd == resolved(t, projectDir) {
+		t.Errorf("resumed session must never run in the main checkout %s", projectDir)
 	}
 }
 
-// Proves: resuming a session whose worktree was cleaned up fails instead of
-// creating a fresh worktree — the user is told the session is gone rather
-// than silently getting an empty one.
-func TestHandleTask_ResumeWithMissingWorktreeFails(t *testing.T) {
-	projectDir := t.TempDir()
-	runCmd(t, "git", "-C", projectDir, "init")
-	runCmd(t, "git", "-C", projectDir, "commit", "--allow-empty", "-m", "init")
-
-	ralphDir := filepath.Join(projectDir, ".ralph")
-	const sessionID = "12345678-1234-4567-89ab-123456789abc"
-	gone := filepath.Join(ralphDir, "worktrees", "removed")
-	if err := writeTaskSession(ralphDir, sessionID, taskSession{WorkDir: gone}); err != nil {
-		t.Fatal(err)
-	}
-
-	bin := t.TempDir()
-	writeShim(t, filepath.Join(bin, "claude"), "#!/bin/sh\nexit 0\n")
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-
-	var logBuf strings.Builder
-	code := handleTask(config.Subcommand{Name: "task", Dir: projectDir, Args: []string{"--resume", sessionID}}, logging.New(&logBuf))
-
-	if code != 1 {
-		t.Errorf("exit code = %d, want 1 for a missing worktree", code)
-	}
-	if !strings.Contains(logBuf.String(), "no longer exists") {
-		t.Errorf("error should explain the worktree is gone, got:\n%s", logBuf.String())
-	}
-	if _, err := os.Stat(filepath.Join(ralphDir, "worktrees")); err == nil {
-		entries, _ := os.ReadDir(filepath.Join(ralphDir, "worktrees"))
-		if len(entries) > 0 {
-			t.Errorf("no worktree should have been created, found %d entries", len(entries))
+// launchCWD extracts the working directory the claude shim was launched in.
+func launchCWD(t *testing.T, invocation string) string {
+	t.Helper()
+	for _, line := range strings.Split(invocation, "\n") {
+		if after, ok := strings.CutPrefix(line, "CWD="); ok {
+			return after
 		}
 	}
+	t.Fatalf("no CWD recorded in claude invocation:\n%s", invocation)
+	return ""
+}
+
+// resolved reports path with symlinks expanded, matching the physical path a
+// launched process reports as its working directory (macOS temp dirs are
+// reached through a symlink).
+func resolved(t *testing.T, path string) string {
+	t.Helper()
+	out, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// newRepoWithOrigin builds a git repo with an origin remote carrying main,
+// which is what worktree creation validates against before it will run.
+func newRepoWithOrigin(t *testing.T) string {
+	t.Helper()
+	originDir := t.TempDir()
+	runCmd(t, "git", "init", "--bare", "--initial-branch=main", originDir)
+
+	projectDir := t.TempDir()
+	runCmd(t, "git", "init", "--initial-branch=main", projectDir)
+	runCmd(t, "git", "-C", projectDir, "commit", "--allow-empty", "-m", "init")
+	runCmd(t, "git", "-C", projectDir, "remote", "add", "origin", originDir)
+	runCmd(t, "git", "-C", projectDir, "push", "-u", "origin", "main")
+	return projectDir
 }
 
 func writeShim(t *testing.T, path, script string) {
