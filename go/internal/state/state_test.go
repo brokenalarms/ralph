@@ -19,8 +19,7 @@ func TestLoad_BashCompatible(t *testing.T) {
   "last_task": "Go: State management",
   "worktree_dir": "/tmp/worktrees/test-01",
   "worktree_branch": "ralph/test/01-state",
-  "task_backend": "bd",
-  "max_iterations": 50
+  "task_backend": "bd"
 }`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
 		t.Fatal(err)
@@ -37,9 +36,6 @@ func TestLoad_BashCompatible(t *testing.T) {
 	}
 	if s.Status != "running" {
 		t.Errorf("Status = %q, want %q", s.Status, "running")
-	}
-	if s.MaxIterations != 50 {
-		t.Errorf("MaxIterations = %d, want 50", s.MaxIterations)
 	}
 	if s.TaskBackend != "bd" {
 		t.Errorf("TaskBackend = %q, want %q", s.TaskBackend, "bd")
@@ -69,12 +65,11 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 	st := NewStore(dir)
 
 	original := State{
-		Iteration:         10,
-		Status:            "planned",
-		StartedAt:         "2026-03-20T00:00:00Z",
-		LastTask:          "test task",
-		TaskBackend:       "bd",
-		MaxIterations:     20,
+		Iteration:   10,
+		Status:      "planned",
+		StartedAt:   "2026-03-20T00:00:00Z",
+		LastTask:    "test task",
+		TaskBackend: "bd",
 	}
 
 	if err := st.Save(original); err != nil {
@@ -88,7 +83,6 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 
 	if loaded.Iteration != original.Iteration ||
 		loaded.Status != original.Status ||
-		loaded.MaxIterations != original.MaxIterations ||
 		loaded.LastTask != original.LastTask {
 		t.Errorf("Roundtrip mismatch:\n  saved:  %+v\n  loaded: %+v", original, loaded)
 	}
@@ -100,7 +94,7 @@ func TestSave_NumericFieldsAreNumbers(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
-	if err := st.Save(State{Iteration: 5, MaxIterations: 20}); err != nil {
+	if err := st.Save(State{Iteration: 5}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -113,9 +107,6 @@ func TestSave_NumericFieldsAreNumbers(t *testing.T) {
 	// "iteration" should be 5 not "5"
 	if string(raw["iteration"]) != "5" {
 		t.Errorf("iteration = %s, want raw 5 (number)", string(raw["iteration"]))
-	}
-	if string(raw["max_iterations"]) != "20" {
-		t.Errorf("max_iterations = %s, want raw 20 (number)", string(raw["max_iterations"]))
 	}
 }
 
@@ -218,20 +209,12 @@ func TestInit_CreatesFreshState(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
-	if err := st.Init(50); err != nil {
+	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := os.Stat(st.Path()); err != nil {
 		t.Fatal("expected state file to exist after Init")
-	}
-
-	s, err := st.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.MaxIterations != 50 {
-		t.Errorf("MaxIterations = %d, want 50", s.MaxIterations)
 	}
 }
 
@@ -241,9 +224,9 @@ func TestInit_PreservesStateOnResume(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
-	st.Save(State{Iteration: 3, Status: "running", MaxIterations: 50})
+	st.Save(State{Iteration: 3, Status: "running"})
 
-	if err := st.Init(50); err != nil {
+	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,9 +239,6 @@ func TestInit_PreservesStateOnResume(t *testing.T) {
 	}
 	if s.Status != "running" {
 		t.Errorf("Status = %q, want %q (preserved)", s.Status, "running")
-	}
-	if s.MaxIterations != 50 {
-		t.Errorf("MaxIterations = %d, want 50 (preserved)", s.MaxIterations)
 	}
 }
 
@@ -431,7 +411,7 @@ func TestState_TestResultFieldsInJSON(t *testing.T) {
 func TestCompletedTasks_AddAndRetrieve(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5)
+	st.Init()
 
 	if err := st.AddCompletedTask("ralph-abc", true); err != nil {
 		t.Fatal(err)
@@ -459,7 +439,7 @@ func TestCompletedTasks_AddAndRetrieve(t *testing.T) {
 func TestCompletedTasks_Clear(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5)
+	st.Init()
 
 	st.AddCompletedTask("ralph-abc", true)
 	st.AddCompletedTask("ralph-def", false)
@@ -519,7 +499,7 @@ func TestCompletedTasks_RoundTrip(t *testing.T) {
 func TestAddPushedBranch_RecordsInOrder(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5)
+	st.Init()
 
 	if err := st.AddPushedBranch("ralph/task-a"); err != nil {
 		t.Fatal(err)
@@ -541,7 +521,7 @@ func TestAddPushedBranch_RecordsInOrder(t *testing.T) {
 func TestAddPushedBranch_NoDuplicates(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5)
+	st.Init()
 
 	st.AddPushedBranch("ralph/task-a")
 	st.AddPushedBranch("ralph/task-a")
@@ -556,7 +536,7 @@ func TestAddPushedBranch_NoDuplicates(t *testing.T) {
 func TestAddPushedBranch_IgnoresEmpty(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5)
+	st.Init()
 
 	if err := st.AddPushedBranch(""); err != nil {
 		t.Errorf("AddPushedBranch(\"\") returned error: %v", err)
@@ -571,7 +551,7 @@ func TestAddPushedBranch_IgnoresEmpty(t *testing.T) {
 func TestPushedBranches_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5)
+	st.Init()
 
 	st.AddPushedBranch("ralph/task-a")
 	st.AddPushedBranch("ralph/task-b")
@@ -733,7 +713,7 @@ func TestStore_TouchPlanFiles(t *testing.T) {
 func TestBeginIteration_WritesCurrentTaskID(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5)
+	st.Init()
 
 	st.BeginIteration("ralph-abc", "Fix bug", 1)
 
@@ -770,7 +750,7 @@ func TestBeginIteration_WritesCurrentTaskID(t *testing.T) {
 func TestClearCurrentTask_ClearsField(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5)
+	st.Init()
 
 	st.BeginIteration("ralph-abc", "Fix bug", 1)
 

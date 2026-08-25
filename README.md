@@ -119,7 +119,7 @@ base_branch = "main"
 post_task = "make build"
 
 # Tuning — defaults shown
-max_iterations = 50
+max_iterations = 0
 calls_per_hour = 80
 test_timeout = "5m"
 working_model = "sonnet"

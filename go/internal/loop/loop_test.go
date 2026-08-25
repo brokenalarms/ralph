@@ -253,7 +253,7 @@ func setupTestDir(t *testing.T) (string, *state.Store) {
 	// so verification in tests uses the stub's WorkDir and finds a passing script.
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 	return dir, st
 }
 

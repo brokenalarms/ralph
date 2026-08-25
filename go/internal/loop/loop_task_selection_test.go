@@ -147,10 +147,6 @@ func TestSelectNextTask_MaxIterationsReached(t *testing.T) {
 func TestSelectNextTask_MaxIterationsZeroIsUnlimited(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
 	l, _ := newTestLoopForSelection(t, backend)
-	// newTestLoopForSelection seeds state via setupTestDir's st.Init(5); clear
-	// the positive state override so ReadMaxIterations falls back to the
-	// unlimited default passed below instead of the fixture's 5.
-	l.state.Write("max_iterations", "0")
 
 	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
 		runIteration:  51,
@@ -160,6 +156,30 @@ func TestSelectNextTask_MaxIterationsZeroIsUnlimited(t *testing.T) {
 
 	if action != actionProceed {
 		t.Fatalf("expected actionProceed with unlimited maxIterations, got %v", action)
+	}
+	status, _ := l.state.Read("status")
+	if status == "max_iterations_reached" {
+		t.Errorf("expected status to not be max_iterations_reached, got %q", status)
+	}
+}
+
+// selectNextTask ignores a stale max_iterations key left over in state.json
+// from a previous binary version — cfg.MaxIterations (via p.maxIterations)
+// is the only source of the cap, so a state.json hand-edited or written by
+// an older ralph with "max_iterations": 50 must not cap an unlimited run.
+func TestSelectNextTask_IgnoresStaleStateMaxIterations(t *testing.T) {
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
+	l, _ := newTestLoopForSelection(t, backend)
+	l.state.Write("max_iterations", "50")
+
+	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  51,
+		maxIterations: 0,
+		completedIDs:  map[string]bool{},
+	})
+
+	if action != actionProceed {
+		t.Fatalf("expected actionProceed with unlimited cfg.MaxIterations despite stale state.json max_iterations, got %v", action)
 	}
 	status, _ := l.state.Read("status")
 	if status == "max_iterations_reached" {
@@ -441,7 +461,7 @@ type orphanWithReadyQueueBackend struct {
 func (b *orphanWithReadyQueueBackend) ReopenTask(id string) error {
 	b.reopenCalls = append(b.reopenCalls, id)
 	b.AllInProgressTasks = nil
-	b.NextID = id             // reopened task is now highest priority
+	b.NextID = id // reopened task is now highest priority
 	b.NextTask = "Reopened orphaned task"
 	return nil
 }

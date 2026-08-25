@@ -1901,9 +1901,9 @@ func TestIntegrationReal_WorktreeScopedToTask_TeardownAfterMerge(t *testing.T) {
 
 	// Two tasks: task1 runs, merges, teardown happens. Task2 runs in a fresh worktree.
 	var (
-		mu          sync.Mutex
-		workDirs    []string // work dirs passed to runner per iteration
-		task1Done   bool
+		mu        sync.Mutex
+		workDirs  []string // work dirs passed to runner per iteration
+		task1Done bool
 	)
 
 	backend := &testutil.TrackingBackend{
@@ -1934,7 +1934,7 @@ func TestIntegrationReal_WorktreeScopedToTask_TeardownAfterMerge(t *testing.T) {
 	// Use the same ralphDir for both the git module and the state store so
 	// state writes from RemoveWorktree are visible via st.Load().
 	st := state.NewStore(setup.ralphDir)
-	st.Init(5)
+	st.Init()
 
 	cfg := Config{
 		Dirs: workctx.WorkContext{
@@ -2063,7 +2063,7 @@ func TestIntegrationReal_WorktreePreservedOnInterrupt(t *testing.T) {
 	gm, initialWorkDir := withWorktree(t, setup, ghCfg, logger)
 
 	st := state.NewStore(setup.ralphDir)
-	st.Init(5)
+	st.Init()
 
 	ctx, cancel := context.WithCancel(context.Background())
 

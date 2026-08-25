@@ -966,7 +966,7 @@ func TestVerifyGate_RunsInWorktreeNotProjectDir(t *testing.T) {
 	os.WriteFile(filepath.Join(worktreeDir, "Makefile"), []byte("ralph-verify:\n\t@true\n"), 0o644)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 
 	// Git stub: GetWorkDir() returns worktreeDir (the live per-task worktree).
 	gm := git.NewStub(git.StubRepoConfig{
@@ -1311,7 +1311,7 @@ func TestRunVerifyPipeline_HappyPath_ExactlyOneTestExecution(t *testing.T) {
 	initGitRepoForCache(t, gitDir)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: gitDir, WorkDir: gitDir, DiffFromBaseResult: "+ stub diff"})
 	cfg := Config{
@@ -1372,7 +1372,7 @@ func TestRunVerifyPipeline_NoCodeNeeded_TreeUnchanged_ZeroTestExecutions(t *test
 	initGitRepoForCache(t, gitDir)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: gitDir, WorkDir: gitDir})
 	cfg := Config{
