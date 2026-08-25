@@ -232,4 +232,4 @@ Each tag has a fixed color. Defined once in logging/logging.go.
   the merge/CI decision path (`internal/git/git_merge.go`,
   `internal/git/ci.go`) — every merge-blocking outcome is a named error type
   or package-level sentinel, so `classifyMergeOutcome` can branch on it.
-  Enforced by `TestMergePathErrorsAreTyped` in `go/internal/arch_boundary_test.go`.
+  Enforced by `TestMergePathErrorsAreTyped` in `go/internal/arch/arch_boundary_test.go`.

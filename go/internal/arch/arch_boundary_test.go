@@ -192,3 +192,168 @@ func moduleRoot(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// mergePathFiles are the files on the merge/CI decision path whose returned
+// errors must be typed so classifyMergeOutcome can branch on them.
+var mergePathFiles = []string{
+	filepath.Join("internal", "git", "git_merge.go"),
+	filepath.Join("internal", "git", "ci.go"),
+}
+
+// typedOutcomeRule is the "What NOT to Do" line the merge-path error rule enforces.
+const typedOutcomeRule = "No inline `fmt.Errorf`/`errors.New` without `%w` in a return statement on the merge/CI decision path"
+
+// untypedErrorReturn locates one return statement that builds an error inline
+// instead of returning a named error type or an errors.Is-able sentinel.
+type untypedErrorReturn struct {
+	line int
+	call string
+}
+
+// TestMergePathErrorsAreTyped enforces docs/specs/architecture.md Principle 7
+// on the merge/CI decision path: every merge-blocking outcome leaves
+// internal/git as a named error type or a package-level sentinel, so
+// classifyMergeOutcome (and any future caller) can demux it with
+// errors.As/errors.Is rather than by matching on a formatted string.
+func TestMergePathErrorsAreTyped(t *testing.T) {
+	root := moduleRoot(t)
+	fset := token.NewFileSet()
+
+	for _, relPath := range mergePathFiles {
+		f, err := parser.ParseFile(fset, filepath.Join(root, relPath), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", relPath, err)
+		}
+		for _, v := range untypedErrorReturns(fset, f) {
+			t.Errorf("%s:%d: return statement constructs %s inline — violates docs/specs/architecture.md 'What NOT to Do': %s — return a named error type or a package-level sentinel wrapped with %%w instead",
+				relPath, v.line, v.call, typedOutcomeRule)
+		}
+	}
+}
+
+// TestUntypedErrorReturnsDetector proves the merge-path detector actually
+// fires: an inline fmt.Errorf or errors.New in a return statement is reported,
+// while %w wrapping and package-level sentinels are not.
+func TestUntypedErrorReturnsDetector(t *testing.T) {
+	tests := []struct {
+		name     string
+		src      string
+		wantLine int
+		wantCall string
+	}{
+		{
+			name: "inline fmt.Errorf without %w",
+			src: `package p
+func f() error {
+	return fmt.Errorf("x")
+}`,
+			wantLine: 3,
+			wantCall: "fmt.Errorf",
+		},
+		{
+			name: "inline errors.New",
+			src: `package p
+func f() error {
+	return errors.New("x")
+}`,
+			wantLine: 3,
+			wantCall: "errors.New",
+		},
+		{
+			name: "wrapping and sentinels are allowed",
+			src: `package p
+var ErrX = errors.New("x")
+var ErrY = fmt.Errorf("y")
+func f(err error) error {
+	if err != nil {
+		return fmt.Errorf("x: %w", err)
+	}
+	return ErrX
+}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "snippet.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse snippet: %v", err)
+			}
+			got := untypedErrorReturns(fset, f)
+			if tc.wantCall == "" {
+				if len(got) != 0 {
+					t.Fatalf("expected no violations, got %+v", got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("expected exactly 1 violation, got %+v", got)
+			}
+			if got[0].line != tc.wantLine || got[0].call != tc.wantCall {
+				t.Errorf("violation = %+v, want line %d call %s", got[0], tc.wantLine, tc.wantCall)
+			}
+		})
+	}
+}
+
+// untypedErrorReturns reports every return statement in f whose results
+// construct an error inline: a call to errors.New, or a call to fmt.Errorf
+// whose string-literal format does not wrap an underlying error with %w. A
+// non-literal format string is not judged — its content is not knowable here.
+func untypedErrorReturns(fset *token.FileSet, f *ast.File) []untypedErrorReturn {
+	var found []untypedErrorReturn
+	ast.Inspect(f, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, result := range ret.Results {
+			ast.Inspect(result, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name, ok := qualifiedCallName(call)
+				if !ok {
+					return true
+				}
+				switch name {
+				case "errors.New":
+				case "fmt.Errorf":
+					format, isLiteral := stringLiteral(firstArg(call))
+					if !isLiteral || strings.Contains(format, "%w") {
+						return true
+					}
+				default:
+					return true
+				}
+				found = append(found, untypedErrorReturn{line: fset.Position(call.Pos()).Line, call: name})
+				return true
+			})
+		}
+		return true
+	})
+	return found
+}
+
+// qualifiedCallName returns the "pkg.Func" name of a selector call expression.
+func qualifiedCallName(call *ast.CallExpr) (string, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return pkg.Name + "." + sel.Sel.Name, true
+}
+
+// firstArg returns call's first argument, or nil when it has none.
+func firstArg(call *ast.CallExpr) ast.Expr {
+	if len(call.Args) == 0 {
+		return nil
+	}
+	return call.Args[0]
+}

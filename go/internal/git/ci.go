@@ -84,6 +84,23 @@ func (e *LocalTestFailureError) Error() string {
 	return msg
 }
 
+// CIIncompleteError is returned when the CI wait gives up before every check
+// resolved — either the check set froze for the no-progress budget or the hard
+// cap elapsed. Typed so a caller can tell "CI never finished" apart from "CI
+// failed" without matching on the message.
+type CIIncompleteError struct {
+	PRNumber int
+	Waited   time.Duration
+}
+
+func (e *CIIncompleteError) Error() string {
+	return fmt.Sprintf("CI checks did not complete within %v", e.Waited)
+}
+
+// ErrCIInterrupted is returned when the context is cancelled while waiting on
+// CI. Nothing is known about the checks — the wait simply stopped.
+var ErrCIInterrupted = errors.New("interrupted")
+
 // DefaultCIPollInterval is the initial time between CI status checks.
 // Each subsequent poll doubles this interval up to MaxCIPollInterval.
 const DefaultCIPollInterval = 1 * time.Second
@@ -254,7 +271,7 @@ func RequiredFailedChecks(checks []CICheckResult) []CICheckResult {
 // ErrStackedPRWaiting is returned when a PR targets a non-main branch
 // and must wait for the base PR to merge first. This is not a failure —
 // it's expected stacking behavior and should not count as a merge failure.
-var ErrStackedPRWaiting = fmt.Errorf("stacked PR waiting for base to merge")
+var ErrStackedPRWaiting = errors.New("stacked PR waiting for base to merge")
 
 // MergeConflictError is returned when a PR cannot be merged due to conflicts.
 type MergeConflictError struct {
@@ -529,11 +546,11 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 	case err == nil:
 		return checks, status, nil
 	case errors.Is(err, errCIFrozen):
-		return checks, status, fmt.Errorf("CI checks did not complete within %v", noProgressTimeout)
+		return checks, status, &CIIncompleteError{PRNumber: prNumber, Waited: noProgressTimeout}
 	case errors.Is(err, retry.ErrTimedOut):
-		return checks, status, fmt.Errorf("CI checks did not complete within %v", hardCap)
+		return checks, status, &CIIncompleteError{PRNumber: prNumber, Waited: hardCap}
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return nil, CIPending, fmt.Errorf("interrupted")
+		return nil, CIPending, ErrCIInterrupted
 	default:
 		return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", noProgressTimeout, err)
 	}

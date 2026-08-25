@@ -182,9 +182,17 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	}
 
 	// With structured MergeResult, Blocked triggers CI-gated path (wait + retry).
-	// The retry also returns Blocked, so we get "merge retry failed."
-	if !strings.Contains(err.Error(), "merge retry failed") {
-		t.Fatalf("expected merge retry failure for blocked PR, got: %v", err)
+	// The retry also returns Blocked, so the caller gets a typed
+	// MergeRetryFailedError naming the PR and GitHub's reason.
+	var retryFailed *MergeRetryFailedError
+	if !errors.As(err, &retryFailed) {
+		t.Fatalf("expected a *MergeRetryFailedError for a blocked PR, got: %v", err)
+	}
+	if retryFailed.PRNumber != 88 {
+		t.Errorf("expected the error to name PR #88, got #%d", retryFailed.PRNumber)
+	}
+	if err.Error() != "merge retry failed for PR #88 after CI passed: "+retryFailed.Message {
+		t.Errorf("unexpected message: %v", err)
 	}
 }
 
