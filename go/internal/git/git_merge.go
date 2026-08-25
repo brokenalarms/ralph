@@ -26,6 +26,67 @@ const (
 	CIFixNoCommits
 )
 
+// Merge-path outcomes cross the git package boundary as errors.Is-able
+// sentinels: no caller distinguishes them today, but each is wrapped with %w
+// plus its interpolated context so a caller can start branching on it without
+// parsing the message (docs/specs/architecture.md Principle 7).
+var (
+	// ErrInvalidBaseBranch means the resolved base is neither the configured
+	// base branch nor the active stack parent, so no PR may be created or merged.
+	ErrInvalidBaseBranch = errors.New("base branch guard")
+
+	// ErrMergedSHANotAncestor means a squash-merge landed on a lineage that is
+	// not reachable from the base branch.
+	ErrMergedSHANotAncestor = errors.New("post-merge ancestor check FAILED")
+
+	// ErrGHUnavailable means the gh CLI is not installed, so no GitHub
+	// operation that needs it can run.
+	ErrGHUnavailable = errors.New("gh CLI not found")
+
+	// ErrAutoMergeFailed means GitHub refused the merge for a reason other than
+	// conflicts, branch protection, or failing CI.
+	ErrAutoMergeFailed = errors.New("auto-merge failed")
+
+	// ErrMergeAttemptsExhausted means every merge attempt in MergeWithRetry was
+	// used without the PR merging.
+	ErrMergeAttemptsExhausted = errors.New("merge failed")
+)
+
+// CompileCheckError is returned when the pre-push compile check fails. Typed
+// so a caller can tell a broken tree apart from a git or network failure
+// without matching on the compiler output.
+type CompileCheckError struct {
+	Reason  string
+	Details string
+}
+
+func (e *CompileCheckError) Error() string {
+	return e.Reason + "\n" + compileCheckSummary(e.Details)
+}
+
+// AutoMergeBlockedError is returned when branch protection blocks the merge
+// and there is no CI waiter configured to wait the block out.
+type AutoMergeBlockedError struct {
+	PRNumber int
+	Message  string
+}
+
+func (e *AutoMergeBlockedError) Error() string {
+	return fmt.Sprintf("auto-merge blocked for PR #%d: %s", e.PRNumber, e.Message)
+}
+
+// MergeRetryFailedError is returned when the merge retried after CI passed and
+// GitHub still refused it — the PR is mergeable in principle but something
+// changed underneath.
+type MergeRetryFailedError struct {
+	PRNumber int
+	Message  string
+}
+
+func (e *MergeRetryFailedError) Error() string {
+	return fmt.Sprintf("merge retry failed for PR #%d after CI passed: %s", e.PRNumber, e.Message)
+}
+
 // resolveBaseBranch returns PrevBranch if set, otherwise the default branch.
 // Single source of truth for "what is this branch based on."
 func (r *repo) resolveBaseBranch() string {
@@ -46,7 +107,7 @@ func (r *repo) assertValidBase(base string) error {
 	if r.prevBranch != "" && base == r.prevBranch {
 		return nil
 	}
-	return fmt.Errorf("base branch guard: resolved base %q is neither cfg.BaseBranch (%q) nor active stack parent %q — refusing to create/merge PR", base, r.baseBranch, r.prevBranch)
+	return fmt.Errorf("%w: resolved base %q is neither cfg.BaseBranch (%q) nor active stack parent %q — refusing to create/merge PR", ErrInvalidBaseBranch, base, r.baseBranch, r.prevBranch)
 }
 
 // assertMergedAncestor verifies that mergedSHA is an ancestor of
@@ -61,7 +122,7 @@ func (r *repo) assertMergedAncestor(mergedSHA string) error {
 	_ = r.gitCmdErr(dir, "fetch", "origin", r.baseBranch)
 	ref := "origin/" + r.baseBranch
 	if !r.isAncestor(dir, mergedSHA, ref) {
-		return fmt.Errorf("post-merge ancestor check FAILED: merged SHA %s is NOT an ancestor of %s — commits may have landed in a dead lineage; bead left open for manual recovery", mergedSHA, ref)
+		return fmt.Errorf("%w: merged SHA %s is NOT an ancestor of %s — commits may have landed in a dead lineage; bead left open for manual recovery", ErrMergedSHANotAncestor, mergedSHA, ref)
 	}
 	return nil
 }
@@ -81,7 +142,7 @@ func (r *repo) Push(ctx context.Context) error {
 		result := verify.CompileCheck(ctx, r.compileCheckTimeout, r.workDir)
 		if !result.Passed {
 			r.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Debug}, "%s", result.Details)
-			return fmt.Errorf("%s\n%s", result.Reason, compileCheckSummary(result.Details))
+			return &CompileCheckError{Reason: result.Reason, Details: result.Details}
 		}
 		r.logger.Emit(logging.Opts{Domain: logging.Build}, "Pre-push compile check passed")
 	}
@@ -212,7 +273,7 @@ func CreatePR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string,
 		return 0, nil
 	}
 	if !gh.Available() {
-		return 0, fmt.Errorf("gh CLI not found — cannot create PR")
+		return 0, fmt.Errorf("%w — cannot create PR", ErrGHUnavailable)
 	}
 
 	nwo := NWOFromRemote(remoteURL)
@@ -727,7 +788,7 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	gh := r.github
 	if !gh.Available() {
-		return false, fmt.Errorf("gh CLI not found — cannot auto-merge")
+		return false, fmt.Errorf("%w — cannot auto-merge", ErrGHUnavailable)
 	}
 
 	repoURL := r.gitOutput(r.workDir, "remote", "get-url", "origin")
@@ -881,7 +942,7 @@ func (r *repo) mergeAsInfrastructureFailure(ctx context.Context, prNumber int, r
 
 // ErrPRAlreadyMerged is returned when the PR for the branch is already merged.
 // Callers should skip push and close the bead.
-var ErrPRAlreadyMerged = fmt.Errorf("PR already merged")
+var ErrPRAlreadyMerged = errors.New("PR already merged")
 
 // resolveClosedPR handles the case where no open PR exists for the branch.
 // It checks whether a PR exists in another state (merged or closed). If
@@ -995,7 +1056,7 @@ func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger 
 			logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "blocked by branch protection: %s — waiting for CI...", result.Message)
 		}
 		if opts.CI == nil {
-			return "", false, fmt.Errorf("auto-merge blocked for PR #%d: %s", opts.PRNumber, result.Message)
+			return "", false, &AutoMergeBlockedError{PRNumber: opts.PRNumber, Message: result.Message}
 		}
 		checks, status, waitErr := opts.CI.AwaitCI(ctx, opts.PRNumber, opts.RepoURL, time.Time{})
 		if waitErr != nil {
@@ -1016,14 +1077,14 @@ func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger 
 			if logger != nil {
 				logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Merge retry failed: %s", retry.Message)
 			}
-			return "", false, fmt.Errorf("merge retry failed for PR #%d after CI passed: %s", opts.PRNumber, retry.Message)
+			return "", false, &MergeRetryFailedError{PRNumber: opts.PRNumber, Message: retry.Message}
 		}
 	}
 
 	if logger != nil {
 		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Auto-merge failed: %s", result.Message)
 	}
-	return "", false, fmt.Errorf("auto-merge failed for PR #%d: %s", opts.PRNumber, result.Message)
+	return "", false, fmt.Errorf("%w for PR #%d: %s", ErrAutoMergeFailed, opts.PRNumber, result.Message)
 }
 
 // postMergeLog logs the merge completion.
@@ -1215,7 +1276,7 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 	err := retry.Retry(ctx, retry.BackoffOpts{Schedule: make([]time.Duration, MaxMergeAttempts-1)}, func(error) bool { return false }, attempt)
 	if err != nil {
 		if errors.Is(err, retry.ErrTimedOut) {
-			return false, fmt.Errorf("merge failed after %d attempts", MaxMergeAttempts)
+			return false, fmt.Errorf("%w after %d attempts", ErrMergeAttemptsExhausted, MaxMergeAttempts)
 		}
 		return false, err
 	}

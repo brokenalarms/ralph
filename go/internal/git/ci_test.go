@@ -294,8 +294,12 @@ func TestWaitForCI_TimesOut(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if !strings.Contains(err.Error(), "5ms") {
-		t.Errorf("expected error to report the no-progress budget (5ms), got: %v", err)
+	var incomplete *CIIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("expected a *CIIncompleteError, got: %v", err)
+	}
+	if incomplete.Waited != 5*time.Millisecond {
+		t.Errorf("expected the error to carry the no-progress budget (5ms), got %v", incomplete.Waited)
 	}
 	if status != CIPending {
 		t.Errorf("expected CIPending on timeout, got %v", status)
@@ -357,8 +361,12 @@ func TestWaitForCI_TimesOutWithoutStepData(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if !strings.Contains(err.Error(), "5m0s") {
-		t.Errorf("expected error to report the no-progress budget (5m0s), got: %v", err)
+	var incomplete *CIIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("expected a *CIIncompleteError, got: %v", err)
+	}
+	if incomplete.Waited != 5*time.Minute {
+		t.Errorf("expected the error to carry the no-progress budget (5m0s), got %v", incomplete.Waited)
 	}
 	if status != CIPending {
 		t.Errorf("expected CIPending on timeout, got %v", status)
@@ -554,8 +562,12 @@ func TestWaitForCI_HardCapExpiresDuringContinuousProgress(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected hard-cap timeout error")
 	}
-	if !strings.Contains(err.Error(), "5ms") {
-		t.Errorf("expected error to report the hard cap (5ms), got: %v", err)
+	var incomplete *CIIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("expected a *CIIncompleteError, got: %v", err)
+	}
+	if incomplete.Waited != 5*time.Millisecond {
+		t.Errorf("expected the error to carry the hard cap (5ms), got %v", incomplete.Waited)
 	}
 	if status != CIPending {
 		t.Errorf("expected CIPending on hard-cap timeout, got %v", status)
