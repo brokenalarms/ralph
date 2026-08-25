@@ -18,6 +18,28 @@ const qosClampEnv = "_RALPH_QOS_CLAMP"
 
 const taskpolicyPath = "/usr/sbin/taskpolicy"
 
+// qosClampDescriptions explains, per clamp, where the scheduler will put the
+// loop — shown in the startup banner next to the clamp name.
+var qosClampDescriptions = map[string]string{
+	config.QoSClampUtility:     "P-cores, below UI band",
+	config.QoSClampBackground:  "E-cores only",
+	config.QoSClampMaintenance: "E-cores, lowest priority",
+}
+
+// activeQoSClampLabel describes the clamp this process is running under,
+// read from the marker the re-exec sets: the clamp name plus its
+// description, or "none" when the loop was never clamped.
+func activeQoSClampLabel() string {
+	clamp := os.Getenv(qosClampEnv)
+	if clamp == "" {
+		return config.QoSClampNone
+	}
+	if desc, ok := qosClampDescriptions[clamp]; ok {
+		return clamp + " — " + desc
+	}
+	return clamp
+}
+
 // execve is syscall.Exec, indirected so tests can observe the re-exec
 // instead of having the test binary replaced.
 var execve = syscall.Exec

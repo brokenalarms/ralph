@@ -216,3 +216,21 @@ func TestQoSClampFlag_Validation(t *testing.T) {
 		t.Errorf("qos_clamp turbo: want Validate error naming accepted values, got %v", err)
 	}
 }
+
+// Proves: the startup banner names the clamp the loop is running under, so a
+// loop that failed to clamp is distinguishable from one that succeeded.
+func TestActiveQoSClampLabel(t *testing.T) {
+	cases := []struct{ marker, want string }{
+		{"utility", "utility — P-cores, below UI band"},
+		{"background", "background — E-cores only"},
+		{"maintenance", "maintenance — E-cores, lowest priority"},
+		{"", "none"},
+		{"custom", "custom"},
+	}
+	for _, c := range cases {
+		t.Setenv(qosClampEnv, c.marker)
+		if got := activeQoSClampLabel(); got != c.want {
+			t.Errorf("marker %q: label = %q, want %q", c.marker, got, c.want)
+		}
+	}
+}
