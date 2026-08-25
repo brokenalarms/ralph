@@ -25,10 +25,10 @@ type shipResult struct {
 	merged          bool
 	ciFailure       bool
 	stacked         bool
-	ciInfraFailure  bool                 // InfrastructureFailure flag on ShipResult
-	ciFailureDetail *git.CIFailureError  // populated when the loop needs to route through tryFixCI
-	pushedBranch    string               // PushedBranch flag: non-empty when Phase 1 push succeeded on this branch
-	noNetChange     bool                 // NoNetChange flag: branch pushed but its diff vs main is empty
+	ciInfraFailure  bool                         // InfrastructureFailure flag on ShipResult
+	ciFailureDetail *git.CIFailureError          // populated when the loop needs to route through tryFixCI
+	pushedBranch    string                       // PushedBranch flag: non-empty when Phase 1 push succeeded on this branch
+	noNetChange     bool                         // NoNetChange flag: branch pushed but its diff vs main is empty
 	conflictDetail  *git.UnresolvedConflictError // populated when the loop needs to route through tryFixConflict
 }
 
@@ -78,7 +78,7 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:  passingVerifyHook(),
 	})
 	return finalizeSetup{
 		loop: l,
@@ -177,39 +177,6 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-xyz" {
 		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.ClosedIDs)
-	}
-}
-
-// completeTask closes the bead (not skips) when merge fails transiently —
-// no unresolved conflict, work is verified, and the branch is findable by
-// stack head detection for the next task. Contrast with
-// TestFinalizePR_UnresolvableConflict_SkipsInsteadOfCloses: only an
-// unresolvable conflict downgrades the close to a skip.
-func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
-	dir, _ := setupTestDir(t)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
-	}
-
-	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix bug", backend, shipResult{
-		prNumber: 99,
-		merged:   false,
-		prURL:    "https://github.com/owner/repo/pull/99",
-	})
-
-	out := fs.loop.completeTask(context.Background(), fs.p)
-
-	if out.merged {
-		t.Error("should not be merged on failure")
-	}
-	backend.CloseMu.Lock()
-	defer backend.CloseMu.Unlock()
-	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-abc" {
-		t.Errorf("expected CloseTask for ralph-abc, got %v", backend.ClosedIDs)
-	}
-	if len(backend.CloseReasons) == 0 || !strings.Contains(backend.CloseReasons[0], "merge pending") {
-		t.Errorf("close reason should indicate merge pending, got %v", backend.CloseReasons)
 	}
 }
 
@@ -331,7 +298,7 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:  passingVerifyHook(),
 	})
 
 	p := completeTaskParams{

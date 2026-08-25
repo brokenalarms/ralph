@@ -510,10 +510,11 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	}
 }
 
-// When Ship returns a non-CI error (plain ShipErr, not CIFailureError), the
-// loop closes the task with "merge pending" — the work is done, only merge
-// failed.
-func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
+// When ship comes back neither merged nor stacked, with no CI failure and no
+// conflict, the outcome is unclassified — the loop must say so at Error level
+// and leave the bead open. Closing it as "merge pending" is the fail-open
+// default that seeded later beads onto an unmerged PR (cablecar PR #87).
+func TestLoop_UnclassifiedMergeOutcomeLeavesTaskOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -562,15 +563,18 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	output := buf.String()
-	if !strings.Contains(output, "merge pending") {
-		t.Errorf("expected log output to contain 'merge pending' for non-CI merge failure, got: %s", output)
+	if !strings.Contains(output, "without a classified outcome") {
+		t.Errorf("expected log output to report the unclassified ship outcome, got: %s", output)
+	}
+	if strings.Contains(output, "merge pending") {
+		t.Errorf("an unclassified outcome must not be closed as merge-pending, got: %s", output)
 	}
 }
 
-// When merge fails, the task is closed (not skipped) — the PR exists, work
-// is verified done. Stack head detection can find the unmerged branch for
-// the next task.
-func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
+// An unclassified merge outcome must neither close nor skip the bead: it
+// stays open so the next iteration re-enters ship through the prior-attempt
+// path. Skipping would hide the PR from the retry; closing would abandon it.
+func TestLoop_UnclassifiedMergeOutcomeNeitherClosesNorSkips(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -625,75 +629,8 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
-	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-stub" {
-		t.Errorf("expected ralph-stub closed in backend, got %v", backend.ClosedIDs)
-	}
-	backend.SkipMu.Lock()
-	defer backend.SkipMu.Unlock()
-	if len(backend.SkippedIDs) != 0 {
-		t.Errorf("task should not be skipped when merge fails, got %v", backend.SkippedIDs)
-	}
-}
-
-// Merge failure closes the task without retrying — the work is verified
-// done, this is not a failure that needs retrying.
-func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{
-			StubBackend: testutil.StubBackend{
-				Remaining:    1,
-				Completed:    0,
-				Total:        1,
-				NextTask:     "Fixable task",
-				NextID:       "ralph-fix",
-				BackendLabel: "beads",
-			},
-		},
-	}
-
-	workDir := filepath.Join(dir, "worktree")
-	gm := git.NewStub(git.StubRepoConfig{
-		ProjectDir:     dir,
-		WorkDir:        workDir,
-		WorktreeBranch: "ralph/project/01-fixable",
-		Ship:           git.ShipResult{PRNumber: 50, Merged: false},
-	})
-	cfg := Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    workDir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
-		MaxIterations: 1,
-		CallsPerHour:  80,
-		AutoMerge:     true,
-	}
-	logger := logging.New(nil)
-	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
-		Connectivity: onlineStubConnectivity(),
-	})
-
-	l.runner = &stubRunner{
-		result: claude.Result{SignalDetected: true},
-	}
-
-	_ = l.Run(context.Background())
-
-	backend.CloseMu.Lock()
-	defer backend.CloseMu.Unlock()
-	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-fix" {
-		t.Errorf("expected ralph-fix closed in backend, got %v", backend.ClosedIDs)
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("task must stay open on an unclassified merge outcome, got closed %v", backend.ClosedIDs)
 	}
 	backend.SkipMu.Lock()
 	defer backend.SkipMu.Unlock()

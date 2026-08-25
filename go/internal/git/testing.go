@@ -416,8 +416,12 @@ type StubRepoConfig struct {
 
 	// Ship / merge results — prescribed outcomes where deriving from state
 	// would require an unreasonable modeling burden.
-	Ship               ShipResult
-	ShipErr            error
+	Ship    ShipResult
+	ShipErr error
+	// ShipMergeErr is returned only from the phase-2 merge call (the one made
+	// with AutoMerge set), so a test can let push + PR creation succeed and
+	// fail the merge alone.
+	ShipMergeErr       error
 	PushAndCreatePRNum int
 	PushAndCreatePRErr error
 	MergeRetrySucceeds bool
@@ -479,6 +483,7 @@ type StubInspector interface {
 	GetMergeStackCalls() int
 	GetMergeStackTopPR() string
 	GetBranchForTaskStackParents() []string
+	GetTagTaskEndTasks() []string
 }
 
 // stubRepo is an unexported fake of Ops. Tests receive it only through the
@@ -510,6 +515,7 @@ type stubRepo struct {
 	mergeStackCalls                int
 	mergeStackTopPR                string
 	branchForTaskStackParents      []string
+	tagTaskEndTasks                []string
 }
 
 // GetBranchForTaskCalls returns the number of times BranchForTask has been
@@ -521,6 +527,11 @@ func (s *stubRepo) GetBranchForTaskCalls() int { return s.branchForTaskCalls }
 // being set up. Used by tests to assert which branches an iteration is
 // willing to stack on.
 func (s *stubRepo) GetBranchForTaskStackParents() []string { return s.branchForTaskStackParents }
+
+// GetTagTaskEndTasks returns the task IDs passed to TagTaskEnd, in call order.
+// Used by tests to assert that an iteration marked the task's end even when it
+// left the bead open.
+func (s *stubRepo) GetTagTaskEndTasks() []string { return s.tagTaskEndTasks }
 
 // GetRemoveWorktreeCalls returns the number of times RemoveWorktree has been
 // called. Used by tests to assert that a skipped task tears down its worktree.
@@ -793,7 +804,9 @@ func (s *stubRepo) SetAdoptedStackBranch(branch string) {
 // outside real git) ---
 
 func (s *stubRepo) TagTaskStart(_ string) {}
-func (s *stubRepo) TagTaskEnd(_ string)   {}
+func (s *stubRepo) TagTaskEnd(taskID string) {
+	s.tagTaskEndTasks = append(s.tagTaskEndTasks, taskID)
+}
 
 // --- Commit operations ---
 
@@ -820,7 +833,10 @@ func (s *stubRepo) Push(_ context.Context) error           { return s.cfg.PushEr
 
 // Ship returns the prescribed outcome. Tests that want observable post-Ship
 // state (e.g. a findable PR) configure cfg.GitHub.PRs accordingly.
-func (s *stubRepo) Ship(_ context.Context, _ ShipOpts) (ShipResult, error) {
+func (s *stubRepo) Ship(_ context.Context, opts ShipOpts) (ShipResult, error) {
+	if opts.AutoMerge && s.cfg.ShipMergeErr != nil {
+		return s.cfg.Ship, s.cfg.ShipMergeErr
+	}
 	return s.cfg.Ship, s.cfg.ShipErr
 }
 

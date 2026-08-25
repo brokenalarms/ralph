@@ -2028,12 +2028,16 @@ func TestIntegrationReal_WorktreeScopedToTask_TeardownAfterMerge(t *testing.T) {
 		t.Errorf("state.WorktreeDir = %q, want empty after all tasks complete", finalState.WorktreeDir)
 	}
 
-	// Observable 4: both beads were closed.
+	// Observable 4: neither bead was closed. The stub GitHub reports the merge
+	// as done but hands back a fabricated SHA that never lands on the real
+	// origin/main, so the post-merge ancestor guard rejects it. That guard's
+	// whole purpose is "bead left open for manual recovery" — an unclassified
+	// ship failure must not close the bead, however the merge appeared to go.
 	backend.CloseMu.Lock()
 	closed := append([]string{}, backend.ClosedIDs...)
 	backend.CloseMu.Unlock()
-	if len(closed) != 2 {
-		t.Errorf("expected 2 closed beads, got %d: %v", len(closed), closed)
+	if len(closed) != 0 {
+		t.Errorf("beads must stay open when the post-merge ancestor check fails, got closed %v", closed)
 	}
 }
 
