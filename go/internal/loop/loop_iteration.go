@@ -290,7 +290,11 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 	// the normal ship path (PR created) and the pr_creation_failed path (push
 	// succeeded but PR creation errored). Ordering matters: setStackHead walks
 	// newest-first so the most recently pushed branch becomes the stack parent.
-	if pushedBranch != "" {
+	//
+	// A branch whose pre-merge local test run failed is deliberately excluded:
+	// its tree is known red, so stacking the next bead on it would build on
+	// failing code and pin the stack behind a PR that cannot merge.
+	if pushedBranch != "" && !out.localTestFailure {
 		if err := l.state.AddPushedBranch(pushedBranch); err != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.State, Level: logging.Warn}, "AddPushedBranch: %v", err)
 		}
@@ -352,7 +356,11 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 			return completeTaskOut{action: signalComplete, ct: &ct, prNumber: prNumber}
 		}
 		// Actual test failures — leave task open for manual investigation.
-		l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
+		failing := "CI"
+		if out.localTestFailure {
+			failing = "Local tests"
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "%s failing on PR #%d — leaving task %s open.", failing, prNumber, p.taskID)
 		l.git.TagTaskEnd(p.taskID)
 		return completeTaskOut{action: signalComplete, prNumber: prNumber}
 	}

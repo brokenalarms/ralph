@@ -844,9 +844,14 @@ type shipOutcome struct {
 	merged         bool
 	ciFailure      bool
 	ciInfraFailure bool
-	stacked        bool
-	pushedBranch   string
-	shipErr        error
+	// localTestFailure is true when ciFailure came from the pre-merge local
+	// test run rather than from GitHub checks. The bead stays open either way;
+	// this distinguishes what the loop reports and keeps the red branch out of
+	// the stack.
+	localTestFailure bool
+	stacked          bool
+	pushedBranch     string
+	shipErr          error
 	// noNetChange is true when ship pushed the branch but found no net diff
 	// against the base, so no PR was created. Distinguishes a net no-op from
 	// a PR-creation failure when the bead is skipped.
@@ -1002,6 +1007,14 @@ func (l *Loop) shipPhase2Merge(ctx context.Context, taskID, title, workDir, rawL
 			l.markReviewAddressed(taskID, mergeResult.PendingReviewer)
 			reviewAddressed[mergeResult.PendingReviewer] = true
 			continue
+		}
+		if mergeResult.CIFailure && mergeResult.LocalTestDetail != nil {
+			// The pre-merge local suite failed: there is no CI run to
+			// re-trigger and no GitHub log for a fix agent to read. Report it
+			// like a non-infrastructure CI failure so the bead stays open.
+			l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn},
+				"Local tests failed before merge: %v", mergeResult.LocalTestDetail)
+			return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, ciFailure: true, localTestFailure: true, pushedBranch: pushedBranch}
 		}
 		if mergeResult.CIFailure && mergeResult.CIFailureDetail != nil {
 			// Infrastructure failure (zero job steps): CI never actually ran —

@@ -478,6 +478,7 @@ type StubInspector interface {
 	GetAdoptedStackBranch() string
 	GetMergeStackCalls() int
 	GetMergeStackTopPR() string
+	GetBranchForTaskStackParents() []string
 }
 
 // stubRepo is an unexported fake of Ops. Tests receive it only through the
@@ -508,11 +509,18 @@ type stubRepo struct {
 	adoptedStackBranch             string
 	mergeStackCalls                int
 	mergeStackTopPR                string
+	branchForTaskStackParents      []string
 }
 
 // GetBranchForTaskCalls returns the number of times BranchForTask has been
 // called. Used by tests to assert that evolve fired before branch setup.
 func (s *stubRepo) GetBranchForTaskCalls() int { return s.branchForTaskCalls }
+
+// GetBranchForTaskStackParents returns the CompletedBranches the last
+// BranchForTask call was given — the candidate stack parents for the task
+// being set up. Used by tests to assert which branches an iteration is
+// willing to stack on.
+func (s *stubRepo) GetBranchForTaskStackParents() []string { return s.branchForTaskStackParents }
 
 // GetRemoveWorktreeCalls returns the number of times RemoveWorktree has been
 // called. Used by tests to assert that a skipped task tears down its worktree.
@@ -713,6 +721,7 @@ func (s *stubRepo) SyncWorktreeBase(_ context.Context, _ []string) error {
 // branch name.
 func (s *stubRepo) BranchForTask(_ context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
 	s.branchForTaskCalls++
+	s.branchForTaskStackParents = meta.CompletedBranches
 	s.PrepareForNextTask(taskID, "")
 	if s.cfg.BranchForTaskErr != nil {
 		return "", s.cfg.BranchForTaskErr

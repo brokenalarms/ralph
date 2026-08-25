@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -898,5 +899,98 @@ func TestFinalizePR_NetEmptyBranch_SkipsAsNoNetChangeNotPRFailure(t *testing.T) 
 	}
 	if !found {
 		t.Errorf("bead ralph-noop must be skipped for a net-empty branch, skipped=%v", backend.SkippedIDs)
+	}
+}
+
+// The pre-merge local test run failed (no GitHub CI configured), so ship
+// reports a CI failure carrying LocalTestDetail. The bead MUST stay open: on
+// cablecar PR #87 the untyped failure was closed as "merge pending" and the
+// next two beads were stacked on the unmerged, red PR while main stayed put.
+// The log must name local tests (not GitHub CI), and the red branch must not
+// be offered as a stack parent to the following iteration — that iteration
+// starts from origin/main instead.
+func TestFinalizePR_LocalTestFailure_LeavesBeadOpenAndOutOfStack(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		HeadRev:    "after-sha",
+		Ship: git.ShipResult{
+			PRNumber:     87,
+			PRURL:        "https://github.com/owner/repo/pull/87",
+			Merged:       false,
+			CIFailure:    true,
+			PushedBranch: "ralph/ralph-localfail",
+			LocalTestDetail: &git.LocalTestFailureError{
+				PRNumber: 87,
+				Reason:   "test suite failed: exit status 1",
+				Details:  "--- FAIL: TestConnectDeadline",
+			},
+		},
+	})
+	cfg := Config{
+		AutoMerge: true,
+		Dirs:      workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}
+	var buf bytes.Buffer
+	logger := logging.New(&buf)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook:  passingVerifyHook(),
+	})
+
+	p := completeTaskParams{
+		result:     claude.Result{SignalDetected: true, OnSignalUsed: true},
+		headBefore: "before-sha",
+		workDir:    dir,
+		taskID:     "ralph-localfail",
+		nextTask:   "Task whose pre-merge local tests fail",
+	}
+
+	out := l.shipAndFinalize(context.Background(), p)
+
+	backend.CloseMu.Lock()
+	closed := append([]string(nil), backend.ClosedIDs...)
+	reasons := append([]string(nil), backend.CloseReasons...)
+	backend.CloseMu.Unlock()
+
+	if len(closed) != 0 {
+		t.Fatalf("bead must stay open on a failed pre-merge local test run, got CloseTask for %v", closed)
+	}
+	for _, r := range reasons {
+		if strings.Contains(r, "merge pending") {
+			t.Errorf("bead was closed as merge-pending: %q", r)
+		}
+	}
+	if out.merged {
+		t.Error("merged = true — the PR was never merged")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Local tests failing") {
+		t.Errorf("expected the log to name local tests as the failure, got: %s", output)
+	}
+
+	// The following iteration must not stack on the red branch: it is absent
+	// from the stack-parent candidates BranchForTask is given, so stack head
+	// detection resolves nothing and the worktree branches off origin/main.
+	next := taskContext{id: "ralph-nextbead", title: "Following task", changed: true}
+	if outcome := l.setupBranchForTask(context.Background(), next); outcome != branchProceed {
+		t.Fatalf("branch setup for the following task = %v, want branchProceed", outcome)
+	}
+	parents := gm.(git.StubInspector).GetBranchForTaskStackParents()
+	for _, b := range parents {
+		if b == "ralph/ralph-localfail" {
+			t.Errorf("following iteration offered the red branch as a stack parent: %v", parents)
+		}
 	}
 }
