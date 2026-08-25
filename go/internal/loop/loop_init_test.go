@@ -16,42 +16,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// Verifies that initialize writes max_iterations to state.
-func TestInitialize_WritesConfig(t *testing.T) {
-	dir, st := setupTestDir(t)
-
-	backend := &testutil.MutableBackend{
-		StubBackend: testutil.StubBackend{
-			Remaining: 0,
-			Completed: 1,
-			Total:     1,
-		},
-	}
-
-	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
-	cfg := Config{
-		MaxIterations: 7,
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}
-	logger := logging.New(nil)
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-	})
-
-	err := l.initialize(context.Background())
-	if err != nil {
-		t.Fatalf("initialize returned error: %v", err)
-	}
-
-	if got := st.ReadMaxIterations(0); got != 7 {
-		t.Errorf("expected max_iterations=7 in state, got %d", got)
-	}
-}
-
 // Verifies that Loop.Run does NOT call DetectActiveReviewers at startup when no
 // tasks are available — reviewer detection is deferred until a task actually runs.
 func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {

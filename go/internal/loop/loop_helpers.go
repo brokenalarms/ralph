@@ -72,8 +72,6 @@ func (l *Loop) maybeEvolve(fallback postSignalAction) postSignalAction {
 // initialize performs all one-time setup: state config write and worktree sync.
 // The caller is responsible for calling limiter.Init() before initialize.
 func (l *Loop) initialize(ctx context.Context) error {
-	l.state.WriteConfig(l.cfg.MaxIterations)
-
 	l.state.ClearCompletedTasksFile()
 
 	return l.initWorktree(ctx)

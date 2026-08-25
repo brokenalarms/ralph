@@ -29,19 +29,18 @@ type CompletedTaskEntry struct {
 // implementation stores numbers as JSON numbers and strings as JSON strings,
 // and we must preserve that behavior for compatibility.
 type State struct {
-	Iteration      int    `json:"iteration"`
-	Status         string `json:"status"`
-	StartedAt      string `json:"started_at,omitempty"`
-	LastTask       string `json:"last_task,omitempty"`
-	CurrentTaskID  string `json:"current_task_id,omitempty"`
-	WorktreeDir    string `json:"worktree_dir,omitempty"`
-	WorktreeBranch string `json:"worktree_branch,omitempty"`
-	TaskBackend    string `json:"task_backend,omitempty"`
-	MaxIterations  int    `json:"max_iterations"`
-	LastTestResult string `json:"last_test_result,omitempty"`
-	LastTestTime   string `json:"last_test_time,omitempty"`
-	LastGreenDir   string `json:"last_green_dir,omitempty"`
-	LastGreenTree  string `json:"last_green_tree,omitempty"`
+	Iteration      int                  `json:"iteration"`
+	Status         string               `json:"status"`
+	StartedAt      string               `json:"started_at,omitempty"`
+	LastTask       string               `json:"last_task,omitempty"`
+	CurrentTaskID  string               `json:"current_task_id,omitempty"`
+	WorktreeDir    string               `json:"worktree_dir,omitempty"`
+	WorktreeBranch string               `json:"worktree_branch,omitempty"`
+	TaskBackend    string               `json:"task_backend,omitempty"`
+	LastTestResult string               `json:"last_test_result,omitempty"`
+	LastTestTime   string               `json:"last_test_time,omitempty"`
+	LastGreenDir   string               `json:"last_green_dir,omitempty"`
+	LastGreenTree  string               `json:"last_green_tree,omitempty"`
 	CompletedTasks []CompletedTaskEntry `json:"completed_tasks,omitempty"`
 	PushedBranches []string             `json:"pushed_branches,omitempty"`
 
@@ -97,7 +96,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	knownKeys := map[string]bool{
 		"iteration": true, "status": true, "started_at": true,
 		"last_task": true, "current_task_id": true, "worktree_dir": true, "worktree_branch": true,
-		"task_backend": true, "max_iterations": true,
+		"task_backend":     true,
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
 		"last_green_dir": true, "last_green_tree": true,
 		"completed_tasks": true,
@@ -239,18 +238,10 @@ func (st *Store) ClearCurrentTask() error {
 	return st.Save(s)
 }
 
-// Init initializes state with config values. Creates the file if missing.
-func (st *Store) Init(maxIterations int) error {
+// Init creates the state file if missing, preserving any existing state.
+func (st *Store) Init() error {
 	s, _ := st.Load()
-	if s.MaxIterations == 0 {
-		s.MaxIterations = maxIterations
-	}
 	return st.Save(s)
-}
-
-// WriteConfig writes max_iterations to state.
-func (st *Store) WriteConfig(maxIterations int) {
-	st.Write("max_iterations", strconv.Itoa(maxIterations))
 }
 
 // SaveCLIConfig writes CLI config key-value pairs into state.json under a
@@ -295,16 +286,6 @@ func (st *Store) LoadCLIConfig() (map[string]string, error) {
 	}
 	return cfg, nil
 }
-
-// ReadMaxIterations returns max_iterations from state, falling back to the given default.
-func (st *Store) ReadMaxIterations(defaultVal int) int {
-	v, _ := st.Read("max_iterations")
-	if n, err := strconv.Atoi(v); err == nil && n > 0 {
-		return n
-	}
-	return defaultVal
-}
-
 
 // AddCompletedTask appends a task entry to the completed list.
 // merged is true when the PR was successfully merged; false when the work is
@@ -396,8 +377,6 @@ func getField(s State, key string) string {
 		return s.WorktreeBranch
 	case "task_backend":
 		return s.TaskBackend
-	case "max_iterations":
-		return strconv.Itoa(s.MaxIterations)
 	case "last_test_result":
 		return s.LastTestResult
 	case "last_test_time":
@@ -442,8 +421,6 @@ func setField(s *State, key, value string) {
 		s.WorktreeBranch = value
 	case "task_backend":
 		s.TaskBackend = value
-	case "max_iterations":
-		s.MaxIterations, _ = strconv.Atoi(value)
 	case "last_test_result":
 		s.LastTestResult = value
 	case "last_test_time":

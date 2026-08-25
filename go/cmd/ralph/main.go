@@ -114,7 +114,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	// Phase 2 — state and backend init. Pure data-store setup, no git.
 	st := state.NewStore(ralphDir)
-	if err := st.Init(cfg.MaxIterations); err != nil {
+	if err := st.Init(); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to initialize state: %v", err)
 		return 1
 	}

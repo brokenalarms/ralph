@@ -40,11 +40,11 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -84,11 +84,11 @@ func TestLoop_NoTasksError(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -131,11 +131,11 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -183,11 +183,11 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -199,47 +199,6 @@ func TestLoop_ContextCancellation(t *testing.T) {
 	finalState, _ := st.Load()
 	if finalState.Status != "stopped" {
 		t.Errorf("expected status 'stopped', got %q", finalState.Status)
-	}
-}
-
-// Verifies the loop writes max_iterations to state so users can edit it
-// mid-run and the loop picks up the changed value each iteration.
-func TestLoop_MaxIterationsFromState(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	backend := &testutil.StubBackend{
-		Remaining: 0,
-		Completed: 1,
-		Total:     1,
-	}
-
-	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
-
-	logger := logging.New(nil)
-	cfg := Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-		},
-		MaxIterations: 10,
-		CallsPerHour:  80,
-	}
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-		Connectivity: onlineStubConnectivity(),
-	})
-
-	_ = l.Run(context.Background())
-
-	maxIter := st.ReadMaxIterations(0)
-	if maxIter != 10 {
-		t.Errorf("expected max_iterations=10 in state, got %d", maxIter)
 	}
 }
 
@@ -458,11 +417,11 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		Wait:          false,
 	}
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -549,13 +508,13 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -616,13 +575,13 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: &stubVerifyHook{passed: false, reason: "tests failed"},
+		VerifyHook:   &stubVerifyHook{passed: false, reason: "tests failed"},
 	})
 	l.runner = runner
 
@@ -1003,11 +962,11 @@ func TestLoop_EvolveRestart_ReleasedClaimResumesWithoutHalt(t *testing.T) {
 	// and run the agent without entering halted_blocked_by_in_progress.
 	run2Called := false
 	l2 := New(cfg, Modules{
-		State:  st,    // same state — current_task_id is set
-		Git:    gm,
-		TaskBackend: backend, // same backend — Remaining=1 (task is open)
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st, // same state — current_task_id is set
+		Git:          gm,
+		TaskBackend:  backend, // same backend — Remaining=1 (task is open)
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 		Runner: &stubRunner{
 			onRun: func() {

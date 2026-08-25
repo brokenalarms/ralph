@@ -63,7 +63,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		l.state.Write("status", "error")
 		return taskContext{}, actionDone, waited
 	}
-	maxIter := l.state.ReadMaxIterations(p.maxIterations)
+	maxIter := p.maxIterations
 
 	if maxIter > 0 && p.runIteration >= maxIter {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Max iterations (%d) reached", maxIter)

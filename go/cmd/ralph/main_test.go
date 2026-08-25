@@ -215,7 +215,7 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 	st.Write("iteration", "3")
 	st.Write("status", "completed")
 
@@ -331,7 +331,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 	st.Write("status", "running")
 
 	cfg := config.Config{ProjectDir: dir}
@@ -479,7 +479,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 	st.Write("status", "halted_stagnation")
 
 	gm := git.New(git.Config{WorkDir: dir, BaseBranch: "main"})
@@ -503,7 +503,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 	st.Write("status", "completed")
 
 	gm := git.New(git.Config{WorkDir: dir, BaseBranch: "main"})
@@ -528,7 +528,7 @@ func TestCleanup_PreservesCLIConfig(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 	st.SaveCLIConfig(map[string]string{"evolve": "true", "max": "20"})
 
 	gm := git.New(git.Config{WorkDir: dir, BaseBranch: "main"})
@@ -592,7 +592,7 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 	st.Write("status", "completed")
 
 	cfg := config.Config{ProjectDir: dir, Wait: true}
@@ -666,7 +666,7 @@ func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
-	st.Init(5)
+	st.Init()
 	st.Write("status", "completed")
 
 	cfg := config.Config{ProjectDir: dir, Wait: false}
