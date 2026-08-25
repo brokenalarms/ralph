@@ -47,6 +47,7 @@ func TestLoopTestSplitFileStructure(t *testing.T) {
 		"loop_merge_test.go",
 		"loop_signal_test.go",
 		"loop_finalize_test.go",
+		"loop_ship_outcome_test.go",
 		"loop_posttask_test.go",
 		"loop_display_test.go",
 	}

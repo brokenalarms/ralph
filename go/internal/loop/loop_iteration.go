@@ -387,12 +387,28 @@ func (l *Loop) shipAndFinalize(ctx context.Context, p completeTaskParams) comple
 		}
 
 		var closeReason string
-		if stacked {
+		switch {
+		case stacked:
 			closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
-		} else if !merged {
-			closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
-		} else {
+		case merged:
 			closeReason = fmt.Sprintf("Fixed in %s", prRef)
+		case out.autoMergeDisabled:
+			// No merge was attempted: the PR is deliberately left for a human.
+			// "Not merged" is the intended end state, so the bead closes.
+			closeReason = fmt.Sprintf("Verified — %s open, awaiting manual merge", prRef)
+		default:
+			// The merge was attempted and came back neither merged nor stacked,
+			// with no CI failure and no conflict — an unclassified outcome.
+			// Closing here was the fail-open default that closed cablecar-ce0
+			// as merge-pending and seeded the next two beads onto an unmerged,
+			// red PR. Leave the bead open instead: the next iteration finds the
+			// still-open PR and re-enters this function through the
+			// prior-attempt path, and the stagnation cascade bounds the retries.
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+				"Ship failed for PR #%d without a classified outcome (%v) — leaving task %s open",
+				prNumber, out.shipErr, p.taskID)
+			l.git.TagTaskEnd(p.taskID)
+			return completeTaskOut{action: signalComplete, prNumber: prNumber}
 		}
 		l.closeOrSkip(p.taskID, closeReason, merged)
 	}

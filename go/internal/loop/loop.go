@@ -856,6 +856,11 @@ type shipOutcome struct {
 	// against the base, so no PR was created. Distinguishes a net no-op from
 	// a PR-creation failure when the bead is skipped.
 	noNetChange bool
+	// autoMergeDisabled is true when the loop never attempted a merge because
+	// AutoMerge is off. An unmerged PR is the intended end state there, so it
+	// is a classified outcome — unlike a merge that was attempted and neither
+	// merged, stacked, nor reported a CI failure or conflict.
+	autoMergeDisabled bool
 	// conflictUnresolved is true when the merge failed on a conflict that
 	// neither the auto-rebase (ResolveConflict) nor the conflict fix agent
 	// (tryFixConflict) could resolve. Distinguishes "action required" from a
@@ -999,7 +1004,7 @@ func (l *Loop) shipPhase2Merge(ctx context.Context, taskID, title, workDir, rawL
 		})
 		if mergeErr != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship (merge): %v", mergeErr)
-			return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch}
+			return shipOutcome{prNumber: prResultNum, prResultURL: prResultURL, pushedBranch: pushedBranch, shipErr: mergeErr}
 		}
 		if mergeResult.ReviewFixNeeded {
 			// Review fix needed: spawn fix agent, mark addressed, retry.
@@ -1090,7 +1095,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 	}
 
 	if !l.cfg.AutoMerge || result.PRNumber == 0 {
-		return shipOutcome{prNumber: result.PRNumber, prResultURL: result.PRURL, pushedBranch: result.PushedBranch, noNetChange: result.NoNetChange}
+		return shipOutcome{prNumber: result.PRNumber, prResultURL: result.PRURL, pushedBranch: result.PushedBranch, noNetChange: result.NoNetChange, autoMergeDisabled: !l.cfg.AutoMerge}
 	}
 
 	// Phase 2: Ship with merge enabled. Pass the PR number so Ship
