@@ -73,6 +73,7 @@ type Config struct {
 	Wait                       bool
 	Verbose                    bool
 	WorkingModel               string
+	QoSClamp                   string
 	VerifyModel                string
 	VerifyEscalationModel      string
 	FixModel                   string
@@ -246,6 +247,9 @@ func (c *Config) Validate() error {
 	}
 	if c.AdminMergeOnCIInfraFailure && !c.AutoMerge {
 		return fmt.Errorf("--admin-merge-on-ci-infra-failure requires --auto-merge")
+	}
+	if !ValidQoSClamp(c.QoSClamp) {
+		return fmt.Errorf("qos_clamp %q is not one of %s", c.QoSClamp, strings.Join(QoSClamps, ", "))
 	}
 	return nil
 }
@@ -427,4 +431,25 @@ func InitConfig(path string) error {
 		fmt.Fprintf(&b, "# %s = \n", e.key)
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// QoSClamps lists the accepted qos_clamp values: the three clamps
+// taskpolicy(8) -c understands, plus "none" to leave the loop unclamped.
+var QoSClamps = []string{QoSClampUtility, QoSClampBackground, QoSClampMaintenance, QoSClampNone}
+
+const (
+	QoSClampUtility     = "utility"
+	QoSClampBackground  = "background"
+	QoSClampMaintenance = "maintenance"
+	QoSClampNone        = "none"
+)
+
+// ValidQoSClamp reports whether v is one of QoSClamps.
+func ValidQoSClamp(v string) bool {
+	for _, c := range QoSClamps {
+		if v == c {
+			return true
+		}
+	}
+	return false
 }

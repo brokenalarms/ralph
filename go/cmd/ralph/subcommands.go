@@ -164,6 +164,8 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
+	reexecUnderQoSClamp(cfg.QoSClamp, os.Args[1:], log)
+
 	scriptPath, _ := os.Executable()
 
 	existingPID, err := pidfile.Check(filepath.Join(ralphDir, "loop.pid"))

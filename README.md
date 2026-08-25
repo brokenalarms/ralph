@@ -126,9 +126,14 @@ working_model = "sonnet"
 verify_model = "haiku"
 verify_escalation_model = "sonnet"
 fix_model = "opus"
+qos_clamp = "utility"
 ```
 
 Run `ralph loop --help` to see all available options and their corresponding config keys.
+
+### Loop process priority (macOS)
+
+`qos_clamp` (default `utility`) runs the loop under a macOS QoS clamp: `ralph loop` re-execs itself through `taskpolicy -c <clamp>` once at startup, and every process it spawns — the working agent, verifier, fix agents, `git`, `gh`, `bd`, and evolve restarts — inherits the clamp, so a busy loop stays below the UI band and never fights the foreground for cores. Accepted values are `utility`, `background`, `maintenance`, and `none` (leave the loop unclamped). Interactive sessions (`ralph task`, `ralph review`) are never clamped. On non-macOS hosts, or when `/usr/sbin/taskpolicy` is missing, the setting is ignored with a single warning.
 
 ## Architecture
 
