@@ -632,7 +632,32 @@ func (b *BD) CloseTask(id string, reason string) error {
 	if reason == "" {
 		reason = "completed by ralph"
 	}
-	_, err := run.Run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
+	if _, err := run.Run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason); err != nil {
+		return err
+	}
+
+	// A closed bead is the loop's unit of durable progress, so it is the
+	// checkpoint at which the remote copy of the backlog is brought current.
+	// Publishing is best-effort: the close already happened locally.
+	if err := b.pushRemote(); err != nil {
+		log.Printf("bd: dolt push: %v", err)
+	}
+	return nil
+}
+
+// pushRemote publishes the Dolt database to the remote `bd init` derived from
+// git origin, storing it under the hidden ref refs/dolt/data — a lossless
+// off-machine copy of the backlog that the JSONL export is not. Projects
+// initialised before bd grew sync.remote have none configured, and are a no-op.
+func (b *BD) pushRemote() error {
+	entries, err := b.configEntries("")
+	if err != nil {
+		return err
+	}
+	if remote, ok := configEntryValue(entries, "sync.remote"); !ok || remote == "" {
+		return nil
+	}
+	_, err = b.runner().Run(b.ctx(), b.ProjectDir, "dolt", "push")
 	return err
 }
 

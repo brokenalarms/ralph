@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -2756,5 +2757,111 @@ func TestBD_GetFullContext_OpenDepsIncludedClosedExcluded(t *testing.T) {
 	}
 	if strings.Contains(ctx, "ralph-dep3") {
 		t.Errorf("GetFullContext output must not contain depends_on dependency (not a blocker), got: %q", ctx)
+	}
+}
+
+// Proves: closing a bead pushes the Dolt database to its configured remote,
+// so the off-machine copy of the backlog is current the moment a unit of work
+// lands — and the push happens after the close, never before.
+func TestBD_CloseTask_PushesDoltRemoteAfterClose(t *testing.T) {
+	var calls [][]string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		calls = append(calls, args)
+		if len(args) > 1 && args[0] == "config" && args[1] == "show" {
+			return `[{"key":"sync.remote","value":"origin","source":"config.yaml"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.CloseTask("abc123", "done"); err != nil {
+		t.Fatal(err)
+	}
+	var ordered []string
+	for _, c := range calls {
+		if len(c) > 0 && (c[0] == "close" || c[0] == "dolt") {
+			ordered = append(ordered, strings.Join(c, " "))
+		}
+	}
+	want := []string{"close abc123 --reason done", "dolt push"}
+	if !reflect.DeepEqual(ordered, want) {
+		t.Errorf("runner calls = %v, want %v", ordered, want)
+	}
+}
+
+// Proves: projects initialised before bd grew a sync remote are unaffected —
+// with no sync.remote configured, closing a bead issues no dolt command at all
+// rather than failing on a push that has nowhere to go.
+func TestBD_CloseTask_NoPushWithoutSyncRemote(t *testing.T) {
+	var calls [][]string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		calls = append(calls, args)
+		if len(args) > 1 && args[0] == "config" && args[1] == "show" {
+			return `[{"key":"dolt.port","value":"49152","source":"config.yaml"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.CloseTask("abc123", "done"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range calls {
+		if len(c) > 0 && c[0] == "dolt" {
+			t.Errorf("expected no dolt command without sync.remote, got %v", c)
+		}
+	}
+}
+
+// Proves: a failed close never publishes. When bd refuses to close a bead
+// (e.g. blocked by open dependencies) the error reaches the caller unchanged
+// so ParseDependencyBlock can still read it, and no push is attempted.
+func TestBD_CloseTask_NoPushWhenCloseFails(t *testing.T) {
+	var calls [][]string
+	closeErr := errors.New("cannot close abc123: blocked by open issues [dep1 dep2] (use --force to override)")
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		calls = append(calls, args)
+		if len(args) > 0 && args[0] == "close" {
+			return "", closeErr
+		}
+		if len(args) > 1 && args[0] == "config" && args[1] == "show" {
+			return `[{"key":"sync.remote","value":"origin","source":"config.yaml"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	err := b.CloseTask("abc123", "done")
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("CloseTask err = %v, want %v", err, closeErr)
+	}
+	if blockers := ParseDependencyBlock(err); !reflect.DeepEqual(blockers, []string{"dep1", "dep2"}) {
+		t.Errorf("ParseDependencyBlock = %v, want [dep1 dep2]", blockers)
+	}
+	for _, c := range calls {
+		if len(c) > 0 && c[0] == "dolt" {
+			t.Errorf("expected no dolt command after a failed close, got %v", c)
+		}
+	}
+}
+
+// Proves: an unreachable remote does not turn a completed unit of work into a
+// failed one — the bead is closed locally, so CloseTask reports success and the
+// push failure is only logged.
+func TestBD_CloseTask_PushFailureIsNonFatal(t *testing.T) {
+	pushed := false
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 1 && args[0] == "config" && args[1] == "show" {
+			return `[{"key":"sync.remote","value":"origin","source":"config.yaml"}]`, nil
+		}
+		if len(args) > 0 && args[0] == "dolt" {
+			pushed = true
+			return "", errors.New("remote unreachable")
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.CloseTask("abc123", "done"); err != nil {
+		t.Errorf("CloseTask err = %v, want nil when only the push failed", err)
+	}
+	if !pushed {
+		t.Error("expected dolt push to be attempted")
 	}
 }
