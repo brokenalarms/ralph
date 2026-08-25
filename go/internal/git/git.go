@@ -266,6 +266,28 @@ func (r *repo) SetupWorktree(ctx context.Context) error {
 		_ = r.gitCmdErr(r.projectDir, "branch", "-D", r.worktreeBranch)
 	}
 
+	// Remove the previous run's worktree, if this is a fresh (non-resume)
+	// start and one is still registered. Once RenameBranchForTask has moved
+	// the branch off the wip placeholder, the block above never finds it —
+	// this is the only remaining cleanup path for a run that was killed
+	// mid-task and later restarted without --resume.
+	if r.state != nil {
+		if stored, err := r.state.Read("worktree_dir"); err == nil && stored != "" && stored != "null" &&
+			hasPathPrefix(stored, worktreeRoot) && stored != r.workDir {
+			if info, statErr := os.Stat(stored); statErr == nil && info.IsDir() {
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Removing previous run's worktree: %s", stored)
+				if err := r.gitCmdErr(r.projectDir, "worktree", "remove", "--force", stored); err != nil {
+					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to remove previous run's worktree %s: %v", stored, err)
+				}
+				if branch, _ := r.state.Read("worktree_branch"); branch != "" {
+					if err := r.gitCmdErr(r.projectDir, "branch", "-D", branch); err != nil {
+						r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to delete previous run's branch %s: %v", branch, err)
+					}
+				}
+			}
+		}
+	}
+
 	defaultBranch := r.baseBranch
 	// --prune with no explicit refspec argument uses the remote's configured
 	// fetch refspec, so this also removes remote-tracking refs (e.g.

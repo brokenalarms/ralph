@@ -598,6 +598,95 @@ func TestSetupTaskWorktree_UsesUniqueBranchNotRalphNext(t *testing.T) {
 	}
 }
 
+// On a fresh (non-resume) start, SetupWorktree removes the previous run's
+// worktree recorded in state.json — even after RenameBranchForTask has moved
+// it off the wip placeholder branch — so a killed run never leaves a
+// registered worktree behind forever (PruneOrphanedWorktrees only cleans up
+// unregistered directories).
+func TestSetupWorktree_RemovesPreviousRunWorktreeOnFreshStart(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("first SetupWorktree: %v", err)
+	}
+	if err := mgr.RenameBranchForTask("some task", "task-1"); err != nil {
+		t.Fatalf("RenameBranchForTask: %v", err)
+	}
+	oldDir := mgr.workDir
+	oldBranch := mgr.worktreeBranch
+
+	if _, err := os.Stat(oldDir); err != nil {
+		t.Fatalf("setup: old worktree should exist: %v", err)
+	}
+	if oldBranch == "ralph/next" {
+		t.Fatalf("setup: branch should have been renamed off the wip placeholder, got %q", oldBranch)
+	}
+
+	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("second SetupWorktree: %v", err)
+	}
+
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Errorf("previous run's worktree dir should be removed, stat err=%v", err)
+	}
+	if refExistsForTest(t, project, "refs/heads/"+oldBranch) {
+		t.Errorf("previous run's branch %q should be deleted", oldBranch)
+	}
+	out, err := exec.Command("git", "-C", project, "worktree", "list").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git worktree list: %v", err)
+	}
+	if strings.Contains(string(out), oldDir) {
+		t.Errorf("git worktree list should not show removed dir %q: %s", oldDir, out)
+	}
+
+	if mgr2.workDir == oldDir {
+		t.Fatalf("new worktree dir should differ from the removed one: %q", mgr2.workDir)
+	}
+	if _, err := os.Stat(mgr2.workDir); err != nil {
+		t.Errorf("new worktree dir should exist: %v", err)
+	}
+}
+
+// A worktree_dir recorded outside the worktree root must never be touched —
+// it isn't a ralph-managed worktree, so removing it would delete something
+// SetupWorktree doesn't own.
+func TestSetupWorktree_LeavesOutOfRootWorktreeUntouched(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	outside := filepath.Join(t.TempDir(), "outside-worktree")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(outside, "marker.txt")
+	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := newMemState()
+	state.Write("worktree_dir", outside)
+	state.Write("worktree_branch", "ralph/some-other-branch")
+	log := &testLog{}
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("out-of-root worktree_dir should be left untouched, marker file gone: %v", err)
+	}
+	if log.contains("Removing previous run's worktree") {
+		t.Error("should not log removal for an out-of-root worktree_dir")
+	}
+}
+
 // SetupTaskWorktree must NOT write worktree_dir / worktree_branch to
 // state.json — task worktrees are ephemeral and must not contaminate
 // the loop's resume state.
