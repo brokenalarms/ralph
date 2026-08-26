@@ -401,16 +401,27 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 		return gh.GetRunningJobSteps(ctx, nwo, prNumber)
 	}
 
+	prStateFetch := func() (PRState, error) {
+		pr, err := gh.GetPR(ctx, nwo, prNumber)
+		if err != nil {
+			return "", err
+		}
+		if pr == nil {
+			return "", nil
+		}
+		return pr.State, nil
+	}
+
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
-		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, stepFetch, r.logger)
+		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, stepFetch, prStateFetch, r.logger)
 	}
 	status := evaluateChecks(checks)
 	if status != CIPending {
 		return checks, status, nil
 	}
-	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, stepFetch, r.logger)
+	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, hardCap, gracePeriod, stepFetch, prStateFetch, r.logger)
 }
 
 // waitForCI polls PR checks until they complete, the no-progress budget
@@ -437,7 +448,14 @@ func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 // (never per poll) to enrich the line with the currently running GitHub
 // Actions step per in-progress job. A nil stepFetch, or one that errors,
 // falls back to the plain check-name rendering.
-func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, noProgressTimeout, hardCap, gracePeriod time.Duration, stepFetch func() ([]JobStepStatus, error), log Log) ([]CICheckResult, CIStatus, error) {
+//
+// prStateFetch, when non-nil, is called on that same cadence to re-read the
+// state of the PR being gated. A PR merged out-of-band mid-wait ends the wait
+// with ErrPRAlreadyMerged: its checks belong to a branch that no longer needs
+// merging, and a live step on that run would otherwise keep resetting the
+// no-progress budget. A nil prStateFetch, or one that errors, leaves the wait
+// polling exactly as it would without it.
+func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, noProgressTimeout, hardCap, gracePeriod time.Duration, stepFetch func() ([]JobStepStatus, error), prStateFetch func() (PRState, error), log Log) ([]CICheckResult, CIStatus, error) {
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 
 	var zeroChecksSince time.Time
@@ -500,6 +518,17 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 			}
 		}
 
+		// Nothing in the check state reveals that the PR was merged out of
+		// band — the run keeps reporting progress on a branch that no longer
+		// needs merging — so the PR's own state is re-read on the same
+		// cadence. classify treats this as fatal, so retry.Retry surfaces it
+		// instead of polling on.
+		if fetchErr == nil && shouldEmit && prStateFetch != nil {
+			if state, stateErr := prStateFetch(); stateErr == nil && state == PRStateMerged {
+				return false, ErrPRAlreadyMerged
+			}
+		}
+
 		// A running GitHub Actions job step is direct evidence CI is alive even
 		// when the fetched check state itself is frozen — e.g. a single
 		// required check whose status stays "PENDING"/"in_progress" for the
@@ -529,7 +558,7 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 	}
 
 	classify := func(err error) bool {
-		return !errors.Is(err, errCIFrozen)
+		return !errors.Is(err, errCIFrozen) && !errors.Is(err, ErrPRAlreadyMerged)
 	}
 
 	err := retry.Retry(ctx, retry.BackoffOpts{
@@ -545,6 +574,8 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 		return checks, CIPassed, nil
 	case err == nil:
 		return checks, status, nil
+	case errors.Is(err, ErrPRAlreadyMerged):
+		return checks, status, ErrPRAlreadyMerged
 	case errors.Is(err, errCIFrozen):
 		return checks, status, &CIIncompleteError{PRNumber: prNumber, Waited: noProgressTimeout}
 	case errors.Is(err, retry.ErrTimedOut):
