@@ -903,6 +903,10 @@ func (r *repo) gateOnCI(ctx context.Context, prNumber int, repoURL string, prLin
 
 	checks, status, ciErr := r.AwaitCI(ctx, prNumber, repoURL, awaitPushedAt)
 	if ciErr != nil {
+		if errors.Is(ciErr, ErrPRAlreadyMerged) {
+			r.logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "PR #%d was merged while waiting for CI — nothing to merge", prNumber)
+			return true, nil
+		}
 		if r.isInfrastructureFailure(ctx, prNumber) {
 			return r.mergeAsInfrastructureFailure(ctx, prNumber, repoURL, prLink, "CI timed out on PR #%d and job steps are zero — infrastructure failure, proceeding to merge")
 		}
