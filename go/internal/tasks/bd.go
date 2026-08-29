@@ -367,6 +367,18 @@ func (b *BD) HasRemaining() (bool, error) {
 	return issue.ID != "" || issue.Title != "", nil
 }
 
+// Compact squashes Dolt commits older than days into a single base commit and
+// runs Dolt GC. Issue records are untouched — only the auto-commit history that
+// every bd write appends is collapsed, which is what grows a long-lived beads
+// store without bound.
+//
+// This does branch surgery (squash, cherry-pick, swap main, GC), so callers
+// must only invoke it while no task is running.
+func (b *BD) Compact(days int) error {
+	_, err := b.runner().Run(b.ctx(), b.ProjectDir, "compact", "--days", strconv.Itoa(days), "--force")
+	return err
+}
+
 func (b *BD) CountCompleted() (int, error) {
 	return b.countByStatus("closed")
 }
