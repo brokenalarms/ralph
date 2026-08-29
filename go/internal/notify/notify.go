@@ -1,9 +1,11 @@
 package notify
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -122,6 +124,21 @@ func TaskCompleted(taskID, title, summary string, eventAt time.Time) {
 		notifTitle += " " + title
 	}
 	sendNotification(notifTitle, summary, eventAt)
+}
+
+// BackendUnavailable reports that the task backend has failed several polls in
+// a row. Sent once per outage, not once per retry: an unreachable backend
+// otherwise produces an alert every few seconds for as long as it stays down.
+func BackendUnavailable(projectDir string, failures int, cause error, eventAt time.Time) {
+	title := "Task backend unavailable"
+	if projectDir != "" {
+		title += ": " + filepath.Base(projectDir)
+	}
+	body := fmt.Sprintf("%d consecutive task-poll failures", failures)
+	if cause != nil {
+		body += " — " + cause.Error()
+	}
+	sendNotification(title, body, eventAt)
 }
 
 func TaskMerged(taskID, title string, eventAt time.Time) {

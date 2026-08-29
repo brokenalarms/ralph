@@ -20,6 +20,16 @@ type ClosedTaskInfo struct {
 	Metadata map[string]string
 }
 
+// Compactor is implemented by backends whose storage accumulates history that
+// needs periodic collapsing. It is deliberately separate from Backend: a
+// backend that needs no maintenance simply does not implement it, and callers
+// type-assert rather than every implementation growing a no-op method.
+type Compactor interface {
+	// Compact collapses stored history older than days. Implementations may
+	// rewrite storage, so callers must only call this while idle.
+	Compact(days int) error
+}
+
 // Backend abstracts task tracking so ralph can drive iteration.
 type Backend interface {
 	// Init prepares the backend for use (e.g. health checks).

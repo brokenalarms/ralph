@@ -196,6 +196,22 @@ type Config struct {
 	// backoff schedule, but actual infra retries may also be limited by the
 	// overall ship retry budget.
 	InfraRetryBackoffs []time.Duration
+
+	// PollFailureBackoffs overrides the delays between task-poll retries once
+	// polling starts failing (default: 5s, 15s, 30s, 2min, 5min — the last
+	// entry is the sustained rate). Set to zero-duration slices in tests to
+	// avoid sleeping.
+	PollFailureBackoffs []time.Duration
+
+	// PollFailureHaltAfter bounds how long polling may keep failing before the
+	// loop stops rather than retrying forever (default: 30min). A backend that
+	// has been unreachable this long is not going to recover on its own.
+	PollFailureHaltAfter time.Duration
+
+	// StoreCompactInterval overrides how often the task backend's history is
+	// compacted while the loop is idle (default: 7 days). Negative disables
+	// compaction.
+	StoreCompactInterval time.Duration
 }
 
 // Loop is the production Connectivity default, used when Modules.Connectivity
@@ -276,6 +292,9 @@ type Loop struct {
 	activeReviewers         []git.Reviewer
 	reviewersDetected       bool
 	skipStreakReason        tasks.SkipReason // reason of the most recent skip in the current unbroken run of consecutive skips; reset once a task succeeds
+	consecutivePollFailures int              // consecutive task-poll errors; reset on any successful poll
+	firstPollFailureAt      time.Time        // when the current unbroken run of poll failures began; zero when polling is healthy
+	pollFailureNotified     bool             // guards the one-shot notification so a long outage notifies once, not once per retry
 }
 
 // New creates an execution loop from the given configuration and module
