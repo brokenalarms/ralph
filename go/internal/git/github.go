@@ -1109,11 +1109,23 @@ func (g *ghCLI) GetFailedJobAnnotations(ctx context.Context, nwo string, prNumbe
 	return result, nil
 }
 
+// getPRRetrySchedule bounds GetPR's retry budget for its read-only gh api
+// call: two short backoff delays (three attempts total, a few hundred
+// milliseconds total) — enough to survive a one-off transient gh/network
+// blip (e.g. an empty or truncated HTTP response) without stalling Ship's
+// PR state check.
+var getPRRetrySchedule = []time.Duration{200 * time.Millisecond, 400 * time.Millisecond}
+
 func (g *ghCLI) GetPR(ctx context.Context, nwo string, prNumber int) (*PRDetail, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
 	args := []string{"api", endpoint,
 		"--jq", `{state: (if .merged_at != null then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end), base_ref: .base.ref, head_ref: .head.ref, head_sha: .head.sha}`}
-	out, err := g.runGHCmd(ctx, args)
+	var out []byte
+	err := retry.Retry(ctx, retry.BackoffOpts{Schedule: getPRRetrySchedule}, nil, func() (bool, error) {
+		var runErr error
+		out, runErr = g.runGHCmd(ctx, args)
+		return runErr == nil, runErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("gh api PR failed: %w", err)
 	}

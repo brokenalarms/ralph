@@ -497,6 +497,59 @@ func TestListChecks_UsesGhAPICheckRuns(t *testing.T) {
 	}
 }
 
+// GetPR retries a transient gh api failure (e.g. an empty/truncated HTTP
+// response) instead of surfacing it on the first error — a read-only PR
+// state check should survive a one-off blip rather than aborting Ship.
+func TestGetPR_RetriesTransientFailureThenSucceeds(t *testing.T) {
+	bin := t.TempDir()
+	counterFile := filepath.Join(bin, "count")
+	script := "#!/bin/sh\n" +
+		"n=0\n" +
+		"[ -f " + counterFile + " ] && n=$(cat " + counterFile + ")\n" +
+		"n=$((n+1))\n" +
+		"echo $n > " + counterFile + "\n" +
+		"if [ \"$n\" -le 1 ]; then\n" +
+		"  echo 'unexpected end of JSON input' >&2\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"echo '{\"state\":\"OPEN\",\"base_ref\":\"main\",\"head_ref\":\"feature\",\"head_sha\":\"abc123\"}'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	detail, err := g.GetPR(context.Background(), "owner/repo", 42)
+	if err != nil {
+		t.Fatalf("expected GetPR to succeed after retrying the transient failure, got error: %v", err)
+	}
+	if detail.State != PRStateOpen || detail.HeadSHA != "abc123" {
+		t.Errorf("expected PR detail from the successful retry, got %+v", detail)
+	}
+}
+
+// GetPR returns the same "gh api PR failed" wrapped error as before once
+// gh keeps failing across the whole retry budget.
+func TestGetPR_PersistentFailureReturnsWrappedError(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'unexpected end of JSON input' >&2\nexit 1\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	_, err := g.GetPR(context.Background(), "owner/repo", 42)
+	if err == nil {
+		t.Fatal("expected error after exhausting the retry budget, got nil")
+	}
+	if !strings.Contains(err.Error(), "gh api PR failed") {
+		t.Errorf("expected error to contain %q, got %q", "gh api PR failed", err.Error())
+	}
+}
+
 // mapCheckRun maps GitHub API check-run conclusion strings to the
 // State/Bucket values that evaluateChecks uses for merge-gating decisions.
 func TestMapCheckRun_ConclusionMapping(t *testing.T) {
