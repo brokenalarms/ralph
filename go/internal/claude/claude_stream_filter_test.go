@@ -578,7 +578,8 @@ func TestFilterStreamJSON_ProseStatusLine(t *testing.T) {
 	}
 }
 
-// Verifies that non-verbose mode hides VerboseOnlyTools while keeping
+// Verifies that non-verbose mode hides any tool not in VisibleTools —
+// including a tool name unrecognized by the allowlist — while keeping
 // visible tools, prose, signals, and diagnosis banners in the filtered output.
 func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 	dir := t.TempDir()
@@ -599,12 +600,14 @@ func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Verbose-only tools (should be hidden).
+	// Known non-allowlisted tools (should be hidden).
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`)
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}`)
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/tmp/out.go"}}]}}`)
-	// Visible tools.
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/tmp/fix.go"}}]}}`)
+	// A tool name unrecognized by the allowlist (should also be hidden).
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grate","input":{"pattern":"addBtn.disabled|saveBtn.disabled"}}]}}`)
+	// The one visible tool.
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","input":{"prompt":"explore codebase"}}]}}`)
 	// Prose.
 	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"analyzing the results"}}`)
@@ -626,10 +629,11 @@ func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 	}
 	content := ansiRe.ReplaceAllString(string(got), "")
 
-	// Verbose-only tools that were sent should not appear in output.
-	for _, hidden := range []string{"Read", "Bash", "Write", "Edit"} {
+	// Tools that were sent and should not appear in output — known
+	// non-allowlisted tools plus an unrecognized tool name.
+	for _, hidden := range []string{"Read", "Bash", "Write", "Edit", "Grate"} {
 		if !IsVerboseOnlyTool(hidden) {
-			t.Fatalf("test assumption: %s should be in VerboseOnlyTools", hidden)
+			t.Fatalf("test assumption: %s should be verbose-only", hidden)
 		}
 		if strings.Contains(content, "["+hidden+"]") {
 			t.Errorf("%s should be hidden in non-verbose mode, got: %q", hidden, content)
