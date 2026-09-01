@@ -200,6 +200,30 @@ func isVerboseOnlyLine(text string) bool {
 	return IsVerboseOnlyTool(m[1])
 }
 
+// isHiddenFromLoopLog reports whether a single line of extracted stream text
+// is suppressed from loop.log in non-verbose mode. Signal and diagnosis lines
+// are always shown, even though they arrive as verbose-only [Bash] tool calls.
+func isHiddenFromLoopLog(text string) bool {
+	if _, _, ok := parseSignalLine(text); ok {
+		return false
+	}
+	if _, _, ok := parseDiagnosis(text); ok {
+		return false
+	}
+	return isVerboseOnlyLine(text)
+}
+
+// hasLoopLogVisibleLine reports whether any line of extracted stream text
+// would reach loop.log in non-verbose mode.
+func hasLoopLogVisibleLine(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if line != "" && !isHiddenFromLoopLog(line) {
+			return true
+		}
+	}
+	return false
+}
+
 // colorTags applies ANSI color to bracketed tags like [r] or [Edit].
 // This is the agent-specific coloring step applied before the shared
 // Format path (which handles markdown stripping and timestamps).
@@ -240,10 +264,10 @@ func FormatStreamLine(text string) string {
 //	         [Edit] claude_stream.go
 //	15:57:23 [Read] claude_stream.go
 type StreamFormatter struct {
-	lastSignal       string // dedup: suppress consecutive identical signal lines
-	Fmt              logging.LineFormatter
-	workDir          string // when set, strip this prefix from absolute paths
-	hideVerboseOnly  bool   // when true, suppress VerboseOnlyTools lines
+	lastSignal      string // dedup: suppress consecutive identical signal lines
+	Fmt             logging.LineFormatter
+	workDir         string // when set, strip this prefix from absolute paths
+	hideVerboseOnly bool   // when true, suppress VerboseOnlyTools lines
 }
 
 func (f *StreamFormatter) shortenPaths(text string) string {
@@ -295,7 +319,7 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 		result = append(result, f.emitLine(colorTags("[r] "+content))...)
 		return result
 	}
-	if f.hideVerboseOnly && isVerboseOnlyLine(text) {
+	if f.hideVerboseOnly && isHiddenFromLoopLog(text) {
 		return nil
 	}
 	return f.emitLine(colorTags("[r] " + text))
@@ -346,4 +370,3 @@ func FormatStreamOutput(text string) []string {
 	f := &StreamFormatter{}
 	return f.FormatOutput(text)
 }
-

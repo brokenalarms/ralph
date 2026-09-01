@@ -3009,3 +3009,139 @@ func TestPoll_HeartbeatReportsIdleKillCountdown(t *testing.T) {
 		t.Errorf("expected heartbeat reporting idle-kill countdown, logs were: %v", log.logs)
 	}
 }
+
+// Verifies that an agent churning through tools that are hidden from loop.log
+// (Grep/Read/…) still produces a liveness line naming its last hidden action —
+// without this, loop.log can stay silent for many minutes while the agent works,
+// and the user cannot tell a busy agent from a hung one.
+func TestPoll_WorkingHeartbeatDuringHiddenToolActivity(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Emit a verbose-only tool line every 40ms for longer than the 100ms
+	// heartbeat interval. Every line is real raw-log activity, but none of it
+	// reaches loop.log in non-verbose mode.
+	go func() {
+		start := time.Now()
+		for i := 0; time.Since(start) < 300*time.Millisecond; i++ {
+			waitElapsed(t, time.Now(), 40*time.Millisecond, "hidden tool cadence")
+			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"scanNewLines"}}]}}`)
+			f.Close()
+		}
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Heartbeat: 100 * time.Millisecond},
+	}
+
+	runWithCommand(t, &runner, cfg, "sleep", "2")
+
+	var found bool
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Agent working, no visible output for") && strings.Contains(msg, "[Grep] scanNewLines") {
+			found = true
+		}
+		if strings.Contains(msg, "Agent alive") {
+			t.Errorf("raw log was active — expected the working line, not an idle-liveness line: %s", msg)
+		}
+	}
+	if !found {
+		t.Errorf("expected working-liveness line naming the last hidden tool call, logs were: %v", log.logs)
+	}
+}
+
+// Verifies the working-liveness line is rate-limited by the heartbeat interval:
+// hidden tool activity that stays under the interval must not produce any
+// liveness noise in loop.log.
+func TestPoll_NoWorkingHeartbeatBelowInterval(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Same hidden-tool activity, but the run finishes well before the 5s
+	// heartbeat interval elapses.
+	go func() {
+		for i := 0; i < 3; i++ {
+			waitElapsed(t, time.Now(), 40*time.Millisecond, "hidden tool cadence")
+			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"scanNewLines"}}]}}`)
+			f.Close()
+		}
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Heartbeat: 5 * time.Second},
+	}
+
+	runWithCommand(t, &runner, cfg, "sleep", "2")
+
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Agent working") {
+			t.Errorf("unexpected working-liveness line below the heartbeat interval: %s", msg)
+		}
+	}
+}
+
+// Verifies that in verbose mode — where nothing is filtered out of loop.log —
+// tool activity keeps the heartbeat quiet, so the working-liveness line never
+// duplicates output the user is already seeing.
+func TestPoll_VerboseModeSuppressesWorkingHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	go func() {
+		start := time.Now()
+		for time.Since(start) < 300*time.Millisecond {
+			waitElapsed(t, time.Now(), 40*time.Millisecond, "verbose tool cadence")
+			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"scanNewLines"}}]}}`)
+			f.Close()
+		}
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		Verbose:      true,
+		PollInterval: 50 * time.Millisecond,
+		Timeouts:     Timeouts{Heartbeat: 100 * time.Millisecond},
+	}
+
+	runWithCommand(t, &runner, cfg, "sleep", "2")
+
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Agent working") {
+			t.Errorf("unexpected working-liveness line in verbose mode: %s", msg)
+		}
+	}
+}
