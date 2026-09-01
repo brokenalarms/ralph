@@ -94,10 +94,14 @@ func parseSystemStatusEvent(line string) string {
 
 // newLinesScan holds results from scanning newly appended raw log lines.
 type newLinesScan struct {
-	hasActivity      bool
-	lastActivityText string // last extracted line of ANY tool/text (incl. verbose tools) — for the liveness heartbeat
-	isCompacting     bool
-	rateLimit        rateLimitScan
+	hasActivity bool
+	// hasVisibleActivity is true when at least one scanned line would reach
+	// loop.log in non-verbose mode. Verbose-only tool calls (Read, Grep, …)
+	// are activity but not visible output.
+	hasVisibleActivity bool
+	lastActivityText   string // last extracted line of ANY tool/text (incl. verbose tools) — for the liveness heartbeat
+	isCompacting       bool
+	rateLimit          rateLimitScan
 	// System status events (type=system, subtype=status) detected in this scan.
 	statusEvents []string
 }
@@ -203,6 +207,9 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 		}
 		if text := extractStreamText(line); text != "" {
 			result.lastActivityText = firstLine(text)
+			if !result.hasVisibleActivity && hasLoopLogVisibleLine(text) {
+				result.hasVisibleActivity = true
+			}
 		}
 		resetAt, throttled, warning, isUsingOverage, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
 		if ok {
@@ -405,15 +412,28 @@ func (r *Runner) checkSignals(cfg RunConfig, cmd *exec.Cmd, processDone chan str
 	return Result{}, false, false
 }
 
-// emitHeartbeat logs a liveness line when the agent has been quiet longer
-// than heartbeatInterval, then resets *lastEmit. Reports only known facts —
-// the process is alive, how long the raw log has been silent, how long
-// until the idle-kill fires, and the last observed activity — never that
-// the agent is making useful progress: silence looks identical whether the
-// agent is thinking or hung. checkTimeouts is what adjudicates a genuinely
-// stuck agent.
+// emitHeartbeat logs a liveness line when loop.log has shown nothing for
+// longer than heartbeatInterval, then resets *lastEmit. Reports only known
+// facts — the process is alive, whether the raw log is still moving, how long
+// until the idle-kill fires, and the last observed activity — never that the
+// agent is making useful progress: silence looks identical whether the agent
+// is thinking or hung. checkTimeouts is what adjudicates a genuinely stuck
+// agent.
+//
+// When the raw log has advanced since the last visible line, the agent is
+// demonstrably working and only its output is filtered, so no idle-kill
+// countdown applies — that case gets its own message.
 func (r *Runner) emitHeartbeat(cfg RunConfig, heartbeatInterval time.Duration, lastActivity time.Time, lastEmit *time.Time, activitySeen bool, latestActivity string) {
 	if heartbeatInterval <= 0 || time.Since(*lastEmit) < heartbeatInterval {
+		return
+	}
+	if lastActivity.After(*lastEmit) {
+		msg := fmt.Sprintf("Agent working, no visible output for %s", time.Since(*lastEmit).Truncate(time.Second))
+		if latestActivity != "" {
+			msg += " — last: " + latestActivity
+		}
+		r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "%s", msg)
+		*lastEmit = time.Now()
 		return
 	}
 	quiet := time.Since(lastActivity).Truncate(time.Second)
@@ -529,8 +549,13 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				scan := scanNewLines(cfg.RawLog, &logOffset)
 				if scan.hasActivity {
 					lastActivity = time.Now()
-					lastEmit = time.Now()
 					activitySeen = true
+				}
+				// The heartbeat measures silence in loop.log, so only output
+				// the user can actually see resets it. In verbose mode nothing
+				// is filtered, so any activity counts as visible.
+				if scan.hasVisibleActivity || (cfg.Verbose && scan.hasActivity) {
+					lastEmit = time.Now()
 				}
 				if scan.lastActivityText != "" {
 					latestActivity = scan.lastActivityText
