@@ -165,19 +165,12 @@ func firstMeaningfulLine(text string) string {
 	return ""
 }
 
-// VerboseOnlyTools lists tool names that are hidden from the stream log by
-// default and only shown with --verbose. Adding/removing a tool is a one-line
-// change in this map. This is the single source of truth for tool visibility.
-var VerboseOnlyTools = map[string]bool{
-	"Bash":       true,
-	"Edit":       true,
-	"Read":       true,
-	"Write":      true,
-	"Grep":       true,
-	"Glob":       true,
-	"ToolSearch": true,
-	"TodoWrite":  true,
-	"TaskOutput": true,
+// VisibleTools lists the only tool names shown in the stream log by default;
+// every other tool name — including ones the Claude Code binary adds or
+// renames in future versions — is hidden unless --verbose is passed. This is
+// the single source of truth for tool visibility.
+var VisibleTools = map[string]bool{
+	"Agent": true,
 }
 
 // toolNameRe extracts the tool name from a bracketed tool line like "[Read] foo".
@@ -187,7 +180,7 @@ var toolNameRe = regexp.MustCompile(`^\[([A-Za-z]+)\]`)
 // log by default (only shown with --verbose). This is the single entry point
 // for tool visibility checks — both StreamFormatter and ToolBatcher use it.
 func IsVerboseOnlyTool(name string) bool {
-	return VerboseOnlyTools[name]
+	return !VisibleTools[name]
 }
 
 // isVerboseOnlyLine returns true if the line is a tool call for a verbose-only
@@ -267,7 +260,7 @@ type StreamFormatter struct {
 	lastSignal      string // dedup: suppress consecutive identical signal lines
 	Fmt             logging.LineFormatter
 	workDir         string // when set, strip this prefix from absolute paths
-	hideVerboseOnly bool   // when true, suppress VerboseOnlyTools lines
+	hideVerboseOnly bool   // when true, suppress lines for tools not in VisibleTools
 }
 
 func (f *StreamFormatter) shortenPaths(text string) string {

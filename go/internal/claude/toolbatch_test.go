@@ -185,15 +185,16 @@ func TestToolBatcher_FlushEmpty(t *testing.T) {
 	}
 }
 
-// Non-verbose mode suppresses all VerboseOnlyTools while passing through
-// visible tools and prose. Derives expectations from the definition rather
-// than hardcoding tool names.
+// Non-verbose mode suppresses any tool not in VisibleTools — including
+// tool names unrecognized by the allowlist — while passing through visible
+// tools and prose.
 func TestToolBatcher_NonVerboseHidesVerboseOnlyTools(t *testing.T) {
 	b := NewToolBatcher(5*time.Second, "")
 	b.SetVerbose(false)
 
-	// Every tool in VerboseOnlyTools should be suppressed.
-	for tool := range VerboseOnlyTools {
+	// Known non-allowlisted tools, plus an unrecognized tool name, should
+	// all be suppressed.
+	for _, tool := range []string{"Bash", "Edit", "Read", "Write", "Grep", "Glob", "ToolSearch", "TodoWrite", "TaskOutput", "Grate"} {
 		out := b.ProcessLine("[" + tool + "] /path/arg")
 		if len(out) != 0 {
 			t.Errorf("%s should be suppressed in non-verbose mode, got %v", tool, out)
@@ -284,27 +285,26 @@ func TestToolBatcher_VerboseShowsEverything(t *testing.T) {
 	}
 }
 
-// The VerboseOnlyTools set is the single source of truth for which tools are
-// hidden from the stream log by default. This test locks the exact membership
-// so any addition or removal is caught.
+// VisibleTools is the single source of truth for which tools are shown in
+// the stream log by default; every other tool name — known or not — is
+// verbose-only. This test locks the exact allowlist membership so any
+// addition or removal is caught, and proves unrecognized tool names default
+// to hidden rather than leaking through.
 func TestVerboseOnlyTools_ExactMembership(t *testing.T) {
-	expected := map[string]bool{
-		"Bash": true, "Edit": true, "Read": true, "Write": true,
-		"Grep": true, "Glob": true, "ToolSearch": true, "TodoWrite": true, "TaskOutput": true,
-	}
+	expected := map[string]bool{"Agent": true}
 	for tool := range expected {
-		if !IsVerboseOnlyTool(tool) {
-			t.Errorf("%s should be verbose-only", tool)
-		}
-	}
-	if len(VerboseOnlyTools) != len(expected) {
-		t.Errorf("VerboseOnlyTools has %d entries, expected %d — update this test when adding/removing tools",
-			len(VerboseOnlyTools), len(expected))
-	}
-	visible := []string{"Agent"}
-	for _, tool := range visible {
 		if IsVerboseOnlyTool(tool) {
 			t.Errorf("%s should NOT be verbose-only", tool)
+		}
+	}
+	if len(VisibleTools) != len(expected) {
+		t.Errorf("VisibleTools has %d entries, expected %d — update this test when adding/removing tools",
+			len(VisibleTools), len(expected))
+	}
+	hidden := []string{"Bash", "Edit", "Read", "Write", "Grep", "Glob", "ToolSearch", "TodoWrite", "TaskOutput", "Grate"}
+	for _, tool := range hidden {
+		if !IsVerboseOnlyTool(tool) {
+			t.Errorf("%s should be verbose-only", tool)
 		}
 	}
 }
