@@ -499,7 +499,6 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 
 	cfg := interactiveSessionConfig{
 		usage: printTaskUsage,
-		model: agent.ModelFable,
 		buildPrompt: func(promptsDir, projectDir, ralphDir, workDir string) (string, error) {
 			startupCtx := preloadTaskContext(&tasks.BD{ProjectDir: projectDir}, log)
 			systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, workDir, ralphDir, startupCtx)
