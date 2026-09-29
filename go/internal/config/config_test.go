@@ -1277,6 +1277,38 @@ func TestWorkingModelLoadedFromTOML(t *testing.T) {
 	}
 }
 
+// Proves: `ralph task` and `ralph review` default to no model, so the claude
+// CLI falls back to the user's own configured default rather than a model
+// ralph picks for them.
+func TestInteractiveSessionModelsUnsetByDefault(t *testing.T) {
+	cfg := Defaults()
+	if cfg.TaskModel != "" {
+		t.Errorf("cfg.TaskModel = %q, want empty", cfg.TaskModel)
+	}
+	if cfg.ReviewModel != "" {
+		t.Errorf("cfg.ReviewModel = %q, want empty", cfg.ReviewModel)
+	}
+}
+
+// Proves: a project can pin the `ralph task` and `ralph review` session
+// models via task_model and review_model in config.toml.
+func TestInteractiveSessionModelsLoadedFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("task_model = "+ModelFable+"\nreview_model = "+ModelOpus+"\n"), 0o644)
+
+	cfg := Defaults()
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if cfg.TaskModel != ModelFable {
+		t.Errorf("cfg.TaskModel = %q, want %q", cfg.TaskModel, ModelFable)
+	}
+	if cfg.ReviewModel != ModelOpus {
+		t.Errorf("cfg.ReviewModel = %q, want %q", cfg.ReviewModel, ModelOpus)
+	}
+}
+
 // Verifies Validate() fails when BaseBranch is empty and succeeds when set,
 // proving ralph loop exits before the first iteration when no base branch is configured.
 func TestBaseBranchMandatoryValidation(t *testing.T) {

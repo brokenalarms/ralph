@@ -258,7 +258,9 @@ func hasHelpFlag(args []string) bool {
 // runInteractiveSession itself.
 type interactiveSessionConfig struct {
 	usage func()
-	model string
+	// model selects the session's model from the project's config.toml.
+	// An empty result omits --model so claude uses its own default.
+	model func(config.Config) string
 	// buildPrompt returns the system prompt for the session given the
 	// resolved prompts/project/.ralph directories and the session's own
 	// worktree (workDir). The review-session builder ignores workDir.
@@ -300,6 +302,12 @@ func runInteractiveSession(sub config.Subcommand, log *logging.Logger, cfg inter
 	}
 
 	ralphDir := filepath.Join(projectDir, ".ralph")
+
+	projectCfg := config.Defaults()
+	if err := projectCfg.LoadConfigFile(filepath.Join(ralphDir, "config.toml")); err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "Failed to read config.toml: %v", err)
+		return 1
+	}
 
 	promptsDir := filepath.Join(projectDir, "go", "cmd", "ralph", "prompts")
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
@@ -348,7 +356,7 @@ func runInteractiveSession(sub config.Subcommand, log *logging.Logger, cfg inter
 		}
 	}
 
-	r := newInteractiveAgent(log, projectDir, cfg.model)
+	r := newInteractiveAgent(log, projectDir, cfg.model(projectCfg))
 	exitCode, err := r.Interactive(workDir, systemPrompt, extraArgs...)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Interactive session failed: %v", err)
@@ -368,7 +376,7 @@ func runInteractiveSession(sub config.Subcommand, log *logging.Logger, cfg inter
 func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	return runInteractiveSession(sub, log, interactiveSessionConfig{
 		usage: printReviewUsage,
-		model: agent.ModelOpus,
+		model: func(c config.Config) string { return c.ReviewModel },
 		buildPrompt: func(promptsDir, projectDir, ralphDir, workDir string) (string, error) {
 			reflections, err := prompt.ReadReflections(ralphDir)
 			if err != nil {
@@ -499,6 +507,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 
 	cfg := interactiveSessionConfig{
 		usage: printTaskUsage,
+		model: func(c config.Config) string { return c.TaskModel },
 		buildPrompt: func(promptsDir, projectDir, ralphDir, workDir string) (string, error) {
 			startupCtx := preloadTaskContext(&tasks.BD{ProjectDir: projectDir}, log)
 			systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, workDir, ralphDir, startupCtx)
