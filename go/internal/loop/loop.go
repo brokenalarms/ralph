@@ -674,14 +674,15 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 
 	st := &loopState{}
+	l.completedTasks = nil
 	loaded, _ := l.state.Load()
 	iteration := loaded.Iteration
 
 iterLoop:
 	for {
 		// ── Task selection ──
-		completedIDs := make(map[string]bool, len(st.sessionTasks))
-		for _, ct := range st.sessionTasks {
+		completedIDs := make(map[string]bool, len(l.completedTasks))
+		for _, ct := range l.completedTasks {
 			completedIDs[ct.ID] = true
 		}
 		task, action, waited := l.selectNextTask(ctx, selectNextTaskParams{
@@ -839,7 +840,6 @@ iterLoop:
 		l.setPhaseInterrupted(st.currentTaskID)
 	}
 
-	l.completedTasks = st.sessionTasks
 	return nil
 }
 

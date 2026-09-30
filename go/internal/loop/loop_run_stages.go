@@ -19,7 +19,6 @@ type loopState struct {
 	runIteration         int
 	lastAction           analyzer.Action
 	lastTaskMerged       bool
-	sessionTasks         []CompletedTask
 	currentTaskID        string
 	consecutiveSkipCount int
 	worktreeNeedsSetup   bool
@@ -234,7 +233,7 @@ const (
 func (l *Loop) runAftermath(ctx context.Context, task taskContext, haveOut bool, out completeTaskOut, st *loopState) aftermathAction {
 	if haveOut {
 		if out.ct != nil {
-			st.sessionTasks = append(st.sessionTasks, *out.ct)
+			l.completedTasks = append(l.completedTasks, *out.ct)
 			emitTaskSummary(*out.ct, l.logger)
 		}
 		if out.merged {
