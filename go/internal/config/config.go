@@ -77,6 +77,8 @@ type Config struct {
 	VerifyModel                string
 	VerifyEscalationModel      string
 	FixModel                   string
+	TaskModel                  string
+	ReviewModel                string
 	PostTask                   string
 	Verify                     string
 	Notify                     bool

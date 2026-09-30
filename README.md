@@ -156,6 +156,8 @@ Ralph assigns models per role, configured in `.ralph/config.toml` as bare tier a
 | Verifier | `verify_model` | haiku | LLM diff-vs-acceptance-criteria review, first attempt | Escalates to `verify_escalation_model` on subsequent attempts |
 | Verifier (escalated) | `verify_escalation_model` | sonnet | LLM verification, attempts after the first | — |
 | Fix agent | `fix_model` | opus | Test/compile/verify/CI/Copilot/conflict repairs | Runs at `fix_model` from its first attempt, no lower-tier warm-up |
+| Task manager | `task_model` | unset | The interactive `ralph task` session | Unset leaves the model to Claude's own configured default |
+| Reviewer | `review_model` | unset | The interactive `ralph review` session | Unset leaves the model to Claude's own configured default |
 
 **Per-bead assignment.** The task manager stamps model metadata on every bead it creates — `sonnet` for mechanical, well-specified work, `opus` for work requiring judgment, design, or diagnosis, `fable` for the hardest beads (deep architectural work, subtle concurrency or control-flow diagnosis, or a bead whose previous attempt failed at opus). `resolveAgentModel` in `go/internal/loop/loop.go` applies that override to the working agent only: fix agents and the verifier always use their configured `fix_model`/`verify_model`/`verify_escalation_model`, regardless of a bead's metadata. If a bead's model metadata doesn't match a recognized model family, the loop falls back to `working_model` and logs a warning.
 

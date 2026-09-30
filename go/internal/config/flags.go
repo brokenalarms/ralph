@@ -636,6 +636,28 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.FixModel },
 	},
 	{
+		Help:          "Model for the interactive `ralph task` session (unset = Claude's configured default)",
+		ConfigKey:     "task_model",
+		Kind:          KindString,
+		CommentInInit: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.TaskModel = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.TaskModel },
+	},
+	{
+		Help:          "Model for the interactive `ralph review` session (unset = Claude's configured default)",
+		ConfigKey:     "review_model",
+		Kind:          KindString,
+		CommentInInit: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.ReviewModel = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.ReviewModel },
+	},
+	{
 		Help:      "Emit an agent-liveness heartbeat at this interval during quiet agent runs (0 disables)",
 		Default:   "60s",
 		EnvVar:    "RALPH_AGENT_HEARTBEAT_INTERVAL",
