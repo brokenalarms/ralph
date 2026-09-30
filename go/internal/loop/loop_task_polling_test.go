@@ -255,3 +255,72 @@ func TestProcessRunOutcome_NoTaskCountInIterationLog(t *testing.T) {
 		t.Errorf("end-of-iteration line must not contain lifetime task counts, got:\n%s", msg)
 	}
 }
+
+// Verifies that the iteration banner printed before the second task reports
+// '1 done this run' once the first task has completed, so operators see live
+// per-run progress rather than a count frozen at zero until Run returns.
+func TestLoop_IterationBannerCountsTasksCompletedEarlierInRun(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    2,
+			Completed:    0,
+			Total:        2,
+			NextTask:     "first task",
+			NextID:       "ralph-bn01",
+			BackendLabel: "beads",
+		},
+	}
+
+	runs := 0
+	runner := &stubRunner{
+		onRun: func() {
+			backend.Lock()
+			defer backend.Unlock()
+			runs++
+			backend.Completed = runs
+			backend.Remaining = 2 - runs
+			backend.NextTask = "second task"
+			backend.NextID = "ralph-bn02"
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 2,
+		CallsPerHour:  80,
+	}
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "1 done this run") {
+		t.Errorf("expected '1 done this run' in a later iteration banner, got:\n%s", output)
+	}
+	if got := len(l.SessionTasks()); got != 2 {
+		t.Errorf("expected 2 session tasks after Run, got %d", got)
+	}
+}
