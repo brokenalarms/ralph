@@ -18,7 +18,6 @@ import (
 type loopState struct {
 	runIteration         int
 	lastAction           analyzer.Action
-	lastTaskMerged       bool
 	currentTaskID        string
 	consecutiveSkipCount int
 	worktreeNeedsSetup   bool
@@ -190,12 +189,8 @@ func (l *Loop) dispatchAgentAction(ctx context.Context, task taskContext, agentR
 		return dispatchOutcome{action: dispatchFallthrough, haveOut: true, out: out, skipSignalCheck: true}
 	case actionSkip:
 		// A skipped task's partial commits must be abandoned, not left
-		// on the worktree branch. The flush safety-net (selectNextTask →
-		// FlushUnpushedWork) pushes and auto-merges any branch ahead of
-		// origin/main when no ready tasks remain, with no verification
-		// gate — so a surviving skipped branch ships unverified work.
-		// Tear down here (mirroring the signalSkipped path) so the next
-		// iteration starts from a clean worktree.
+		// on the worktree branch. Tear down here (mirroring the signalSkipped
+		// path) so the next iteration starts from a clean worktree.
 		l.teardownWorktree()
 		st.worktreeNeedsSetup = true
 		// Task skipped. Same-reason recurrences already halted at the
@@ -237,13 +232,16 @@ func (l *Loop) runAftermath(ctx context.Context, task taskContext, haveOut bool,
 			emitTaskSummary(*out.ct, l.logger)
 		}
 		if out.merged {
-			st.lastTaskMerged = true
 			// A task actually shipped — real progress breaks the skip streak,
 			// since whatever reason caused prior skips is not app-wide.
 			l.resetSkipStreak()
 		}
 		if out.action == signalRetry {
 			return aftermathContinue
+		}
+		// Set before the evolve check, which leaves the loop on a restart.
+		if out.action == signalSkipped || out.merged || out.prNumber > 0 {
+			l.taskEnded = true
 		}
 		// signalSkipped or signalComplete: fire post-task hook and check for
 		// binary rebuild. On signalRetry the task is not yet done — skipped above.

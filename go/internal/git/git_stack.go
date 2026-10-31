@@ -38,7 +38,7 @@ import (
 // git_helpers.go (PruneOrphanedWorktrees)
 //   worktree prune / list          worktree mgmt      allowed
 //
-// git_merge.go (PostMergeUpdateMain / FlushUnpushedWork)
+// git_merge.go (PostMergeUpdateMain)
 //   fetch origin <branch>          fetch              allowed
 //   branch -D                      branch delete      allowed
 //

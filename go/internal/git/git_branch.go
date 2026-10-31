@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/brokenalarms/ralph/internal/logging"
 )
@@ -23,34 +22,11 @@ func (r *repo) SyncWorktreeBase(ctx context.Context, completedBranches []string)
 	setStackHead(ctx, r, completedBranches)
 	r.stackHeadResolved = true
 	if r.prevBranch == "" {
-		if len(completedBranches) > 0 && !r.onInFlightTask(completedBranches) {
-			// Stack drained (top branch merged or PR closed) — local commits on
-			// the worktree are ghosts from the prior stack and cannot cleanly
-			// rebase onto an advanced origin/main. Force-reset discards them;
-			// any dirty WIP is captured via `git stash create` (a dangling
-			// commit, not on the shared stash stack) and re-applied after reset.
-			r.forceResetToDefaultBranch()
-		} else {
-			// No prior stack, or the run stopped mid-task — local commits are
-			// genuine WIP. Preserve and let EnsureUpToDate rebase or abort.
-			r.ResetToDefaultBranch()
-		}
+		// A task that ended tore down its own worktree, so any local commits
+		// here belong to the interrupted task. EnsureUpToDate rebases them.
+		r.ResetToDefaultBranch()
 	}
 	return r.EnsureUpToDate(ctx)
-}
-
-// onInFlightTask reports whether the worktree holds a task the run stopped
-// partway through: current_task_id is cleared when a task finishes, and its
-// branch joins completedBranches once pushed.
-func (r *repo) onInFlightTask(completedBranches []string) bool {
-	if r.state == nil {
-		return false
-	}
-	taskID, err := r.state.Read("current_task_id")
-	if err != nil || taskID == "" {
-		return false
-	}
-	return !slices.Contains(completedBranches, r.worktreeBranch)
 }
 
 // BranchForTask prepares a branch for the given task: detects the stack head,

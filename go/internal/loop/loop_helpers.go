@@ -35,10 +35,23 @@ func (l *Loop) binaryHashChanged() bool {
 // worktree, deletes the local branch, and empties the worktree state markers so
 // the next startup does not attempt to resume a gone directory.
 func (l *Loop) teardownWorktree() {
+	l.taskEnded = false
 	l.git.RemoveWorktree()
 	if err := l.state.ClearCurrentTask(); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ClearCurrentTask after teardown: %v", err)
 	}
+}
+
+// finishEndedTask tears down the worktree of a task that has ended. It runs
+// before every task selection and on loop exit, so whichever way a task ends,
+// its worktree never outlives it.
+func (l *Loop) finishEndedTask(st *loopState) {
+	if !l.taskEnded {
+		return
+	}
+	l.teardownWorktree()
+	st.worktreeNeedsSetup = true
+	l.state.WriteRunBranch("")
 }
 
 // postTaskAndMaybeEvolve runs the post-task hook unconditionally, then checks

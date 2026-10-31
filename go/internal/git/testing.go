@@ -426,8 +426,6 @@ type StubRepoConfig struct {
 	PushAndCreatePRErr error
 	MergeRetrySucceeds bool
 	MergeRetryErr      error
-	FlushMerged        bool
-	FlushErr           error
 	MergeStackResult   MergeStackResult
 	MergeStackErr      error
 	ResumeTaskResult   ResumeTaskResult
@@ -477,7 +475,6 @@ type StubInspector interface {
 	GetRemoveWorktreeCalls() int
 	GetRemoveWorktreeForBranchCalls() int
 	GetRemovedWorktreeForBranch() string
-	GetFlushUnpushedWorkCalls() int
 	GetReplyToAndResolveCommentsCalls() int
 	GetAdoptedStackBranch() string
 	GetMergeStackCalls() int
@@ -509,7 +506,6 @@ type stubRepo struct {
 	removeWorktreeCalls            int
 	removeWorktreeForBranchCalls   int
 	removedWorktreeForBranch       string
-	flushUnpushedWorkCalls         int
 	replyToAndResolveCommentsCalls int
 	adoptedStackBranch             string
 	mergeStackCalls                int
@@ -545,11 +541,6 @@ func (s *stubRepo) GetRemoveWorktreeForBranchCalls() int { return s.removeWorktr
 // GetRemovedWorktreeForBranch returns the branch name passed to the most
 // recent RemoveWorktreeForBranch call.
 func (s *stubRepo) GetRemovedWorktreeForBranch() string { return s.removedWorktreeForBranch }
-
-// GetFlushUnpushedWorkCalls returns the number of times FlushUnpushedWork has
-// been called. Used by tests to assert that a skipped task's branch is not
-// flushed/auto-merged by the wait-mode safety-net.
-func (s *stubRepo) GetFlushUnpushedWorkCalls() int { return s.flushUnpushedWorkCalls }
 
 // GetReplyToAndResolveCommentsCalls returns the number of times
 // ReplyToAndResolveComments has been called. Used by tests to assert that a
@@ -875,11 +866,6 @@ func (s *stubRepo) ResumeTask(_ context.Context, _ ResumeTaskMeta, _ ResumeTaskO
 
 func (s *stubRepo) MergeWithRetry(_ context.Context, _ MergeRetryOpts) (bool, error) {
 	return s.cfg.MergeRetrySucceeds, s.cfg.MergeRetryErr
-}
-
-func (s *stubRepo) FlushUnpushedWork(_ context.Context, _, _ string, _ bool) (bool, error) {
-	s.flushUnpushedWorkCalls++
-	return s.cfg.FlushMerged, s.cfg.FlushErr
 }
 
 // PostMergeUpdateMain is a no-op in the stub: production fast-forwards the

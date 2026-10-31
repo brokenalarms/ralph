@@ -116,7 +116,6 @@ type Ops interface {
 
 	// Merge operations.
 	MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error)
-	FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error)
 	PostMergeUpdateMain()
 
 	// MergeStack merges a stack of PRs bottom-up: collects the chain from
