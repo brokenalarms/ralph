@@ -782,9 +782,10 @@ func (r *repo) ResetToDefaultBranch() {
 // reset. On apply conflict, the worktree is reset again to discard the WIP
 // cleanly; the dangling stash commit is left for git gc.
 //
-// Used by SyncWorktreeBase when setStackHead returns prevBranch="" — the
-// local commits are known ghosts from a drained stack and must be discarded,
-// not preserved. All other callers must use ResetToDefaultBranch.
+// Used by SyncWorktreeBase when setStackHead returns prevBranch="" and no task
+// is in flight — the local commits are known ghosts from a drained stack and
+// must be discarded, not preserved. All other callers must use
+// ResetToDefaultBranch.
 func (r *repo) forceResetToDefaultBranch() {
 	defaultBranch := r.baseBranch
 	_ = r.gitCmdErr(r.workDir, "fetch", "origin", defaultBranch)

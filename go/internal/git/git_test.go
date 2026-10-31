@@ -1452,6 +1452,87 @@ func TestSyncWorktreeBase_StackDrain_DiscardsLocalCommits(t *testing.T) {
 	}
 }
 
+// Every earlier task merging leaves the stack drained, but commits on a task
+// still in progress are that task's only copy, so `ralph resume` must keep them
+// and its uncommitted edits through startup and into the task's first iteration.
+func TestSyncWorktreeBase_StackDrain_KeepsInFlightTaskWork(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(st))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", mgr.workDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "config", "user.name", "test")
+	run(t, "git", "-C", mgr.workDir, "config", "user.email", "test@test")
+
+	mgr.RenameBranchForTask("in flight task", "ralph-live")
+	if err := st.Write("current_task_id", "ralph-live"); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, mgr.workDir, "work.txt", "committed\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "in-flight work")
+	commitSHA := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(mgr.workDir, "work.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	completed := []string{"ralph/prior-drained"}
+	if err := mgr.SyncWorktreeBase(context.Background(), completed); err != nil {
+		t.Fatalf("SyncWorktreeBase: %v", err)
+	}
+	if _, err := mgr.BranchForTask(context.Background(), "ralph-live", "in flight task", BranchTaskMeta{CompletedBranches: completed}); err != nil {
+		t.Fatalf("BranchForTask: %v", err)
+	}
+
+	if got := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD")); got != commitSHA {
+		t.Errorf("HEAD = %q, want in-flight commit %q", got, commitSHA)
+	}
+	data, err := os.ReadFile(filepath.Join(mgr.workDir, "work.txt"))
+	if err != nil {
+		t.Fatalf("work.txt missing: %v", err)
+	}
+	if string(data) != "uncommitted\n" {
+		t.Errorf("work.txt = %q, want the uncommitted edit to survive", string(data))
+	}
+}
+
+// A task already pushed as complete is finished even if current_task_id was
+// never cleared, so its branch's commits are still ghosts of the drained stack
+// and must not leak into the next PR as stale duplicates.
+func TestSyncWorktreeBase_StackDrain_DiscardsCommitsOnCompletedBranch(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(st))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", mgr.workDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "config", "user.name", "test")
+	run(t, "git", "-C", mgr.workDir, "config", "user.email", "test@test")
+
+	mgr.RenameBranchForTask("finished task", "ralph-done")
+	if err := st.Write("current_task_id", "ralph-done"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, mgr.workDir, "ghost.txt", "ghost\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "ghost")
+
+	if err := mgr.SyncWorktreeBase(context.Background(), []string{mgr.worktreeBranch}); err != nil {
+		t.Fatalf("SyncWorktreeBase: %v", err)
+	}
+
+	originHead := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "origin/main"))
+	if got := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD")); got != originHead {
+		t.Errorf("HEAD = %q, want origin/main = %q (ghost commit not discarded)", got, originHead)
+	}
+}
+
 // SyncWorktreeBase on a drained stack captures dirty WIP via `git stash
 // create` (dangling commit, not on the shared stash stack), hard-resets to
 // origin/<default>, then re-applies the WIP. The shared stash list is never

@@ -1241,6 +1241,45 @@ func TestRun_PromptTooLongTriggersCompactedResult(t *testing.T) {
 	}
 }
 
+// The raw log is shared across a day's iterations, so an earlier oversized task
+// must not mark every later run that exits without a signal as too big, or
+// healthy tasks would be parked and skipped for a failure they never had.
+func TestRun_PromptTooLongFromEarlierRunIsIgnored(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	if err := os.WriteFile(rawLog, []byte("Error: Prompt is too long\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("true")
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	result, err := runner.Run(RunConfig{
+		Ctx:          context.Background(),
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      DefaultSignalPaths(dir),
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Compacted {
+		t.Errorf("expected stale 'Prompt is too long' to be ignored, got result=%+v", result)
+	}
+}
+
 // TestRun_NormalFailureDoesNotTriggerCompacted verifies that a process failing
 // for an unrelated reason (no "Prompt is too long" in the raw log) does NOT
 // get routed through the too-big handler — only the specific hard-limit
@@ -3027,11 +3066,13 @@ func TestPoll_NoHeartbeatDuringActiveOutput(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Write activity every 40ms (faster than the 120ms heartbeat interval), then
-	// complete. The heartbeat should never fire. The 40ms cadence is load
-	// generation, paced via an elapsed-time wait rather than a bare sleep.
+	// Write activity every 40ms for about 800ms, then complete. The run outlasts
+	// the 400ms heartbeat interval, so only the activity resets keep the heartbeat
+	// quiet, and a loaded machine must stall a write tenfold to fire it. The 40ms
+	// cadence is load generation, paced via an elapsed-time wait rather than a
+	// bare sleep.
 	go func() {
-		for i := 0; i < 8; i++ {
+		for i := 0; i < 20; i++ {
 			waitElapsed(t, time.Now(), 40*time.Millisecond, "active output cadence")
 			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 			fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"working"}}`)
@@ -3047,10 +3088,10 @@ func TestPoll_NoHeartbeatDuringActiveOutput(t *testing.T) {
 		RawLog:       rawLog,
 		Signals:      signals,
 		PollInterval: 50 * time.Millisecond,
-		Timeouts:     Timeouts{Heartbeat: 120 * time.Millisecond},
+		Timeouts:     Timeouts{Heartbeat: 400 * time.Millisecond},
 	}
 
-	runWithCommand(t, &runner, cfg, "sleep", "1")
+	runWithCommand(t, &runner, cfg, "sleep", "5")
 
 	for _, msg := range log.logs {
 		if strings.Contains(msg, "Agent alive") {
