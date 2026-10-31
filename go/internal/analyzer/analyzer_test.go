@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const agentEditedFileLog = `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit"}]}}` + "\n"
+
 // Verifies that an iteration with no log output is treated as benign,
 // so empty/quiet iterations don't trip any detection heuristics.
 func TestEmptyLogContinues(t *testing.T) {
@@ -135,7 +137,7 @@ func TestStagnationResetsOnSignal(t *testing.T) {
 func TestTestSaturationHaltsAfterThree(t *testing.T) {
 	a := New()
 	testOnly := IterationState{
-		IterationLog: "wrote some tests\n",
+		IterationLog: agentEditedFileLog,
 		HasDiff:      true,
 		ChangedFiles: []string{"pkg/handler_test.go", "tests/integration.py"},
 	}
@@ -150,6 +152,24 @@ func TestTestSaturationHaltsAfterThree(t *testing.T) {
 	r := a.Analyze(testOnly)
 	if r.Action != Halt || r.Reason != "test_saturation" {
 		t.Errorf("3rd test-only iteration: got %+v, want Halt/test_saturation", r)
+	}
+}
+
+// Uncommitted test edits from an earlier iteration stay in the worktree, so an
+// agent that dies on startup still reports test-only changes. Those iterations
+// did no work, so they must not halt a run whose task is otherwise finishing.
+func TestTestSaturationIgnoresIterationsWithoutToolCalls(t *testing.T) {
+	a := New()
+	deadAgent := IterationState{
+		IterationLog: assistantTextMsg("You've hit your session limit"),
+		HasDiff:      true,
+		ChangedFiles: []string{"tests/integration.py"},
+	}
+
+	for i := 0; i < 5; i++ {
+		if r := a.Analyze(deadAgent); r.Action != Continue {
+			t.Fatalf("dead iteration %d: got %+v, want Continue", i+1, r)
+		}
 	}
 }
 
@@ -215,7 +235,7 @@ func TestNormalProgressResetsCounters(t *testing.T) {
 	a.testOnlyCount = 2
 
 	realChange := IterationState{
-		IterationLog: assistantTextMsg("implementing feature"),
+		IterationLog: agentEditedFileLog,
 		HasDiff:      true,
 		ChangedFiles: []string{"src.js"},
 	}
@@ -238,7 +258,7 @@ func TestMixedTestAndSourceResetsTestOnlyCount(t *testing.T) {
 	a.testOnlyCount = 2
 
 	mixed := IterationState{
-		IterationLog: assistantTextMsg("add source and tests"),
+		IterationLog: agentEditedFileLog,
 		HasDiff:      true,
 		ChangedFiles: []string{"AppTests/HTTPClientTests.swift", "src/HTTPClient.swift"},
 	}
@@ -257,7 +277,7 @@ func TestFilesUnderTopLevelTestDirCountAsTestFiles(t *testing.T) {
 	a := New()
 
 	testHelper := IterationState{
-		IterationLog: assistantTextMsg("adding test helper"),
+		IterationLog: agentEditedFileLog,
 		HasDiff:      true,
 		ChangedFiles: []string{"tests/helpers/setup.js"},
 	}
@@ -276,7 +296,7 @@ func TestFilesUnderSuffixedTestDirsCountAsTestFiles(t *testing.T) {
 	a := New()
 
 	suffixedTests := IterationState{
-		IterationLog: assistantTextMsg("adding test helpers"),
+		IterationLog: agentEditedFileLog,
 		HasDiff:      true,
 		ChangedFiles: []string{"musicXmusicTests/SetupHelper.swift", "musicXmusicUITests/UIFixture.swift"},
 	}
@@ -404,7 +424,7 @@ func TestNoTaskKeySkipsErrorFingerprinting(t *testing.T) {
 func TestTestSaturationResetsAcrossTaskBoundary(t *testing.T) {
 	a := New()
 	testOnly := IterationState{
-		IterationLog: "wrote some tests\n",
+		IterationLog: agentEditedFileLog,
 		HasDiff:      true,
 		ChangedFiles: []string{"pkg/handler_test.go"},
 	}
@@ -433,7 +453,7 @@ func TestTestSaturationResetsAcrossTaskBoundary(t *testing.T) {
 func TestTestSaturationStillFiresWithinSameTask(t *testing.T) {
 	a := New()
 	testOnly := IterationState{
-		IterationLog: "wrote some tests\n",
+		IterationLog: agentEditedFileLog,
 		HasDiff:      true,
 		ChangedFiles: []string{"pkg/handler_test.go"},
 		TaskKey:      "same-task",

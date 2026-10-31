@@ -120,7 +120,9 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 	a.stagnantCount = 0
 
 	// --- Test saturation: 3 consecutive test-only change iterations → halt ---
-	if hasChanges && len(state.ChangedFiles) > 0 {
+	// ChangedFiles includes uncommitted edits left by earlier iterations, so an
+	// agent that made no tool calls wrote none of them and doesn't count.
+	if hasChanges && len(state.ChangedFiles) > 0 && parsed.UsedTools {
 		allTestFiles := true
 		for _, f := range state.ChangedFiles {
 			if !isTestFile(f) {
@@ -170,6 +172,7 @@ func isTestFile(path string) bool {
 // split by source so detectors can target the right signal.
 type parsedLog struct {
 	AssistantText string // text and thinking blocks from assistant messages
+	UsedTools     bool
 }
 
 // parseLog walks the JSON-lines log once, extracting assistant text and
@@ -177,6 +180,7 @@ type parsedLog struct {
 // AssistantText to avoid false positives from file contents in tool results.
 func parseLog(log string) parsedLog {
 	var text strings.Builder
+	usedTools := false
 
 	for _, line := range strings.Split(log, "\n") {
 		line = strings.TrimSpace(line)
@@ -216,12 +220,15 @@ func parseLog(log string) parsedLog {
 						text.WriteString(b.Thinking)
 						text.WriteByte('\n')
 					}
+				case "tool_use":
+					usedTools = true
 				}
 			}
 		}
 	}
 	return parsedLog{
 		AssistantText: text.String(),
+		UsedTools:     usedTools,
 	}
 }
 

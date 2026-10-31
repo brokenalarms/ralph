@@ -1324,6 +1324,103 @@ func TestRun_IdleTimeoutWithThrottleEvidenceReclassifiesAsRateLimited(t *testing
 	}
 }
 
+// The raw log is shared across a day's iterations, so a limit that has since
+// reset is still on disk when the next agent runs. Reading it as current would
+// park a healthy run, and "resets 1:20am" read after 1:20am means tomorrow, so
+// the park would last a full day. Only this run's output may count as evidence.
+func TestRun_ThrottleEvidenceFromEarlierRunIsIgnored(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	stale := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1,"rateLimitType":"five_hour"}}` + "\n" +
+		"You've hit your session limit · resets 1:20am (Asia/Calcutta)\n"
+	if err := os.WriteFile(rawLog, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("true")
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	result, err := runner.Run(RunConfig{
+		Ctx:          context.Background(),
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      DefaultSignalPaths(dir),
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RateLimited {
+		t.Fatalf("expected stale throttle evidence to be ignored, got result=%+v", result)
+	}
+}
+
+// A fix agent runs inside OnSignal and appends to the main run's raw log, and
+// its own RateLimited result does not reach the loop. The main run must still
+// surface the limit, or the loop treats the rejection as ordinary "agent
+// continues" and keeps relaunching agents that cannot start.
+func TestRun_FixAgentThrottleDuringOnSignalReportsRateLimited(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	release := filepath.Join(dir, "release")
+	const resetsAt = 1793389800
+
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			script := fmt.Sprintf(`echo done > %q; while [ ! -f %q ]; do sleep 0.05; done`, signals.Complete, release)
+			cmd := exec.Command("sh", "-c", script)
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	result, err := runner.Run(RunConfig{
+		Ctx:          context.Background(),
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		OnSignal: func(summary string) bool {
+			f, err := os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				t.Error(err)
+				return false
+			}
+			fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":%d,"rateLimitType":"five_hour"}}`+"\n", resetsAt)
+			f.Close()
+			os.WriteFile(release, nil, 0o644)
+			return false
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.RateLimited {
+		t.Fatalf("expected RateLimited=true from the fix agent's rejection, got result=%+v", result)
+	}
+	if expected := time.Unix(resetsAt, 0); !result.ResetAt.Equal(expected) {
+		t.Errorf("expected ResetAt=%v, got %v", expected, result.ResetAt)
+	}
+}
+
 // Verifies that the shorter progress-aware timeout fires once the agent has
 // produced content output in the raw log (text activity flips activitySeen).
 func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
