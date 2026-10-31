@@ -178,8 +178,8 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	// context window instead of being silently summarized. Route that failure
 	// through the same too-big handling as a real-time "compacting" event.
 	if !result.SignalDetected && !result.Compacted && !result.IdleTimeout && !result.RateLimited {
-		if logData, err := os.ReadFile(cfg.RawLog); err == nil {
-			if containsPromptTooLong(string(logData)) {
+		if runLog, err := readLogFrom(cfg.RawLog, runLogStart); err == nil {
+			if containsPromptTooLong(runLog) {
 				result.Compacted = true
 				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Context limit (200K) exceeded — task too big")
 			}
