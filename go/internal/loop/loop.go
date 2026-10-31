@@ -292,6 +292,7 @@ type Loop struct {
 	activeReviewers         []git.Reviewer
 	reviewersDetected       bool
 	skipStreakReason        tasks.SkipReason // reason of the most recent skip in the current unbroken run of consecutive skips; reset once a task succeeds
+	taskEnded               bool             // the current task finished, so its worktree must go; an interrupted task never sets this and keeps its worktree for resume
 	consecutivePollFailures int              // consecutive task-poll errors; reset on any successful poll
 	firstPollFailureAt      time.Time        // when the current unbroken run of poll failures began; zero when polling is healthy
 	pollFailureNotified     bool             // guards the one-shot notification so a long outage notifies once, not once per retry
@@ -397,6 +398,13 @@ func (l *Loop) skipTask(id string, reason tasks.SkipReason, detail string) {
 	if id == "" {
 		return
 	}
+	l.taskEnded = true
+	l.parkTask(id, reason, detail)
+}
+
+// parkTask does skipTask's backend bookkeeping without ending the current
+// task, for a selection-time skip of a task that owns no worktree.
+func (l *Loop) parkTask(id string, reason tasks.SkipReason, detail string) {
 	msg := string(reason)
 	if detail != "" {
 		msg += ": " + detail
@@ -680,17 +688,18 @@ func (l *Loop) Run(ctx context.Context) error {
 
 iterLoop:
 	for {
+		l.finishEndedTask(st)
+
 		// ── Task selection ──
 		completedIDs := make(map[string]bool, len(l.completedTasks))
 		for _, ct := range l.completedTasks {
 			completedIDs[ct.ID] = true
 		}
 		task, action, waited := l.selectNextTask(ctx, selectNextTaskParams{
-			runIteration:   st.runIteration,
-			maxIterations:  l.cfg.MaxIterations,
-			wait:           l.cfg.Wait,
-			completedIDs:   completedIDs,
-			lastTaskMerged: st.lastTaskMerged,
+			runIteration:  st.runIteration,
+			maxIterations: l.cfg.MaxIterations,
+			wait:          l.cfg.Wait,
+			completedIDs:  completedIDs,
 		})
 		if action == actionDone {
 			break
@@ -707,7 +716,6 @@ iterLoop:
 
 		st.runIteration++
 		iteration++
-		st.lastTaskMerged = false
 		st.currentTaskID = task.id
 
 		// Retry counters are local variables inside runVerifyPipeline, so
@@ -833,6 +841,8 @@ iterLoop:
 			break iterLoop
 		}
 	}
+
+	l.finishEndedTask(st)
 
 	// Catch-all: if the loop exited due to Ctrl-C and a task was in-flight,
 	// set phase=interrupted so the task manager sees it as safe to update.

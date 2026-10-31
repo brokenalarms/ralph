@@ -89,6 +89,8 @@ per loop start.
 1. `tryResumeWorktree` — restores worktree path and state from state.json. No git operations.
 2. `initRun` — calls `setStackHead()` to derive PrevBranch, then `EnsureUpToDate` which rebases onto PrevBranch (or default branch if no stack).
 
+A task owns its worktree: every way a task ends (merged, PR open, or skipped) tears the worktree down, including when the loop exits straight after. A worktree found at startup therefore always belongs to an interrupted task, so resume keeps its commits and edits and never needs to classify them. Interrupted work stays local until the resumed task ships it through verification.
+
 ## Iteration Flow
 
 1. `setStackHead()` — re-derive PrevBranch (previous task may have just merged)

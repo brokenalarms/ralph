@@ -100,6 +100,7 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 // closes the bead and sends notifications.
 func (l *Loop) onResumeDone(ctx context.Context, taskID, taskTitle string, result git.ResumeTaskResult) {
 	l.closeResumedTask(ctx, taskID, taskTitle, result)
+	l.taskEnded = true
 	if l.cfg.Notify {
 		if result.AlreadyMerged {
 			notify.TaskMerged(taskID, taskTitle, time.Now())
@@ -134,21 +135,6 @@ func (l *Loop) markReviewAddressed(taskID, botUsername string) {
 		return
 	}
 	l.state.Write("review_addressed:"+botUsername+":"+taskID, "true")
-}
-
-// flushUnpushedWork pushes any unpushed commits and optionally merges before
-// the loop exits or enters wait mode. lastTaskMerged prevents a double-merge
-// when the signal handler already merged the task.
-func (l *Loop) flushUnpushedWork(ctx context.Context, lastTaskMerged bool) {
-	taskID, _ := l.state.Read("current_task_id")
-	taskDesc, _ := l.state.Read("last_task")
-	merged, err := l.git.FlushUnpushedWork(ctx, taskID, taskDesc, l.cfg.AutoMerge && !lastTaskMerged)
-	if err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush: %v", err)
-	}
-	if merged {
-		notify.TaskMerged(taskID, taskDesc, time.Now())
-	}
 }
 
 // prURL builds the canonical PR URL from the remote URL and PR number.

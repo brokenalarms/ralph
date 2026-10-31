@@ -261,14 +261,13 @@ func TestLoop_CompactingEventSkipsTask(t *testing.T) {
 	}
 
 	// The skip must tear down the worktree so the agent's partial commits are
-	// abandoned. Otherwise the branch survives and the wait-mode flush safety-net
-	// (selectNextTask → FlushUnpushedWork) auto-merges unverified work to main.
+	// abandoned rather than carried into the next task.
 	insp, ok := gm.(git.StubInspector)
 	if !ok {
 		t.Fatal("stub git must implement StubInspector")
 	}
 	if insp.GetRemoveWorktreeCalls() == 0 {
-		t.Error("expected worktree teardown after compaction skip (RemoveWorktree), but it was never called — partial commits would survive for the flush safety-net to merge")
+		t.Error("expected worktree teardown after compaction skip (RemoveWorktree), but it was never called — partial commits would survive into the next task")
 	}
 }
 

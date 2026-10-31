@@ -193,7 +193,7 @@ func TestSelectNextTask_NoTasksNoWait(t *testing.T) {
 	l, _ := newTestLoopForSelection(t, backend)
 
 	_, action, _ := l.selectNextTask(context.Background(), selectNextTaskParams{
-		runIteration: 1, // not first iteration, so flushUnpushedWork is called
+		runIteration: 1,
 		completedIDs: map[string]bool{},
 	})
 

@@ -68,13 +68,12 @@ func TestRunDelegatesToNamedStageHelpers(t *testing.T) {
 
 // TestLoopStateBundlesIterationLocals proves the variables Run used to
 // carry as loose locals across iterations (runIteration, lastAction,
-// lastTaskMerged, currentTaskID, consecutiveSkipCount,
-// worktreeNeedsSetup) are now fields on a single loopState struct.
+// currentTaskID, consecutiveSkipCount, worktreeNeedsSetup) are now fields on
+// a single loopState struct.
 func TestLoopStateBundlesIterationLocals(t *testing.T) {
 	want := []string{
 		"runIteration",
 		"lastAction",
-		"lastTaskMerged",
 		"currentTaskID",
 		"consecutiveSkipCount",
 		"worktreeNeedsSetup",

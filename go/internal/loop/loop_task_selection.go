@@ -32,11 +32,10 @@ type taskContext struct {
 // selectNextTaskParams bundles the data needed by selectNextTask.
 // All fields are plain data — no module references or callbacks.
 type selectNextTaskParams struct {
-	runIteration   int
-	maxIterations  int
-	wait           bool
-	completedIDs   map[string]bool
-	lastTaskMerged bool // forwarded to flushUnpushedWork when no tasks remain
+	runIteration  int
+	maxIterations int
+	wait          bool
+	completedIDs  map[string]bool
 }
 
 // selectNextTask checks all stop conditions and selects the next task.
@@ -107,9 +106,6 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 			l.state.Write("status", "error")
 			return taskContext{}, actionDone, waited
 		}
-		if p.runIteration > 0 {
-			l.flushUnpushedWork(ctx, p.lastTaskMerged)
-		}
 		switch l.detectStuckInProgress() {
 		case stuckHalt:
 			return taskContext{}, actionDone, waited
@@ -165,7 +161,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 
 	if p.completedIDs[taskID] {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s already completed this session — skipping", taskID)
-		l.skipTask(taskID, tasks.SkipAlreadyCompleted, "")
+		l.parkTask(taskID, tasks.SkipAlreadyCompleted, "")
 		// Recurse to try the next task. runIteration stays the same since
 		// we didn't actually run anything.
 		return l.selectNextTaskInner(ctx, p, attempts+1, waited)

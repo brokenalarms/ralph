@@ -408,6 +408,11 @@ func TestLoop_StagnationSkipsTask_ThenSameReasonRecurrenceHalts(t *testing.T) {
 	if status != "halted_app_wide:stagnation" {
 		t.Errorf("expected status halted_app_wide:stagnation, got %q", status)
 	}
+	// The halting task was skipped, so its worktree goes too. Only an
+	// interrupted task leaves a worktree for resume.
+	if calls := gm.(git.StubInspector).GetRemoveWorktreeCalls(); calls != 2 {
+		t.Errorf("expected both skipped tasks to tear down, got %d teardowns", calls)
+	}
 }
 
 // Proves: when the analyzer would skip a task that has open dependents, the

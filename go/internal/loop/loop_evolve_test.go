@@ -340,6 +340,11 @@ func TestLoop_EvolveStackedCloseRestartsOnBinaryChange(t *testing.T) {
 			t.Errorf("iteration %d: post-task must run BEFORE evolve hash check; expected hasher.Calls=%d at post-task, got %d", i+1, want, got)
 		}
 	}
+	// A restart must not strand the finished task's worktree: every shipped
+	// task tears down, including the one whose completion triggered the restart.
+	if calls := gm.(git.StubInspector).GetRemoveWorktreeCalls(); calls != 3 {
+		t.Errorf("expected 3 worktree teardowns including the restarting task, got %d", calls)
+	}
 	finalState, _ := st.Load()
 	if finalState.Status != "evolve_restart" {
 		t.Errorf("expected evolve_restart after binary swap at iteration 3, got %q", finalState.Status)

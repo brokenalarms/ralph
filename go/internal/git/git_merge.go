@@ -1299,52 +1299,6 @@ func (r *repo) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, e
 	return MergeWithRetry(ctx, r.AutoMergeCurrentBranch, opts)
 }
 
-// FlushUnpushedWork pushes any unpushed commits and optionally merges
-// the PR. This is the safety net called before exiting or entering wait mode.
-func (r *repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error) {
-	if r.worktreeBranch == WipBranchName() {
-		return false, nil
-	}
-	// When a PR is already known (set during finalizePR), just push —
-	// don't try to create/find the PR again. The PR already exists.
-	if r.knownPRNumber != 0 {
-		if pushErr := r.Push(ctx); pushErr != nil {
-			return false, pushErr
-		}
-	} else {
-		remoteRef := "origin/" + r.worktreeBranch
-		if r.refExists(r.workDir, remoteRef) {
-			// origin/<branch> exists — bail if HEAD is already there to avoid
-			// a spurious API call that would produce a "Problems parsing JSON" 400.
-			if !r.hasCommitsAhead(remoteRef, "HEAD") {
-				return false, nil
-			}
-		} else {
-			// origin/<branch> absent (e.g. deleted after squash-merge). Bail if
-			// HEAD has no commits ahead of origin/main — nothing left to flush.
-			defaultBranch := r.baseBranch
-			mainRef := "origin/" + defaultBranch
-			if !r.hasCommitsAhead(mainRef, "HEAD") {
-				return false, nil
-			}
-		}
-		if _, pushErr := r.PushAndCreatePR(ctx, taskID, taskDesc, ""); pushErr != nil {
-			return false, pushErr
-		}
-	}
-	if !autoMerge {
-		return false, nil
-	}
-	merged, err = r.AutoMergeCurrentBranch(ctx)
-	if err != nil {
-		return false, err
-	}
-	if merged {
-		r.PostMergeUpdateMain()
-	}
-	return merged, nil
-}
-
 // PostMergeUpdateMain fetches origin/main and rebases the worktree onto it
 // after a PR merge, then moves the worktree to the placeholder branch and
 // deletes the stale task branch. It does not modify the ProjectDir checkout.
