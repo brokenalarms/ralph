@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var rateLimitRe = regexp.MustCompile(`(?i)hit your limit`)
+var rateLimitRe = regexp.MustCompile(`(?i)hit your (?:\w+ )?limit`)
 
 type rateLimitEventPayload struct {
 	Type          string `json:"type"`
@@ -24,7 +24,7 @@ type rateLimitEventPayload struct {
 
 // ParseRateLimitEvent parses a single raw log line as a rate_limit_event JSON
 // event. Returns ok=false for malformed JSON or non-rate_limit_event lines.
-// Throttled statuses (throttled, exceeded, blocked) set throttled=true.
+// Throttled statuses (rejected, throttled, exceeded, blocked) set throttled=true.
 // allowed_warning sets warning=true. allowed and unknown statuses return
 // ok=true with both flags false (safe no-op).
 func ParseRateLimitEvent(line string) (resetAt time.Time, throttled bool, warning bool, isUsingOverage bool, rateLimitType string, utilization float64, ok bool) {
@@ -45,6 +45,10 @@ func ParseRateLimitEvent(line string) (resetAt time.Time, throttled bool, warnin
 	rateLimitType = info.RateLimitType
 	utilization = info.Utilization
 	switch info.Status {
+	case "rejected":
+		throttled = true
+		// Rejected events report utilization per window, not at the top level.
+		utilization = 1
 	case "throttled", "exceeded", "blocked":
 		throttled = true
 	case "allowed_warning":
@@ -52,11 +56,12 @@ func ParseRateLimitEvent(line string) (resetAt time.Time, throttled bool, warnin
 	}
 	return
 }
-var resetTimeRe = regexp.MustCompile(`(?i)resets?\s+(\d{1,2})\s*(am|pm)`)
+var resetTimeRe = regexp.MustCompile(`(?i)resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)`)
 
 // ParseRateLimitReset scans text for Claude's rate limit message and
-// returns the parsed reset time. The message format is:
+// returns the parsed reset time. The message formats are:
 // "You've hit your limit · resets 12am"
+// "You've hit your session limit · resets 1:20am (Asia/Calcutta)"
 func ParseRateLimitReset(text string, now time.Time) (resetAt time.Time, found bool) {
 	if !rateLimitRe.MatchString(text) {
 		return time.Time{}, false
@@ -68,10 +73,11 @@ func ParseRateLimitReset(text string, now time.Time) (resetAt time.Time, found b
 	}
 
 	hour, _ := strconv.Atoi(m[1])
-	ampm := strings.ToLower(m[2])
+	minute, _ := strconv.Atoi(m[2])
+	ampm := strings.ToLower(m[3])
 	resetHour := to24Hour(hour, ampm)
 
-	resetAt = time.Date(now.Year(), now.Month(), now.Day(), resetHour, 0, 0, 0, now.Location())
+	resetAt = time.Date(now.Year(), now.Month(), now.Day(), resetHour, minute, 0, 0, now.Location())
 	if !resetAt.After(now) {
 		resetAt = resetAt.Add(24 * time.Hour)
 	}
@@ -95,9 +101,10 @@ func nextHourBoundary(now time.Time) time.Time {
 	return now.Truncate(time.Hour).Add(time.Hour)
 }
 
-// ScanRawLogForRateLimit reads the last portion of a raw log file's content
-// and checks for rate limit messages. JSON rate_limit_event entries are checked
-// first; plaintext 'hit your limit' regex is the fallback.
+// ScanRawLogForRateLimit reads the last portion of a run's raw log output and
+// checks for rate limit messages. JSON rate_limit_event entries are checked
+// first; plaintext 'hit your limit' regex is the fallback. Pass only the current
+// run's output: a past limit's "resets 1:20am" would parse as tomorrow.
 func ScanRawLogForRateLimit(logContent string, now time.Time) (resetAt time.Time, found bool) {
 	lines := strings.Split(logContent, "\n")
 	// Check last 50 lines — the rate limit message appears near the end

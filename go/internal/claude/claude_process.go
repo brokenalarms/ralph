@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,11 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		return Result{}, fmt.Errorf("opening raw log: %w", err)
 	}
 	defer rawLog.Close()
+
+	var runLogStart int64
+	if info, err := rawLog.Stat(); err == nil {
+		runLogStart = info.Size()
+	}
 
 	r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model},
 		"Invoking claude with prompt size %dB, workDir %s, model %s", len(cfg.Prompt), cfg.WorkDir, cfg.Model)
@@ -158,8 +164,8 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	// is scanned in real time, so this fallback reclassifies the result
 	// instead of letting the throttle masquerade as an idle timeout.
 	if !result.SignalDetected {
-		if logData, err := os.ReadFile(cfg.RawLog); err == nil {
-			if resetAt, found := ScanRawLogForRateLimit(string(logData), time.Now()); found {
+		if runLog, err := readLogFrom(cfg.RawLog, runLogStart); err == nil {
+			if resetAt, found := ScanRawLogForRateLimit(runLog, time.Now()); found {
 				result.RateLimited = true
 				result.ResetAt = resetAt
 				result.IdleTimeout = false
@@ -181,6 +187,19 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func readLogFrom(path string, offset int64) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return "", err
+	}
+	data, err := io.ReadAll(f)
+	return string(data), err
 }
 
 // containsPromptTooLong reports whether the raw agent output contains

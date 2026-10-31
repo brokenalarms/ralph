@@ -31,6 +31,33 @@ func TestParseRateLimitEvent_AllowedWarning(t *testing.T) {
 	}
 }
 
+// A session-limit rejection is how Claude Code reports a used-up five-hour
+// window. Missing it left the loop relaunching dead agents until an analyzer
+// halted the run, instead of parking until the reset. Utilization is absent
+// from the top level of this payload, so the parser reports the window as full.
+func TestParseRateLimitEvent_Rejected(t *testing.T) {
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1793389800,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":1793389800},"seven_day":{"utilization":0.83,"resetsAt":1793574000}}}}`
+	resetAt, throttled, warning, _, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
+	if !ok {
+		t.Fatal("expected ok=true for rejected")
+	}
+	if !throttled {
+		t.Error("expected throttled=true for rejected")
+	}
+	if warning {
+		t.Error("expected warning=false for rejected")
+	}
+	if rateLimitType != "five_hour" {
+		t.Errorf("expected rateLimitType=five_hour, got %q", rateLimitType)
+	}
+	if utilization != 1 {
+		t.Errorf("expected utilization=1, got %f", utilization)
+	}
+	if expected := time.Unix(1793389800, 0); !resetAt.Equal(expected) {
+		t.Errorf("expected resetAt=%v, got %v", expected, resetAt)
+	}
+}
+
 // Verify throttled status returns throttled=true with correct resetAt.
 func TestParseRateLimitEvent_Throttled(t *testing.T) {
 	for _, status := range []string{"throttled", "exceeded", "blocked"} {
@@ -155,6 +182,22 @@ func TestParseRateLimitReset_WrapToNextDay(t *testing.T) {
 	expected := time.Date(2026, 3, 25, 15, 0, 0, 0, time.UTC)
 	if !resetAt.Equal(expected) {
 		t.Fatalf("expected reset at %v (next day), got %v", expected, resetAt)
+	}
+}
+
+// The session-limit wording names the limit and gives a reset to the minute.
+// Both must parse, or the loop never parks when the JSON event is unavailable
+// and would otherwise resume at the wrong time.
+func TestParseRateLimitReset_SessionLimitWithMinutes(t *testing.T) {
+	now := time.Date(2026, 10, 30, 22, 46, 0, 0, time.UTC)
+	text := "You've hit your session limit · resets 1:20am (Asia/Calcutta)"
+	resetAt, found := ParseRateLimitReset(text, now)
+	if !found {
+		t.Fatal("expected session limit to be detected")
+	}
+	expected := time.Date(2026, 10, 31, 1, 20, 0, 0, time.UTC)
+	if !resetAt.Equal(expected) {
+		t.Fatalf("expected reset at %v, got %v", expected, resetAt)
 	}
 }
 
