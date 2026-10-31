@@ -476,6 +476,7 @@ type StubInspector interface {
 	GetBranchForTaskCalls() int
 	GetRemoveWorktreeCalls() int
 	GetRemoveWorktreeForBranchCalls() int
+	GetAbandonTaskBranchCalls() int
 	GetRemovedWorktreeForBranch() string
 	GetFlushUnpushedWorkCalls() int
 	GetReplyToAndResolveCommentsCalls() int
@@ -508,6 +509,7 @@ type stubRepo struct {
 	branchForTaskCalls             int
 	removeWorktreeCalls            int
 	removeWorktreeForBranchCalls   int
+	abandonTaskBranchCalls         int
 	removedWorktreeForBranch       string
 	flushUnpushedWorkCalls         int
 	replyToAndResolveCommentsCalls int
@@ -541,6 +543,10 @@ func (s *stubRepo) GetRemoveWorktreeCalls() int { return s.removeWorktreeCalls }
 // RemoveWorktreeForBranch has been called. Used by tests to assert an
 // explicit-branch cleanup path ran (e.g. `ralph task` exit cleanup).
 func (s *stubRepo) GetRemoveWorktreeForBranchCalls() int { return s.removeWorktreeForBranchCalls }
+
+// GetAbandonTaskBranchCalls returns the number of times AbandonTaskBranch has
+// been called. Used by tests to assert a closed task's branch is cleaned up.
+func (s *stubRepo) GetAbandonTaskBranchCalls() int { return s.abandonTaskBranchCalls }
 
 // GetRemovedWorktreeForBranch returns the branch name passed to the most
 // recent RemoveWorktreeForBranch call.
@@ -937,6 +943,8 @@ func (s *stubRepo) CheckBranchNamespaceSquat(_ context.Context) error {
 
 // RemoveWorktree records the call; there is no real worktree to remove.
 func (s *stubRepo) RemoveWorktree() { s.removeWorktreeCalls++ }
+
+func (s *stubRepo) AbandonTaskBranch() { s.abandonTaskBranchCalls++ }
 
 func (s *stubRepo) RemoveWorktreeForBranch(branch string) {
 	s.removeWorktreeForBranchCalls++

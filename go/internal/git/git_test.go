@@ -1500,6 +1500,44 @@ func TestSyncWorktreeBase_StackDrain_KeepsInFlightTaskWork(t *testing.T) {
 	}
 }
 
+// Ralph owns its branches: abandoning a closed task must leave no local branch
+// and no commits or edits for the next task to inherit, in the same worktree.
+func TestAbandonTaskBranch_RemovesBranchAndKeepsWorktreeClean(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", mgr.workDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "config", "user.name", "test")
+	run(t, "git", "-C", mgr.workDir, "config", "user.email", "test@test")
+
+	mgr.RenameBranchForTask("closed task", "ralph-closed")
+	taskBranch := mgr.worktreeBranch
+	writeFile(t, mgr.workDir, "closed.txt", "committed\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "closed task work")
+	if err := os.WriteFile(filepath.Join(mgr.workDir, "closed.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.AbandonTaskBranch()
+
+	if mgr.refExists(project, taskBranch) {
+		t.Errorf("branch %s still exists after AbandonTaskBranch", taskBranch)
+	}
+	if mgr.worktreeBranch != WipBranchName() {
+		t.Errorf("worktreeBranch = %q, want %q", mgr.worktreeBranch, WipBranchName())
+	}
+	if got, want := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD")), strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "origin/main")); got != want {
+		t.Errorf("HEAD = %q, want origin/main = %q", got, want)
+	}
+	if status := strings.TrimSpace(gitOutput(mgr.workDir, "status", "--porcelain")); status != "" {
+		t.Errorf("worktree not clean after AbandonTaskBranch: %q", status)
+	}
+}
+
 // A task already pushed as complete is finished even if current_task_id was
 // never cleared, so its branch's commits are still ghosts of the drained stack
 // and must not leak into the next PR as stale duplicates.

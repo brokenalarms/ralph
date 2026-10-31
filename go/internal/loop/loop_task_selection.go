@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/git"
@@ -263,6 +264,12 @@ func (l *Loop) reaperLoopOrphanedClaims() stuckOutcome {
 // succeeded and resumeID is cleared), or (_, true) if the task is genuinely
 // resumable and iteration should continue normally.
 func (l *Loop) validateResumeState(ctx context.Context, resumeID string, waited bool) (loopAction, bool) {
+	if l.taskClosed(resumeID) {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Resume target %s is already closed — discarding its branch", resumeID)
+		l.abandonResumeTarget()
+		return actionProceed, true
+	}
+
 	// A resumed task that already shipped a PR (external-ref set) may have been
 	// merged while the loop was down. Detect and reconcile that; otherwise let
 	// the iteration proceed (and re-verify) normally.
@@ -283,7 +290,7 @@ func (l *Loop) validateResumeState(ctx context.Context, resumeID string, waited 
 	closeErr := l.taskBackend.CloseTask(resumeID, closeReason)
 	if closeErr == nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed stale in-flight task %s (PR #%d merged)", resumeID, prNum)
-		l.state.ClearCurrentTask()
+		l.abandonResumeTarget()
 		return actionProceed, true
 	}
 
@@ -300,4 +307,21 @@ func (l *Loop) validateResumeState(ctx context.Context, resumeID string, waited 
 		resumeID, prNum, blockerStr, resumeID)
 	l.state.Write("status", "halted_inconsistent_resume_state")
 	return actionDone, false
+}
+
+// taskClosed reports whether id is closed. A failed lookup reports false, so
+// an unreachable backend never costs a task its branch.
+func (l *Loop) taskClosed(id string) bool {
+	closed, err := l.taskBackend.ListClosed()
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(closed, func(task tasks.ClosedTaskInfo) bool { return task.ID == id })
+}
+
+// abandonResumeTarget drops a resumed task that needs no more work, along with
+// its branch: the startup sync kept the branch because it can't see task status.
+func (l *Loop) abandonResumeTarget() {
+	l.git.AbandonTaskBranch()
+	l.state.ClearCurrentTask()
 }

@@ -68,6 +68,7 @@ type Ops interface {
 	SyncWorktreeBase(ctx context.Context, completedBranches []string) error
 	BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error)
 	PrepareForNextTask(nextTaskID, baseRef string)
+	AbandonTaskBranch()
 	ResetToDefaultBranch()
 	RenameBranchForTask(taskDesc, taskID string) error
 	RenameBranchTo(name string)

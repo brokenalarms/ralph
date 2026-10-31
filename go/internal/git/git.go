@@ -820,6 +820,19 @@ func (r *repo) forceResetToDefaultBranch() {
 	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Re-applied WIP from stash %s", stashSHA)
 }
 
+// AbandonTaskBranch discards the worktree's task branch and moves the worktree
+// to a fresh placeholder, for a resumed task that is already closed: no later
+// iteration will return to the branch, so nothing else would ever remove it.
+// The reset leaves the branch at origin/<default>, which is what lets
+// PrepareForNextTask delete it.
+func (r *repo) AbandonTaskBranch() {
+	if r.worktreeBranch == "" || r.workDir == r.projectDir {
+		return
+	}
+	r.forceResetToDefaultBranch()
+	r.PrepareForNextTask("", "")
+}
+
 // SetPrevBranch sets the previous branch for stacked PR targeting and
 // persists it to state so it survives process restarts.
 func (r *repo) SetPrevBranch(branch string) {

@@ -394,6 +394,114 @@ func TestSelectNextTask_HaltsOnInconsistentResumeState(t *testing.T) {
 	}
 }
 
+// A task closed while the loop was down will never run again, so its branch
+// has no way back and nobody else cleans it up. Resume must discard it itself
+// rather than leave a dead branch behind.
+func TestSelectNextTask_ClosedResumeTargetAbandonsItsBranch(t *testing.T) {
+	gm := selectResumeTarget(t, &testutil.StubBackend{
+		Remaining:   1,
+		Total:       1,
+		NextID:      "ralph-next",
+		NextTask:    "Next task",
+		ClosedTasks: []tasks.ClosedTaskInfo{{ID: "ralph-closed"}},
+	}, "ralph-closed")
+
+	if calls := gm.(git.StubInspector).GetAbandonTaskBranchCalls(); calls != 1 {
+		t.Errorf("expected the closed task's branch to be abandoned once, got %d", calls)
+	}
+}
+
+// An open task returns to its preserved branch through the stored branch
+// metadata, so that branch still holds work the loop will need.
+func TestSelectNextTask_OpenResumeTargetKeepsItsBranch(t *testing.T) {
+	gm := selectResumeTarget(t, &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextID:    "ralph-open",
+		NextTask:  "Open task",
+	}, "ralph-open")
+
+	if calls := gm.(git.StubInspector).GetAbandonTaskBranchCalls(); calls != 0 {
+		t.Errorf("expected an open task's branch to be kept, got %d abandon calls", calls)
+	}
+}
+
+// If the closed list can't be read, the task's status is unknown, and deleting
+// on a guess could destroy the only copy of unfinished work.
+func TestSelectNextTask_ClosedLookupFailureKeepsBranch(t *testing.T) {
+	gm := selectResumeTarget(t, &testutil.StubBackend{
+		Remaining:      1,
+		Total:          1,
+		NextID:         "ralph-open",
+		NextTask:       "Open task",
+		ClosedTasks:    []tasks.ClosedTaskInfo{{ID: "ralph-open"}},
+		ClosedTasksErr: fmt.Errorf("bd unavailable"),
+	}, "ralph-open")
+
+	if calls := gm.(git.StubInspector).GetAbandonTaskBranchCalls(); calls != 0 {
+		t.Errorf("expected a failed lookup to keep the branch, got %d abandon calls", calls)
+	}
+}
+
+// When the PR merged while the loop was down, the loop closes the bead itself.
+// The commits are already on main, so the branch must go too. The startup sync
+// keeps it because it runs before the merge is discovered.
+func TestSelectNextTask_MergedResumeTargetAbandonsItsBranch(t *testing.T) {
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextID:    "ralph-next",
+				NextTask:  "Next task",
+			},
+			ExternalRefs: map[string]string{
+				"ralph-merged": "https://github.com/owner/repo/pull/42",
+			},
+		},
+	}
+
+	gm := selectResumeTarget(t, backend, "ralph-merged")
+
+	if calls := gm.(git.StubInspector).GetAbandonTaskBranchCalls(); calls != 1 {
+		t.Errorf("expected the merged task's branch to be abandoned once, got %d", calls)
+	}
+}
+
+// selectResumeTarget runs the first iteration's task selection with resumeID
+// as the interrupted task and returns the git stub for inspection.
+func selectResumeTarget(t *testing.T, backend tasks.Backend, resumeID string) git.Ops {
+	t.Helper()
+	dir, st := setupTestDir(t)
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		RemoteURL:  "https://github.com/owner/repo.git",
+		GitHub: git.StubGitHubConfig{
+			Available: true,
+			PRs:       []git.StubPR{{Number: 42, State: git.PRStateMerged}},
+		},
+	})
+	l := &Loop{
+		cfg: Config{
+			MaxIterations: 10,
+			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
+		},
+		state:       st,
+		git:         gm,
+		logger:      logging.New(nil),
+		taskBackend: backend,
+	}
+	st.Write("current_task_id", resumeID)
+
+	l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  0,
+		maxIterations: 10,
+		completedIDs:  map[string]bool{},
+	})
+	return gm
+}
+
 // selectNextTask halts with halted_blocked_by_in_progress when bd ready is empty
 // because the only open tasks are blocked by an in_progress task held by a non-loop
 // actor (human or external process). Proves: the loop does not enter the silent
